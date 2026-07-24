@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>OldChat for Kivotos</title>
+    <link rel="icon" href="assets/oldchat_logo.png" type="image/png">
+    <link rel="stylesheet" href="assets/fontawesome/css/all.min.css">
+    <link rel="stylesheet" href="app.css">
+    <style>
+        /* 登录页专属样式（保留 web.py 原样，粉色卡片） */
+        .login-header {
+            background: #fa94a6;
+            color: #fff;
+            padding: 13px 12px;
+            font-size: 15px;
+            font-weight: 500;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        .login-body {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .login-card {
+            background: var(--chat-bg);
+            border-radius: 16px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+            width: 100%;
+            max-width: 380px;
+            overflow: hidden;
+        }
+        .login-card-top {
+            padding: 32px 24px 0;
+            text-align: center;
+        }
+        .login-card-top h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #fa94a6;
+        }
+        .login-card-body { padding: 24px; }
+        .tab-group { display: flex; gap: 0; margin-bottom: 20px; }
+        .tab {
+            flex: 1;
+            padding: 10px;
+            text-align: center;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--secondary-text);
+            transition: all 0.2s;
+            border-bottom: 2px solid transparent;
+        }
+        .tab.active { color: #fa94a6; border-bottom: 2px solid #fa94a6; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .form-group { margin-bottom: 14px; }
+        .form-group input {
+            width: 100%;
+            padding: 11px 14px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            font-size: 0.9rem;
+            font-family: inherit;
+            background: var(--bg);
+            outline: none;
+            color: var(--text);
+            transition: 0.2s;
+        }
+        .form-group input:focus {
+            border-color: #fa94a6;
+            box-shadow: 0 0 0 3px rgba(250,148,166,0.15);
+        }
+        .form-group input::placeholder { color: var(--secondary-text); }
+        .captcha-row { display: flex; gap: 8px; align-items: center; }
+        .captcha-row input { flex: 1; min-width: 0; }
+        .captcha-img {
+            height: 42px; width: 120px; flex-shrink: 0;
+            border-radius: 8px; cursor: pointer;
+            background: var(--hover); border: 1px solid var(--border);
+            object-fit: cover;
+        }
+        .email-row { display: flex; gap: 8px; }
+        .email-row input { flex: 1; min-width: 0; }
+        .email-send-btn {
+            flex-shrink: 0; padding: 0 14px; height: 42px;
+            border: none; border-radius: 10px; background: #fa94a6;
+            color: #fff; font-size: 0.85rem; cursor: pointer; font-family: inherit;
+        }
+        .email-send-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .checkbox-group { display: flex; align-items: center; gap: 8px; margin: 0 0 16px 0; }
+        .checkbox-group input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #fa94a6; }
+        .checkbox-group label { font-size: 0.85rem; color: var(--secondary-text); cursor: pointer; user-select: none; }
+        .login-card button[type="submit"] {
+            width: 100%; padding: 11px; background: #fa94a6; color: #fff;
+            border: none; border-radius: 10px; font-size: 0.95rem; font-weight: 500;
+            cursor: pointer; transition: background 0.2s; font-family: inherit;
+        }
+        .login-card button[type="submit"]:hover { background: #e88294; }
+        .login-card button[type="submit"]:active { transform: scale(0.98); }
+        .login-card button[type="submit"]:disabled { opacity: 0.7; cursor: not-allowed; }
+        .msg-error {
+            background: #fff0f0; color: #c23d3d; padding: 8px 12px;
+            border-radius: 8px; font-size: 0.82rem; margin-bottom: 14px; text-align: center;
+        }
+        .msg-success {
+            background: #f0fff4; color: #2d8a4e; padding: 8px 12px;
+            border-radius: 8px; font-size: 0.82rem; margin-bottom: 14px; text-align: center;
+        }
+        .extra-note { text-align: center; margin-top: 20px; font-size: 0.7rem; color: var(--secondary-text); }
+        [data-theme="dark"] .login-header { background: #16213e; }
+        [data-theme="dark"] .login-card-top h1 { color: #8aa0b8; }
+        [data-theme="dark"] .tab { color: #a0a0a0; }
+        [data-theme="dark"] .tab.active { color: #e0e0e0; border-bottom-color: #8aa0b8; }
+        [data-theme="dark"] .login-card button[type="submit"] { background: #8aa0b8; }
+        [data-theme="dark"] .login-card button[type="submit"]:hover { background: #7a90a8; }
+        [data-theme="dark"] .msg-error { background: #3a1a1a; color: #ff6b6b; }
+        [data-theme="dark"] .msg-success { background: #1a3a1a; color: #6bff6b; }
+        body { display: flex; flex-direction: column; }
+    </style>
+</head>
+<body>
+    <div class="login-header">OldChat for Kivotos</div>
+    <div class="login-body">
+        <div class="login-card">
+            <div class="login-card-top">
+                <h1>欢迎回来</h1>
+            </div>
+            <div class="login-card-body">
+                <div id="message"></div>
+                <div class="tab-group">
+                    <div class="tab active" data-tab="login">登录</div>
+                    <div class="tab" data-tab="register">注册</div>
+                </div>
+                <div class="tab-content active" id="login-form">
+                    <form id="loginForm">
+                        <div class="form-group">
+                            <input type="text" name="identifier" id="identifier" placeholder="账号 / 邮箱 / UID" required autofocus>
+                        </div>
+                        <div class="form-group">
+                            <input type="password" name="password" id="password" placeholder="密码" required>
+                        </div>
+                        <div class="checkbox-group" style="display:flex;gap:16px;">
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <input type="checkbox" id="rememberAccountCheckbox">
+                                <label for="rememberAccountCheckbox">记住账号</label>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <input type="checkbox" id="proxyModeCheckbox" checked>
+                                <label for="proxyModeCheckbox">代理模式</label>
+                            </div>
+                        </div>
+                        <button type="submit">登录</button>
+                    </form>
+                </div>
+                <div class="tab-content" id="register-form">
+                    <form id="registerForm">
+                        <div class="form-group">
+                            <input type="text" name="username" id="reg-username" placeholder="用户名" required>
+                        </div>
+                        <div class="form-group">
+                            <input type="email" name="email" id="reg-email" placeholder="邮箱（仅支持 @qq.com / @vip.qq.com）" required>
+                        </div>
+                        <div class="form-group">
+                            <input type="password" name="password" id="reg-password" placeholder="密码（至少6位）" required>
+                        </div>
+                        <div class="form-group captcha-row">
+                            <input type="text" id="reg-captcha" placeholder="图形验证码" required>
+                            <img class="captcha-img" id="reg-captcha-img" alt="点击获取验证码" title="点击刷新">
+                        </div>
+                        <div class="form-group email-row">
+                            <input type="text" id="reg-email-code" placeholder="邮箱验证码" required>
+                            <button type="button" class="email-send-btn" id="reg-send-email-btn">发送验证码</button>
+                        </div>
+                        <button type="submit">注册</button>
+                    </form>
+                </div>
+                <div class="extra-note">OldChat for Kivotos</div>
+            </div>
+        </div>
+    </div>
+    <script>
+        // 主题初始化
+        (function() {
+            var theme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+        // Tab 切换
+        document.querySelectorAll('.tab').forEach(function(tab) {
+            tab.addEventListener('click', function() {
+                document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+                document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab + '-form').classList.add('active');
+                if (tab.dataset.tab === 'register') { refreshCaptcha(); }
+            });
+        });
+        var msgEl = document.getElementById('message');
+        function showMsg(msg, type) {
+            msgEl.innerHTML = '<div class="msg-' + type + '">' + msg + '</div>';
+            setTimeout(function() { msgEl.innerHTML = ''; }, 3500);
+        }
+        // 工具：设备ID（注册/登录需要）
+        function getDeviceId() {
+            var id = localStorage.getItem('oldchat_device_id');
+            if (id) return id;
+            if (crypto && typeof crypto.randomUUID === 'function') { id = crypto.randomUUID(); }
+            else { id = 'web-' + Date.now() + '-' + Math.random().toString(36).slice(2, 12); }
+            localStorage.setItem('oldchat_device_id', id);
+            return id;
+        }
+        // ===== 注册：图形验证码 / 邮箱验证码 =====
+        var currentCaptchaId = '';
+        async function refreshCaptcha() {
+            try {
+                var r = await fetch(getApiBase() + '/v1/auth/captcha');
+                var d = await r.json();
+                if (d.captcha_id) {
+                    currentCaptchaId = d.captcha_id;
+                    document.getElementById('reg-captcha-img').src = 'data:image/png;base64,' + d.image_base64;
+                }
+            } catch(e) { /* ignore */ }
+        }
+        document.getElementById('reg-captcha-img').addEventListener('click', refreshCaptcha);
+
+        var sendEmailCooldown = 0;
+        var emailCooldownTimer = null;
+        document.getElementById('reg-send-email-btn').addEventListener('click', async function() {
+            var email = document.getElementById('reg-email').value.trim();
+            var captchaCode = document.getElementById('reg-captcha').value.trim();
+            var username = document.getElementById('reg-username').value.trim();
+            if (!email) { showMsg('请输入邮箱', 'error'); return; }
+            if (!captchaCode) { showMsg('请输入图形验证码', 'error'); return; }
+            if (!currentCaptchaId) { showMsg('请先获取图形验证码', 'error'); return; }
+            // 校验邮箱域名（仅 @qq.com / @vip.qq.com）
+            var lower = email.toLowerCase();
+            if (!lower.endsWith('@qq.com') && !lower.endsWith('@vip.qq.com')) {
+                showMsg('仅支持 @qq.com 或 @vip.qq.com 邮箱', 'error'); return;
+            }
+            var btn = this;
+            btn.disabled = true; btn.textContent = '发送中...';
+            try {
+                var r = await fetch(getApiBase() + '/v1/auth/email/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: email, captcha_id: currentCaptchaId, captcha_code: captchaCode, username: username })
+                });
+                var d = await r.json();
+                if (r.ok) {
+                    showMsg('验证码已发送，10 分钟内有效', 'success');
+                    sendEmailCooldown = 120;
+                    emailCooldownTimer = setInterval(function() {
+                        sendEmailCooldown--;
+                        btn.textContent = sendEmailCooldown + 's 后重发';
+                        if (sendEmailCooldown <= 0) {
+                            clearInterval(emailCooldownTimer);
+                            btn.disabled = false; btn.textContent = '发送验证码';
+                        }
+                    }, 1000);
+                } else {
+                    showMsg(d.msg || d.error || '发送失败', 'error');
+                    btn.disabled = false; btn.textContent = '发送验证码';
+                    refreshCaptcha();
+                }
+            } catch(err) {
+                showMsg('网络错误', 'error');
+                btn.disabled = false; btn.textContent = '发送验证码';
+            }
+        });
+
+        // ===== 代理模式 =====
+        var API_BASE_RAW = 'http://60.205.94.101:8080';
+        var proxyCb = document.getElementById('proxyModeCheckbox');
+        // 默认开启代理
+        if (localStorage.getItem('oc_proxy_mode') === null) {
+            localStorage.setItem('oc_proxy_mode', 'on');
+        }
+        proxyCb.checked = localStorage.getItem('oc_proxy_mode') !== 'off';
+        proxyCb.addEventListener('change', function() {
+            localStorage.setItem('oc_proxy_mode', this.checked ? 'on' : 'off');
+        });
+        function getApiBase() {
+            return localStorage.getItem('oc_proxy_mode') !== 'off' ? '' : API_BASE_RAW;
+        }
+
+        // ===== 自动填充 =====
+        (function autoFill() {
+            try {
+                var savedId = localStorage.getItem('savedIdentifier');
+                var savedPwd = localStorage.getItem('savedPassword');
+                if (savedId) document.getElementById('identifier').value = savedId;
+                if (savedPwd) document.getElementById('password').value = savedPwd;
+                var cb = document.getElementById('rememberAccountCheckbox');
+                if (cb && savedId) cb.checked = true;
+            } catch(e) {}
+        })();
+
+        // ===== 登录 =====
+        document.getElementById('loginForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            var id = document.getElementById('identifier').value.trim();
+            var pwd = document.getElementById('password').value;
+            if (!id || !pwd) return;
+            var btn = this.querySelector('button[type="submit"]');
+            btn.disabled = true; btn.textContent = '登录中...';
+            try {
+                var r = await fetch(getApiBase() + '/v1/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        identifier: id, password: pwd,
+                        device_id: getDeviceId(), device_name: navigator.userAgent.slice(0, 120),
+                        platform: 'web', app_version: 'web'
+                    })
+                });
+                var d = await r.json();
+                if (r.ok && d.access_token) {
+                    // 持久化 token 与用户信息（供 /app 页面使用）
+                    localStorage.setItem('oc_access_token', d.access_token);
+                    localStorage.setItem('oc_refresh_token', d.refresh_token || '');
+                    localStorage.setItem('oc_user', JSON.stringify(d.user || {}));
+                    var cb = document.getElementById('rememberAccountCheckbox');
+                    if (cb && cb.checked) {
+                        try { localStorage.setItem('savedIdentifier', id); localStorage.setItem('savedPassword', pwd); } catch(e) {}
+                    } else {
+                        try { localStorage.removeItem('savedIdentifier'); localStorage.removeItem('savedPassword'); } catch(e) {}
+                    }
+                    window.location.href = 'index.html';
+                } else {
+                    showMsg(d.msg || d.error || '登录失败', 'error');
+                }
+            } catch(err) {
+                showMsg('网络错误', 'error');
+            }
+            btn.disabled = false; btn.textContent = '登录';
+        });
+
+        // ===== 注册 =====
+        document.getElementById('registerForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            var u = document.getElementById('reg-username').value.trim();
+            var email = document.getElementById('reg-email').value.trim();
+            var p = document.getElementById('reg-password').value;
+            var captchaCode = document.getElementById('reg-captcha').value.trim();
+            var emailCode = document.getElementById('reg-email-code').value.trim();
+            if (!u || !p || !email || !captchaCode || !emailCode) {
+                showMsg('请填写所有字段', 'error'); return;
+            }
+            if (p.length < 6) { showMsg('密码至少 6 位', 'error'); return; }
+            var btn = this.querySelector('button[type="submit"]');
+            btn.disabled = true; btn.textContent = '注册中...';
+            try {
+                var r = await fetch(getApiBase() + '/v1/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email: email, username: u, password: p,
+                        email_code: emailCode,
+                        device_id: getDeviceId(), device_name: navigator.userAgent.slice(0, 120),
+                        platform: 'web', app_version: 'web'
+                    })
+                });
+                var d = await r.json();
+                if (r.ok && d.access_token) {
+                    // 注册成功直接登录
+                    localStorage.setItem('oc_access_token', d.access_token);
+                    localStorage.setItem('oc_refresh_token', d.refresh_token || '');
+                    localStorage.setItem('oc_user', JSON.stringify(d.user || {}));
+                    showMsg('注册成功，正在进入...', 'success');
+                    setTimeout(function() { window.location.href = 'index.html'; }, 600);
+                } else {
+                    showMsg(d.msg || d.error || '注册失败', 'error');
+                    refreshCaptcha();
+                }
+            } catch(err) {
+                showMsg('网络错误', 'error');
+            }
+            btn.disabled = false; btn.textContent = '注册';
+        });
+    </script>
+</body>
+</html>

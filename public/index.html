@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>OldChat for Kivotos</title>
+    <link rel="icon" href="assets/oldchat_logo.png" type="image/png">
+    <link rel="stylesheet" href="assets/fontawesome/css/all.min.css">
+    <link rel="stylesheet" href="app.css">
+</head>
+<body>
+    <div class="app-container">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <span class="user-info" id="sidebarUserName" style="cursor:pointer" onclick="openMyProfile()">未登录</span>
+                <button id="logoutBtn" class="icon-btn" title="退出登录"><i class="fa-solid fa-right-from-bracket"></i></button>
+                <button id="themeToggleBtn" class="icon-btn" title="切换主题"><i class="fa-solid fa-circle-half-stroke"></i></button>
+                <button id="pinSidebarBtn" class="icon-btn" title="取消固定"><i class="fa-solid fa-thumbtack"></i></button>
+            </div>
+            <div class="contact-list" id="contactList"></div>
+        </aside>
+        <main class="chat-area">
+            <div class="chat-header" id="chatHeader">
+                <button class="mobile-menu-btn" id="mobileMenuBtn"><i class="fa-solid fa-chevron-left"></i></button>
+                <span class="chat-title">OldChat for Kivotos</span>
+            </div>
+            <div class="messages" id="messagesContainer"></div>
+            <div class="input-area" id="inputArea">
+                <div class="mention-popup" id="mentionPopup">
+                    <input type="text" class="mention-search" id="mentionSearch" placeholder="搜索成员...">
+                    <div class="mention-list" id="mentionList"></div>
+                </div>
+                <div class="quote-preview" id="quotePreview" style="display: none;">
+                    <span class="quote-preview-text"></span>
+                    <button id="cancelQuoteBtn" class="icon-btn" title="取消引用">✖</button>
+                </div>
+                <textarea id="messageInput" placeholder="输入消息..." rows="1"></textarea>
+                <div class="input-buttons">
+                    <button id="nowPlayingBtn" class="btn" style="display:none;" title="跳转到正在播放的语音"><i class="fa-solid fa-music"></i></button>
+                    <button id="sendImageBtn" class="btn">图片</button>
+                    <button id="emojiPlazaBtn" class="btn">表情</button>
+                    <button id="moreBtn" class="btn">更多</button>
+                    <button id="sendBtn" class="btn primary">发送</button>
+                </div>
+                <div class="more-menu" id="moreMenu">
+                    <button id="sendFileBtn">上传文件</button>
+                    <button id="sendUrlImageBtn">发送直链图片 (仅限网页端)</button>
+                    <button id="sendUrlVoiceBtn">发送直链音频</button>
+                    <button id="sendEmoticonBtn">内置表情</button>
+                </div>
+                <input type="file" id="fileInput" style="display: none" multiple>
+            </div>
+        </main>
+    </div>
+    <div class="url-input-overlay" id="urlInputOverlay" style="display:none;">
+        <div class="url-input-dialog">
+            <div class="url-input-title">输入图片链接</div>
+            <input type="text" id="urlImageInput" placeholder="https://...">
+            <div class="url-input-actions">
+                <button id="urlInputCancel" class="btn">取消</button>
+                <button id="urlInputSend" class="btn primary">发送</button>
+            </div>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
