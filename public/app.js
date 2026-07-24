@@ -1182,7 +1182,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let contextMsgId = null;
 
     // 滚动加载历史消息状态
-    const convBeforeTs = {};      // convKey → 已加载最旧消息的 created_at（用于 before 分页）
+    const convOffset = {};        // convKey → 当前已加载的消息偏移量
     const convHasMore = {};       // convKey → boolean
     let isLoadingMore = false;
     let isLoadingMoreReqId = 0;
@@ -1360,7 +1360,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const token = localStorage.getItem('oc_access_token');
             if (!token || !wsSessionId) return;
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${WS_HOST}/ws?token=${encodeURIComponent(token)}&sid=${encodeURIComponent(wsSessionId)}`;
+            const wsUrl = `${protocol}//${WS_HOST}/v1/ws?token=${encodeURIComponent(token)}&sid=${encodeURIComponent(wsSessionId)}`;
             ws = new WebSocket(wsUrl);
             ws.onopen = () => {
                 console.log('[WS] connected');
@@ -1617,7 +1617,7 @@ document.addEventListener('DOMContentLoaded', () => {
         lastRenderedTs = 0;
 
         // 重置滚动加载状态
-        convBeforeTs[convKey] = 0;
+        convOffset[convKey] = 0;
         convHasMore[convKey] = true;
 
         // 清除该会话的已见消息记录，确保历史消息重新显示
@@ -1636,9 +1636,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             // Go 后端: direct 用 with_uid, group 用 group_id；返回 DESC（新→旧），需反转为 ASC（旧→新）
+            // V2 接口用 offset 分页
             const historyUrl = type === 'group'
-                ? `/v1/groups/messages?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}`
-                : `/v1/direct/messages?with_uid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}`;
+                ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`
+                : `/v1/direct/messages/v2?with_uid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
             const res = await apiFetch(historyUrl);
             const data = await res.json();
 
@@ -1653,11 +1654,10 @@ document.addEventListener('DOMContentLoaded', () => {
             // Go 返回 DESC 顺序（新→旧），反转为 ASC（旧→新）以便渲染
             const msgs = (data.messages || []).slice().reverse();
 
-            // 记录最旧消息的时间戳，用于 before 分页
-            if (msgs.length > 0) {
-                convBeforeTs[convKey] = msgs[0].created_at || 0;
-            }
+            // 记录已加载数量
+            convOffset[convKey] = msgs.length;
             convHasMore[convKey] = msgs.length >= PAGE_SIZE;
+            console.log('[INIT] msgs loaded:', msgs.length, 'hasMore:', convHasMore[convKey], 'offset:', convOffset[convKey]);
 
             // 重新创建该会话的已见集合
             if (!seenMsgIds[convKey]) {
@@ -1682,19 +1682,20 @@ document.addEventListener('DOMContentLoaded', () => {
             // 设置滚动到顶部加载更多
             messagesContainer._scrollHandler = async () => {
                 if (!convHasMore[convKey] || isLoadingMore) return;
-                // 滚动到顶部附近（留 5px 容差）
                 if (messagesContainer.scrollTop > 5) return;
 
+                console.log('[LOAD_MORE] triggering, offset=', convOffset[convKey]);
                 isLoadingMore = true;
                 const loadReqId = ++isLoadingMoreReqId;
                 const currentHeight = messagesContainer.scrollHeight;
                 try {
-                    const before = convBeforeTs[convKey] || 0;
+                    const offset = convOffset[convKey] || 0;
                     const olderUrl = type === 'group'
-                        ? `/v1/groups/messages?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&before=${before}`
-                        : `/v1/direct/messages?with_uid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&before=${before}`;
+                        ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=${offset}`
+                        : `/v1/direct/messages/v2?with_uid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=${offset}`;
                     const res = await apiFetch(olderUrl);
                     const data = await res.json();
+                    console.log('[LOAD_MORE] response:', olderUrl, 'msgs:', (data.messages||[]).length);
                     if (loadReqId !== isLoadingMoreReqId) return;
                     if (data.error) return;
 
@@ -1704,9 +1705,18 @@ document.addEventListener('DOMContentLoaded', () => {
                         convHasMore[convKey] = false;
                         return;
                     }
-                    // 更新最旧时间戳
-                    convBeforeTs[convKey] = olderMsgs[0].created_at || 0;
+                    // 更新偏移量
+                    convOffset[convKey] += olderMsgs.length;
                     convHasMore[convKey] = olderMsgs.length >= PAGE_SIZE;
+
+                    // 过滤已加载的消息
+                    const currentSeen = seenMsgIds[convKey] || new Set();
+                    const newMsgs = olderMsgs.filter(msg => msg.id && !currentSeen.has(msg.id));
+                    console.log('[LOAD_MORE] filtered:', olderMsgs.length, '→', newMsgs.length, 'seen:', currentSeen.size);
+                    if (newMsgs.length === 0) {
+                        convHasMore[convKey] = false;
+                        return;
+                    }
 
                     // 记录展开时的滚动位置
                     const scrollBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop;
@@ -1714,7 +1724,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     // 创建一个 fragment 批量插入
                     const frag = document.createDocumentFragment();
                     let prevTs = 0;
-                    olderMsgs.forEach((msg) => {
+                    newMsgs.forEach((msg) => {
                         const msgTs = msg.created_at || 0;
                         if (prevTs && msgTs && (msgTs - prevTs) > 300) {
                             frag.appendChild(createTimeSeparator(msgTs));

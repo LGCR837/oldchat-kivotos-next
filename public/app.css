@@ -50,7 +50,7 @@ body, .sidebar, .chat-area, .messages, .input-area, .contact-list, .chat-header,
 }
 
 @font-face {
-	font-display:swap;font-family:blueaka;font-style:normal;font-weight:400;src:url(assets/blueaka.woff2) format("woff2")
+	font-display:swap;font-family:zyyt;font-style:normal;font-weight:400;src:url(assets/zyyt.woff2) format("woff2")
 }
 
 * {
@@ -63,7 +63,7 @@ body, .sidebar, .chat-area, .messages, .input-area, .contact-list, .chat-header,
 body {
 	background: var(--bg);
 	color: var(--text);
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif;
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
 	font-size: 14px;
 	font-weight: 500;
 	line-height: 1.4;
@@ -130,7 +130,7 @@ body::-webkit-scrollbar {
 .user-info {
 	flex: 1;
 	font-weight: 500;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif;
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
 	min-width: 0;
 	overflow: hidden;
 	white-space: nowrap;
@@ -147,7 +147,7 @@ body::-webkit-scrollbar {
 	cursor: pointer;
 	color: var(--text);
 	padding: 5px 8px;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif;
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
 	border-radius: 6px;
 	display: inline-flex;
 	align-items: center;
@@ -175,7 +175,7 @@ body::-webkit-scrollbar {
 	border: 1px solid var(--border);
 	background: transparent;
 	color: var(--text);
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
 }
 
 .contact-list {
@@ -219,7 +219,7 @@ body::-webkit-scrollbar {
 	padding: 14px 15px;
 	cursor: pointer;
 	transition: background 0.2s;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif;
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
 	background: transparent;
 	position: relative;
 }
@@ -272,7 +272,7 @@ body::-webkit-scrollbar {
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif;
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
 	box-sizing: border-box;
 }
 
@@ -507,7 +507,7 @@ body::-webkit-scrollbar {
 	line-height: 1.4;
 	font-size: 0.95rem;
 	color: white;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif;
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
     word-break: break-word;
 }
 
@@ -553,7 +553,7 @@ body::-webkit-scrollbar {
 	color: var(--secondary-text);
 	margin-bottom: 3px;
 	margin-left: 8px;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
 }
 
 .message-time {
@@ -561,7 +561,7 @@ body::-webkit-scrollbar {
 	color: #b0b0b0;
 	margin-top: 4px;
 	text-align: right;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif;
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
 	opacity: 0;
 	transition: opacity 0.2s ease;
 }
@@ -573,7 +573,7 @@ body::-webkit-scrollbar {
 	align-self: center;
 	font-size: 13px;
 	color: var(--secondary-text);
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
 }
 
 .time-separator {
@@ -584,7 +584,7 @@ body::-webkit-scrollbar {
 	color: var(--secondary-text);
 	background: rgba(0,0,0,0.04);
 	border-radius: 10px;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif;
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
 	white-space: nowrap;
 	user-select: none;
 }
@@ -604,7 +604,7 @@ body::-webkit-scrollbar {
 	color: var(--text);
 	padding: 8px;
 	font-size: 14px;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif;
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
 	border-radius: 6px;
 	outline: none;
 	transition: background 0.2s;
@@ -640,7 +640,7 @@ body::-webkit-scrollbar {
 
 
 .input-buttons .btn {
-	padding: 0 12px;
+	padding: 0 16px;
 	height: 34px;
 	border: none;
 	background: rgba(0,0,0,0.04);
@@ -649,7 +649,7 @@ body::-webkit-scrollbar {
 	border-radius: 5px;
 	font-size: 13px;
 	line-height: 34px;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif;
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
 }
 
 .btn {
@@ -660,7 +660,7 @@ body::-webkit-scrollbar {
 	cursor: pointer;
 	border-radius: 6px;
 	font-size: 14px;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif;
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
 }
 
 .btn:hover {
@@ -701,14 +701,14 @@ body::-webkit-scrollbar {
 .more-menu button {
 	display: block;
 	width: 100%;
-	padding: 6px 14px;
+	padding: 8px 16px;
 	background: none;
 	border: none;
 	text-align: left;
 	cursor: pointer;
 	color: var(--text);
 	font-size: 14px;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
 }
 
 .more-menu button:hover {
@@ -739,7 +739,7 @@ body::-webkit-scrollbar {
 	cursor: pointer;
 	font-size: 14px;
 	color: var(--text);
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
 }
 
 .context-menu-item:hover {
@@ -762,13 +762,13 @@ body::-webkit-scrollbar {
 	color: white;
 	cursor: pointer;
 	word-break: break-all;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
 }
 
 .quote-block .quote-sender {
 	font-weight: 500;
 	color: white;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
 }
 
 .quote-preview {
@@ -782,7 +782,7 @@ body::-webkit-scrollbar {
 	border-radius: 2px;
 	font-size: 13px;
 	color: var(--secondary-text);
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
 }
 
 .quote-preview-text {
@@ -790,7 +790,7 @@ body::-webkit-scrollbar {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
 }
 
 .quote-preview .icon-btn {
@@ -810,7 +810,7 @@ body::-webkit-scrollbar {
 	color: #0078d4;
 	font-weight: 500;
 	cursor: pointer;
-	font-family: 'blueaka','微软雅黑','Microsoft YaHei',sans-serif
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
 }
 
 .message.self .mention-highlight {
