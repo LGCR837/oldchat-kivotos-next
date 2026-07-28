@@ -310,6 +310,24 @@ body::-webkit-scrollbar {
 	background: rgba(255, 255, 255, 0.2);
 }
 
+.header-menu-btn {
+	display: none;
+	background: transparent;
+	border: none;
+	color: #ffffff;
+	font-size: 18px;
+	cursor: pointer;
+	padding: 4px 8px;
+	border-radius: 6px;
+	margin-left: auto;
+	align-items: center;
+	justify-content: center;
+}
+
+.header-menu-btn:hover {
+	background: rgba(255, 255, 255, 0.2);
+}
+
 .messages {
 	flex: 1;
 	overflow-y: auto;
@@ -1734,6 +1752,19 @@ body::-webkit-scrollbar {
     flex-shrink: 0;
     margin-left: 8px;
 }
+.mp-req-chat-btn {
+    padding: 4px 12px;
+    border-radius: 14px;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    flex-shrink: 0;
+    margin-left: 8px;
+}
+.mp-req-chat-btn:hover { opacity: 0.85; }
 .mp-accept-btn, .mp-reject-btn {
     padding: 4px 12px;
     border-radius: 14px;

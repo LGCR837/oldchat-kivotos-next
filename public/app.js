@@ -457,6 +457,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const pinSidebarBtn = document.getElementById('pinSidebarBtn');
     const mobileMenuBtn = document.getElementById('mobileMenuBtn');
     const themeToggleBtn = document.getElementById('themeToggleBtn');
+    const headerMenuBtn = document.getElementById('headerMenuBtn');
 
     const quotePreview = document.getElementById('quotePreview');
     const quotePreviewText = quotePreview.querySelector('.quote-preview-text');
@@ -933,35 +934,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
         async function load() {
             try {
-                const [profRes, reqRes] = await Promise.all([
+                const [profRes, friendsRes] = await Promise.all([
                     apiFetch('/v1/users/profile?uid=' + encodeURIComponent(myUid)),
-                    apiFetch('/v1/friends/requests')
+                    apiFetch('/v1/friends')
                 ]);
                 const prof = await profRes.json();
-                const reqData = await reqRes.json();
+                const friendsData = await friendsRes.json();
                 if (prof.error) { scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">' + prof.error + '</div>'; return; }
                 currentProfile = prof;
                 // 刷新缓存
                 prof._ts = Date.now();
                 userProfileCache.set(myUid.toUpperCase(), prof);
                 const avatar = currentProfile.avatar_url || defaultAvatar;
-                const requests = reqData.requests || [];
+                const friends = friendsData.friends || [];
 
-                let reqHtml = '';
-                if (requests.length > 0) {
-                    requests.forEach(r => {
-                        const rAvatar = r.avatar_url || defaultAvatar;
-                        reqHtml += `<div class="mp-req-item">` +
-                            `<img class="mp-req-avatar" src="${resolveMediaUrl(rAvatar)}" onerror="this.src='${defaultAvatar}'">` +
-                            `<div class="mp-req-info"><div class="mp-req-name">${escapeHtml(r.from_display_name || r.from_username)}</div>` +
-                            `<div class="mp-req-time">${escapeHtml(r.from_uid)}</div></div>` +
-                            `<div class="mp-req-actions">` +
-                            `<button class="mp-accept-btn" data-rid="${escapeHtml(r.id)}">接受</button>` +
-                            `<button class="mp-reject-btn" data-rid="${escapeHtml(r.id)}">拒绝</button>` +
-                            `</div></div>`;
+                let friendsHtml = '';
+                if (friends.length > 0) {
+                    friends.forEach(f => {
+                        const fAvatar = f.avatar_url || defaultAvatar;
+                        const displayName = f.remark_name || f.display_name || f.username || f.uid;
+                        friendsHtml += `<div class="mp-req-item" data-uid="${escapeHtml(f.uid)}">` +
+                            `<img class="mp-req-avatar" src="${resolveMediaUrl(fAvatar)}" onerror="this.src='${defaultAvatar}'">` +
+                            `<div class="mp-req-info"><div class="mp-req-name">${escapeHtml(displayName)}</div>` +
+                            `<div class="mp-req-time">${escapeHtml(f.uid)}</div></div>` +
+                            `<button class="mp-req-chat-btn" data-uid="${escapeHtml(f.uid)}">私聊</button>` +
+                            `</div>`;
                     });
+
                 } else {
-                    reqHtml = '<div class="mp-empty">暂无好友申请</div>';
+                    friendsHtml = '<div class="mp-empty">暂无联系人</div>';
                 }
 
                 scroll.innerHTML =
@@ -987,8 +988,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         '<button class="gm-uid-invite-btn" id="mpJoinGroupBtn">加入</button></div>' +
                     '</div>' +
                     '<div class="mp-section">' +
-                        '<div class="mp-section-header">好友申请 (' + requests.length + ')</div>' +
-                        '<div class="mp-req-list">' + reqHtml + '</div>' +
+                        '<div class="mp-section-header">联系人 (' + friends.length + ')</div>' +
+                        '<div class="mp-req-list">' + friendsHtml + '</div>' +
                     '</div>';
 
                 document.getElementById('mpSpaceBtn').addEventListener('click', () => {
@@ -1141,33 +1142,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); } });
                 });
 
-                scroll.querySelectorAll('.mp-accept-btn').forEach(btn => {
-                    btn.addEventListener('click', async () => {
-                        const rid = btn.dataset.rid;
-                        try {
-                            const r = await apiFetch('/v1/friends/respond', {
-                                method: 'POST',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify({ request_id: rid, accept: true })
-                            });
-                            await r.json();
-                            load();
-                        } catch (err) { alert('操作失败'); }
-                    });
-                });
-
-                scroll.querySelectorAll('.mp-reject-btn').forEach(btn => {
-                    btn.addEventListener('click', async () => {
-                        const rid = btn.dataset.rid;
-                        try {
-                            const r = await apiFetch('/v1/friends/respond', {
-                                method: 'POST',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify({ request_id: rid, accept: false })
-                            });
-                            await r.json();
-                            load();
-                        } catch (err) { alert('操作失败'); }
+                scroll.querySelectorAll('.mp-req-chat-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const uid = btn.dataset.uid;
+                        if (!uid) return;
+                        overlay.remove();
+                        const f = contacts.friends.find(x => x.uid.toUpperCase() === uid.toUpperCase());
+                        switchConversation('direct', uid, f ? f.name : uid);
                     });
                 });
             } catch (e) {
@@ -1584,6 +1566,10 @@ document.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('.contact-item').forEach(el => el.classList.remove('active'));
         if (event && event.currentTarget) {
             event.currentTarget.classList.add('active');
+        } else {
+            const convKey = type + ':' + id;
+            const target = contactList.querySelector(`[data-conv-key="${convKey}"]`);
+            if (target) target.classList.add('active');
         }
 
         // 清除未读计数
@@ -1613,6 +1599,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {}
     
         chatHeader.querySelector('.chat-title').textContent = name;
+        headerMenuBtn.style.display = type === 'group' ? 'inline-flex' : 'none';
         messagesContainer.innerHTML = '';
         lastRenderedMsg = null;
         lastRenderedTs = 0;
@@ -3249,6 +3236,12 @@ document.addEventListener('DOMContentLoaded', () => {
     mobileMenuBtn.addEventListener('click', () => {
         if (!isMobile()) return;
         sidebar.classList.remove('collapsed');
+    });
+
+    headerMenuBtn.addEventListener('click', () => {
+        if (currentConv && currentConv.type === 'group') {
+            openGroupManagePanel(currentConv.id, currentConv.name);
+        }
     });
 
     // 直链图片/音频发送
