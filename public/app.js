@@ -1805,25 +1805,27 @@ document.addEventListener('DOMContentLoaded', () => {
             msgDiv.dataset.fromName = sender || '';
             msgDiv.dataset.msgType = msgType;
 
-            if (!isSelf) {
-                const avatarUrl = msg.from_avatar || msg.sender_avatar || msg.avatar_url || lookupAvatar(fromUid);
-                const avatarImg = document.createElement('img');
-                avatarImg.src = avatarUrl ? resolveMediaUrl(avatarUrl) : 'assets/default-avatar.png';
-                avatarImg.className = 'msg-avatar';
-                avatarImg.onerror = () => { avatarImg.src = 'assets/default-avatar.png'; };
-                if (!avatarUrl && fromUid) {
-                    fetchUserProfile(fromUid).then(profile => {
-                        if (profile && profile.avatar_url && avatarImg.isConnected) {
-                            avatarImg.src = resolveMediaUrl(profile.avatar_url);
-                        }
-                    });
-                }
-                avatarImg.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    if (fromUid) openSpacePanel(fromUid);
+            // 头像处理：自己显示自己的头像，对方显示对方的头像
+            const avatarUrl = isSelf
+                ? myAvatar
+                : (msg.from_avatar || msg.sender_avatar || msg.avatar_url || lookupAvatar(fromUid));
+            const avatarImg = document.createElement('img');
+            avatarImg.src = avatarUrl ? resolveMediaUrl(avatarUrl) : 'assets/default-avatar.png';
+            avatarImg.className = 'msg-avatar';
+            avatarImg.onerror = () => { avatarImg.src = 'assets/default-avatar.png'; };
+            if (!isSelf && !avatarUrl && fromUid) {
+                fetchUserProfile(fromUid).then(profile => {
+                    if (profile && profile.avatar_url && avatarImg.isConnected) {
+                        avatarImg.src = resolveMediaUrl(profile.avatar_url);
+                    }
                 });
-                msgDiv.appendChild(avatarImg);
             }
+            avatarImg.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const uid = isSelf ? myUid : fromUid;
+                if (uid) openSpacePanel(uid);
+            });
+            msgDiv.appendChild(avatarImg);
 
             if (!isSelf && sender) {
                 const senderDiv = document.createElement('div');
@@ -2002,28 +2004,29 @@ document.addEventListener('DOMContentLoaded', () => {
         msgDiv.dataset.fromName = sender || '';
         msgDiv.dataset.msgType = msgType;
 
-        if (!isSelf) {
-            const avatarUrl = msg.from_avatar || msg.sender_avatar || msg.avatar_url || lookupAvatar(fromUid);
-            const avatarImg = document.createElement('img');
-            avatarImg.src = avatarUrl ? resolveMediaUrl(avatarUrl) : 'assets/default-avatar.png';
-            avatarImg.className = 'msg-avatar';
-            avatarImg.onerror = () => { avatarImg.src = 'assets/default-avatar.png'; };
-            if (!avatarUrl && fromUid) {
-                fetchUserProfile(fromUid).then(profile => {
-                    if (profile && profile.avatar_url && avatarImg.isConnected) {
-                        avatarImg.src = resolveMediaUrl(profile.avatar_url);
-                    }
-                });
-            }
-            avatarImg.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const uid = msg.from_uid;
-                if (uid) {
-                    openSpacePanel(uid);
+        // 头像处理：自己显示自己的头像，对方显示对方的头像
+        const avatarUrl = isSelf
+            ? myAvatar
+            : (msg.from_avatar || msg.sender_avatar || msg.avatar_url || lookupAvatar(fromUid));
+        const avatarImg = document.createElement('img');
+        avatarImg.src = avatarUrl ? resolveMediaUrl(avatarUrl) : 'assets/default-avatar.png';
+        avatarImg.className = 'msg-avatar';
+        avatarImg.onerror = () => { avatarImg.src = 'assets/default-avatar.png'; };
+        if (!isSelf && !avatarUrl && fromUid) {
+            fetchUserProfile(fromUid).then(profile => {
+                if (profile && profile.avatar_url && avatarImg.isConnected) {
+                    avatarImg.src = resolveMediaUrl(profile.avatar_url);
                 }
             });
-            msgDiv.appendChild(avatarImg);
         }
+        avatarImg.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const uid = isSelf ? myUid : msg.from_uid;
+            if (uid) {
+                openSpacePanel(uid);
+            }
+        });
+        msgDiv.appendChild(avatarImg);
 
         if (!isSelf && sender) {
             const senderDiv = document.createElement('div');

@@ -358,12 +358,33 @@ body::-webkit-scrollbar {
 	position: relative;
 }
 
+/* 自己消息：flex垂直排列，右侧margin预留头像空间 */
 .message.self {
 	align-self: flex-end;
+	display: flex;
 	flex-direction: column;
 	align-items: flex-end;
+	position: relative;
+	margin-right: 46px;
 }
 
+.message.self .msg-avatar {
+	position: absolute;
+	right: -46px;
+	top: 0;
+	margin: 0;
+}
+
+.message.self .message-sender {
+	margin: 0 0 3px 0;
+	text-align: right;
+}
+
+.message.self .message-time {
+	text-align: right;
+}
+
+/* 对方消息：grid布局，头像在左 */
 .message.other {
 	align-self: flex-start;
 	display: grid;
@@ -398,6 +419,7 @@ body::-webkit-scrollbar {
 	text-align: left;
 }
 
+/* 图片消息 */
 .message.bare-image {
 	max-width: none;
 }
@@ -425,6 +447,16 @@ body::-webkit-scrollbar {
 
 .message.self.bare-image {
 	align-items: flex-end;
+}
+
+.message.self.bare-image .msg-avatar {
+	position: absolute;
+	right: -46px;
+	top: 0;
+}
+
+.message.self.bare-image .message-sender {
+	margin: 0 0 3px 0;
 }
 
 .message.self.bare-image img:not(.msg-avatar) {
@@ -470,7 +502,11 @@ body::-webkit-scrollbar {
 }
 
 .message.self.consecutive {
-	padding-right: 0;
+	/* margin-right已由.message.self统一设置，隐藏头像后位置保持不变 */
+}
+
+.message.self.consecutive .msg-avatar {
+	display: none;
 }
 
 .message.self.consecutive .message-bubble::before {
@@ -490,8 +526,8 @@ body::-webkit-scrollbar {
 }
 
 .message.self.consecutive .message-time {
-	right: auto;
-	left: -46px;
+	left: auto;
+	right: -46px;
 }
 
 .message.consecutive-first .message-time {
@@ -508,8 +544,8 @@ body::-webkit-scrollbar {
 }
 
 .message.self.consecutive-first .message-time {
-	right: auto;
-	left: -46px;
+	left: auto;
+	right: -46px;
 }
 
 .message.consecutive-first:hover .message-time,
