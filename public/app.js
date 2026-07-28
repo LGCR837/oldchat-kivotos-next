@@ -1551,7 +1551,7 @@ document.addEventListener('DOMContentLoaded', () => {
             sep.textContent = '群聊';
             contactList.appendChild(sep);
             contacts.groups.forEach(g => {
-                const div = createContactItem(g.id, g.name, 'group');
+                const div = createContactItem(g.id, g.name, 'group', g.avatar);
                 contactList.appendChild(div);
             });
         }
@@ -1561,20 +1561,21 @@ document.addEventListener('DOMContentLoaded', () => {
             sep.textContent = '私聊';
             contactList.appendChild(sep);
             contacts.friends.forEach(f => {
-                const div = createContactItem(f.uid, f.name, 'direct');
+                const div = createContactItem(f.uid, f.name, 'direct', f.avatar);
                 contactList.appendChild(div);
             });
         }
     }
 
-    function createContactItem(id, name, type) {
+    function createContactItem(id, name, type, avatar) {
         const div = document.createElement('div');
         div.className = 'contact-item';
         div.dataset.convKey = type + ':' + id;
         div.dataset.type = type;
         div.dataset.id = id;
         div.dataset.name = name;
-        div.innerHTML = `<div class="name">${escapeHtml(name)}</div><div class="uid">${escapeHtml(id)}</div><span class="unread-badge" style="display:none;"></span>`;
+        const avatarUrl = avatar ? resolveMediaUrl(avatar) : 'assets/default-avatar.png';
+        div.innerHTML = `<img class="contact-avatar" src="${avatarUrl}" onerror="this.src='assets/default-avatar.png'"><div class="contact-info"><div class="name">${escapeHtml(name)}</div><div class="uid">${escapeHtml(id)}</div></div><span class="unread-badge" style="display:none;"></span>`;
         div.addEventListener('click', (e) => switchConversation(type, id, name, e));
         return div;
     }
