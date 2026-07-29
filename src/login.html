@@ -184,25 +184,171 @@
         </div>
     </div>
     <script>
+        // ===== 运行模式检测（Tauri vs 浏览器） =====
+        // 共用代码库：两种模式完全隔离，不在 localStorage 中写 Tauri 相关设置，避免污染浏览器侧配置
+        var IS_TAURI = false;
+        try {
+            IS_TAURI = !!(window.__TAURI__ !== undefined || window.__TAURI_INTERNALS__ !== undefined);
+        } catch (e) { IS_TAURI = false; }
+        var BACKEND_ORIGIN = 'http://60.205.94.101:8080';
+
+        // ===== Tauri 环境下替换 fetch 为 plugin-http invoke =====
+        (function initTauri() {
+            if (!IS_TAURI) return;
+            var invoke = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
+                         (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);
+            if (!invoke) return;
+
+            // 关键：保存原生 fetch，IPC 请求（http://ipc.localhost/）必须走原生，否则无限递归
+            var nativeFetch = window.fetch.bind(window);
+            function isIpcUrl(input) {
+                var url = typeof input === 'string' ? input : (input && input.url) || '';
+                return url.indexOf('ipc.localhost') !== -1 || url.indexOf('tauri://') === 0;
+            }
+
+            window.fetch = async function (input, init) {
+                // IPC 请求直接走原生 fetch，不经过 plugin-http
+                if (isIpcUrl(input)) return nativeFetch(input, init);
+
+                init = init || {};
+                var req = new Request(input, init);
+                var t0 = performance.now();
+                try {
+                    var headersObj = init.headers
+                        ? (init.headers instanceof Headers ? init.headers : new Headers(init.headers))
+                        : new Headers();
+                    var buffer = await req.arrayBuffer();
+                    var data = buffer.byteLength !== 0 ? Array.from(new Uint8Array(buffer)) : null;
+
+                    for (var hPair of req.headers.entries()) {
+                        if (!headersObj.get(hPair[0])) headersObj.set(hPair[0], hPair[1]);
+                    }
+                    var mappedHeaders = [];
+                    for (var hEntry of headersObj.entries()) mappedHeaders.push([hEntry[0], typeof hEntry[1] === 'string' ? hEntry[1] : String(hEntry[1])]);
+
+                    // 第一步：创建请求
+                    var rid = await invoke('plugin:http|fetch', {
+                        clientConfig: {
+                            method: req.method,
+                            url: req.url,
+                            headers: mappedHeaders,
+                            data: data
+                        }
+                    });
+                    console.log('[Tauri fetch] fetch rid=', rid, '| url=', req.url);
+
+                    // 第二步：发送请求
+                    var sendResp = await invoke('plugin:http|fetch_send', { rid: rid });
+                    console.log('[Tauri fetch] fetch_send status=', sendResp.status, '| respRid=', sendResp.rid, '| ' + (performance.now() - t0).toFixed(0) + 'ms');
+                    var status = sendResp.status;
+                    var statusText = sendResp.statusText;
+                    var respUrl = sendResp.url || req.url;
+                    var responseHeaders = sendResp.headers || [];
+                    var responseRid = sendResp.rid;
+
+                    // 第三步：用 ReadableStream 异步消费 body（与官方 @tauri-apps/plugin-http 实现一致）
+                    var NO_BODY_STATUSES = [101, 103, 204, 205, 304];
+                    var body = NO_BODY_STATUSES.indexOf(status) === -1 ? new ReadableStream({
+                        start: function(controller) {
+                            if (init.signal) {
+                                if (init.signal.aborted) {
+                                    controller.error(new Error('Request cancelled'));
+                                    invoke('plugin:http|fetch_cancel_body', { rid: responseRid }).catch(function(){});
+                                }
+                                init.signal.addEventListener('abort', function() {
+                                    controller.error(new Error('Request cancelled'));
+                                    invoke('plugin:http|fetch_cancel_body', { rid: responseRid }).catch(function(){});
+                                });
+                            }
+                        },
+                        pull: async function(controller) {
+                            var chunkData;
+                            try {
+                                chunkData = await invoke('plugin:http|fetch_read_body', { rid: responseRid });
+                            } catch (e) {
+                                console.error('[Tauri fetch] fetch_read_body error:', e);
+                                controller.error(e);
+                                return;
+                            }
+                            var u8 = new Uint8Array(chunkData);
+                            if (u8.byteLength === 0) {
+                                console.warn('[Tauri fetch] 收到空响应，关闭流');
+                                controller.close();
+                                return;
+                            }
+                            var lastByte = u8[u8.byteLength - 1];
+                            var actualData = u8.slice(0, u8.byteLength - 1);
+                            if (lastByte === 1) {
+                                if (actualData.byteLength > 0) controller.enqueue(actualData);
+                                controller.close();
+                                console.log('[Tauri fetch] body 读取完成 | ' + (performance.now() - t0).toFixed(0) + 'ms');
+                                return;
+                            }
+                            controller.enqueue(actualData);
+                        },
+                        cancel: function() {
+                            invoke('plugin:http|fetch_cancel_body', { rid: responseRid }).catch(function(){});
+                        }
+                    }) : null;
+
+                    var res = new Response(body, { status: status, statusText: statusText });
+                    Object.defineProperty(res, 'url', { value: respUrl, writable: false });
+                    Object.defineProperty(res, 'headers', { value: new Headers(responseHeaders), writable: false });
+                    return res;
+                } catch (err) {
+                    console.error('[Tauri fetch error]', err, '| input:', input, '| ' + (performance.now() - t0).toFixed(0) + 'ms');
+                    throw err;
+                }
+            };
+            console.log('[Tauri] fetch 已替换为 plugin:http invoke，直连后端：' + BACKEND_ORIGIN);
+
+            // Ctrl+Alt+Shift+F12 切换 DevTools；拦截 F12 单键（WebView2 默认会打开 DevTools）
+            window.addEventListener('keydown', function(e) {
+                if (e.key === 'F12') {
+                    if (e.ctrlKey && e.altKey && e.shiftKey) {
+                        e.preventDefault();
+                        invoke('toggle_devtools').catch(function(err) {
+                            console.error('[Tauri] toggle_devtools 调用失败:', err);
+                        });
+                    } else {
+                        // 拦截 F12 单键，避免与 Ctrl+Alt+Shift+F12 冲突
+                        e.preventDefault();
+                    }
+                }
+            });
+            console.log('[Tauri] 已注册 Ctrl+Alt+Shift+F12 切换 DevTools');
+        })();
+
         // 主题初始化
         (function() {
             var theme = localStorage.getItem('theme') || 'light';
             document.documentElement.setAttribute('data-theme', theme);
         })();
         // Tab 切换
+        var _captchaTimer = null;
         document.querySelectorAll('.tab').forEach(function(tab) {
             tab.addEventListener('click', function() {
                 document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
                 document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
                 tab.classList.add('active');
                 document.getElementById(tab.dataset.tab + '-form').classList.add('active');
-                if (tab.dataset.tab === 'register') { refreshCaptcha(); }
+                if (tab.dataset.tab === 'register') {
+                    // 去抖：避免快速来回切 Tab 重复触发 captcha 请求
+                    if (_captchaTimer) clearTimeout(_captchaTimer);
+                    _captchaTimer = setTimeout(function() { refreshCaptcha(); }, 120);
+                }
             });
         });
         var msgEl = document.getElementById('message');
         function showMsg(msg, type) {
             msgEl.innerHTML = '<div class="msg-' + type + '">' + msg + '</div>';
-            setTimeout(function() { msgEl.innerHTML = ''; }, 3500);
+            setTimeout(function() { msgEl.innerHTML = ''; }, 5000);
+        }
+        function formatError(err) {
+            if (!err) return '未知错误';
+            if (typeof err === 'string') return err;
+            var msg = err.message || err.msg || err.error || '';
+            return msg || (err.toString ? err.toString() : '未知错误');
         }
         // 工具：设备ID（注册/登录需要）
         function getDeviceId() {
@@ -215,17 +361,30 @@
         }
         // ===== 注册：图形验证码 / 邮箱验证码 =====
         var currentCaptchaId = '';
+        var _captchaLoading = false;
         async function refreshCaptcha() {
+            if (_captchaLoading) return;
+            _captchaLoading = true;
             try {
                 var r = await fetch(getApiBase() + '/v1/auth/captcha');
                 var d = await r.json();
                 if (d.captcha_id) {
                     currentCaptchaId = d.captcha_id;
                     document.getElementById('reg-captcha-img').src = 'data:image/png;base64,' + d.image_base64;
+                } else if (!r.ok) {
+                    showMsg('获取验证码失败：' + (d.msg || d.error || r.status), 'error');
                 }
-            } catch(e) { /* ignore */ }
+            } catch(e) {
+                console.error('[refreshCaptcha] error:', e);
+            } finally {
+                _captchaLoading = false;
+            }
         }
-        document.getElementById('reg-captcha-img').addEventListener('click', refreshCaptcha);
+        document.getElementById('reg-captcha-img').addEventListener('click', function() {
+            // 点击图片立即刷新，不等去抖
+            if (_captchaTimer) { clearTimeout(_captchaTimer); _captchaTimer = null; }
+            refreshCaptcha();
+        });
 
         var sendEmailCooldown = 0;
         var emailCooldownTimer = null;
@@ -267,24 +426,38 @@
                     refreshCaptcha();
                 }
             } catch(err) {
-                showMsg('网络错误', 'error');
+                console.error('[send email] error:', err);
+                showMsg('发送失败：' + formatError(err), 'error');
                 btn.disabled = false; btn.textContent = '发送验证码';
             }
         });
 
-        // ===== 代理模式 =====
-        var API_BASE_RAW = 'http://60.205.94.101:8080';
+        // ===== 代理模式 / 运行模式分流 =====
+        // Tauri 桌面端：不需要前端反代，固定直连后端完整地址（plugin-http 自带跨域能力）
+        // 浏览器端：默认走 Nginx 同源反代（oc_proxy_mode=on），用户可通过 checkbox 切换为直连
         var proxyCb = document.getElementById('proxyModeCheckbox');
-        // 默认开启代理
-        if (localStorage.getItem('oc_proxy_mode') === null) {
-            localStorage.setItem('oc_proxy_mode', 'on');
+        if (IS_TAURI) {
+            // 仅视觉隐藏代理模式 checkbox，不写任何 localStorage，避免污染浏览器侧配置
+            if (proxyCb) {
+                var wrapper = proxyCb.parentElement;
+                if (wrapper) wrapper.style.display = 'none';
+            }
+        } else {
+            // 浏览器端默认开启代理（首次进入时写入一次）
+            if (localStorage.getItem('oc_proxy_mode') === null) {
+                localStorage.setItem('oc_proxy_mode', 'on');
+            }
+            if (proxyCb) {
+                proxyCb.checked = localStorage.getItem('oc_proxy_mode') !== 'off';
+                proxyCb.addEventListener('change', function() {
+                    localStorage.setItem('oc_proxy_mode', this.checked ? 'on' : 'off');
+                });
+            }
         }
-        proxyCb.checked = localStorage.getItem('oc_proxy_mode') !== 'off';
-        proxyCb.addEventListener('change', function() {
-            localStorage.setItem('oc_proxy_mode', this.checked ? 'on' : 'off');
-        });
         function getApiBase() {
-            return localStorage.getItem('oc_proxy_mode') !== 'off' ? '' : API_BASE_RAW;
+            // Tauri 固定直连；浏览器端按用户勾选决定
+            if (IS_TAURI) return BACKEND_ORIGIN;
+            return localStorage.getItem('oc_proxy_mode') !== 'off' ? '' : BACKEND_ORIGIN;
         }
 
         // ===== 自动填充 =====
@@ -377,7 +550,8 @@
                     refreshCaptcha();
                 }
             } catch(err) {
-                showMsg('网络错误', 'error');
+                console.error('[register] error:', err);
+                showMsg('注册失败：' + formatError(err), 'error');
             }
             btn.disabled = false; btn.textContent = '注册';
         });

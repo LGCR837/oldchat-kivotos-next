@@ -1,12 +1,159 @@
-const API_BASE = localStorage.getItem('oc_proxy_mode') !== 'off'
-    ? '/v1'
-    : 'http://60.205.94.101:8080/v1';
-const WS_HOST = localStorage.getItem('oc_proxy_mode') !== 'off'
-    ? window.location.host
-    : '60.205.94.101:8080';
-const MEDIA_BASE = localStorage.getItem('oc_proxy_mode') !== 'off'
-    ? 'http://60.205.94.101:8080'
-    : '';
+// ===== 运行模式检测（Tauri vs 浏览器） =====
+// 共用代码库：Tauri 桌面端走 plugin-http 直连后端，浏览器端走 Nginx 反代（或用户勾选直连）
+// 两种模式完全隔离：isTauri 判定仅在内存中，不写 localStorage，不污染浏览器侧配置
+function _detectIsTauri() {
+    try {
+        return !!(window.__TAURI__ !== undefined || window.__TAURI_INTERNALS__ !== undefined);
+    } catch (e) { return false; }
+}
+const IS_TAURI = _detectIsTauri();
+
+// ===== Tauri 环境下替换 fetch 为 plugin-http invoke =====
+(function initTauri() {
+    if (!IS_TAURI) return;
+    const invoke = (window.__TAURI__?.core?.invoke) ||
+                   (window.__TAURI_INTERNALS__?.invoke);
+    if (!invoke) return;
+
+    // 关键：保存原生 fetch，IPC 请求（http://ipc.localhost/）必须走原生，否则无限递归
+    const nativeFetch = window.fetch.bind(window);
+    function isIpcUrl(input) {
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        return url.indexOf('ipc.localhost') !== -1 || url.indexOf('tauri://') === 0;
+    }
+
+    window.fetch = async function (input, init) {
+        // IPC 请求直接走原生 fetch，不经过 plugin-http
+        if (isIpcUrl(input)) return nativeFetch(input, init);
+
+        init = init || {};
+        const req = new Request(input, init);
+        const t0 = performance.now();
+        try {
+            const headersObj = init.headers
+                ? (init.headers instanceof Headers ? init.headers : new Headers(init.headers))
+                : new Headers();
+            const buffer = await req.arrayBuffer();
+            const data = buffer.byteLength !== 0 ? Array.from(new Uint8Array(buffer)) : null;
+
+            for (const [key, value] of req.headers.entries()) {
+                if (!headersObj.get(key)) headersObj.set(key, value);
+            }
+            const mappedHeaders = [];
+            for (const entry of headersObj.entries()) mappedHeaders.push([entry[0], typeof entry[1] === 'string' ? entry[1] : String(entry[1])]);
+
+            // 第一步：创建请求
+            const rid = await invoke('plugin:http|fetch', {
+                clientConfig: {
+                    method: req.method,
+                    url: req.url,
+                    headers: mappedHeaders,
+                    data: data
+                }
+            });
+            console.log('[Tauri fetch] fetch rid=', rid, '| url=', req.url);
+
+            // 第二步：发送请求
+            const sendResp = await invoke('plugin:http|fetch_send', { rid: rid });
+            console.log('[Tauri fetch] fetch_send status=', sendResp.status, '| respRid=', sendResp.rid, '| ' + (performance.now() - t0).toFixed(0) + 'ms');
+            const status = sendResp.status;
+            const statusText = sendResp.statusText;
+            const respUrl = sendResp.url || req.url;
+            const responseHeaders = sendResp.headers || [];
+            const responseRid = sendResp.rid;
+
+            // 第三步：用 ReadableStream 异步消费 body（与官方 @tauri-apps/plugin-http 实现一致）
+            // 优势：有背压，不会因空 chunk 死循环 flood IPC 通道
+            const NO_BODY_STATUSES = [101, 103, 204, 205, 304];
+            const body = NO_BODY_STATUSES.includes(status) ? null : new ReadableStream({
+                start: (controller) => {
+                    if (init.signal) {
+                        if (init.signal.aborted) {
+                            controller.error(new Error('Request cancelled'));
+                            invoke('plugin:http|fetch_cancel_body', { rid: responseRid }).catch(() => {});
+                        }
+                        init.signal.addEventListener('abort', () => {
+                            controller.error(new Error('Request cancelled'));
+                            invoke('plugin:http|fetch_cancel_body', { rid: responseRid }).catch(() => {});
+                        });
+                    }
+                },
+                pull: async (controller) => {
+                    let chunkData;
+                    try {
+                        chunkData = await invoke('plugin:http|fetch_read_body', { rid: responseRid });
+                    } catch (e) {
+                        console.error('[Tauri fetch] fetch_read_body error:', e);
+                        controller.error(e);
+                        return;
+                    }
+                    const u8 = new Uint8Array(chunkData);
+                    if (u8.byteLength === 0) {
+                        console.warn('[Tauri fetch] 收到空响应，关闭流');
+                        controller.close();
+                        return;
+                    }
+                    const lastByte = u8[u8.byteLength - 1];
+                    const actualData = u8.slice(0, u8.byteLength - 1);
+                    if (lastByte === 1) {
+                        if (actualData.byteLength > 0) controller.enqueue(actualData);
+                        controller.close();
+                        console.log('[Tauri fetch] body 读取完成 | ' + (performance.now() - t0).toFixed(0) + 'ms');
+                        return;
+                    }
+                    controller.enqueue(actualData);
+                },
+                cancel: () => {
+                    invoke('plugin:http|fetch_cancel_body', { rid: responseRid }).catch(() => {});
+                }
+            });
+
+            const res = new Response(body, { status: status, statusText: statusText });
+            Object.defineProperty(res, 'url', { value: respUrl, writable: false });
+            Object.defineProperty(res, 'headers', { value: new Headers(responseHeaders), writable: false });
+            return res;
+        } catch (err) {
+            console.error('[Tauri fetch error]', err, '| input:', input, '| ' + (performance.now() - t0).toFixed(0) + 'ms');
+            throw err;
+        }
+    };
+    console.log('[Tauri] fetch 已替换为 plugin:http invoke，直连后端：' + 'http://60.205.94.101:8080');
+
+    // Ctrl+Alt+Shift+F12 切换 DevTools；拦截 F12 单键（WebView2 默认会打开 DevTools）
+    window.addEventListener('keydown', function(e) {
+        if (e.key === 'F12') {
+            if (e.ctrlKey && e.altKey && e.shiftKey) {
+                e.preventDefault();
+                invoke('toggle_devtools').catch(function(err) {
+                    console.error('[Tauri] toggle_devtools 调用失败:', err);
+                });
+            } else {
+                // 拦截 F12 单键，避免与 Ctrl+Alt+Shift+F12 冲突
+                e.preventDefault();
+            }
+        }
+    });
+    console.log('[Tauri] 已注册 Ctrl+Alt+Shift+F12 切换 DevTools');
+})();
+
+// ===== 运行模式对应的 API / WS / 媒体资源基地址 =====
+// Tauri 桌面端：固定走后端完整地址（plugin-http 自带跨域能力，不需要前端反代）
+// 浏览器端：默认走 Nginx 同源反代（oc_proxy_mode=on，默认），用户可切换为直连（oc_proxy_mode=off，需要后端支持 CORS）
+const BACKEND_HOST = '60.205.94.101:8080';
+const BACKEND_ORIGIN = 'http://' + BACKEND_HOST;
+
+// 浏览器模式下：代理模式(默认 on) → 同源反代；off → 直连后端完整地址
+const _proxyOn = IS_TAURI ? false : (localStorage.getItem('oc_proxy_mode') !== 'off');
+
+const API_BASE = IS_TAURI
+    ? BACKEND_ORIGIN + '/v1'
+    : (_proxyOn ? '/v1' : (BACKEND_ORIGIN + '/v1'));
+const WS_HOST = IS_TAURI
+    ? BACKEND_HOST
+    : (_proxyOn ? window.location.host : BACKEND_HOST);
+const MEDIA_BASE = IS_TAURI
+    ? BACKEND_ORIGIN
+    : (_proxyOn ? BACKEND_ORIGIN : '');
 
 function resolveMediaUrl(url) {
     if (!url) return url;
