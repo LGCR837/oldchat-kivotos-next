@@ -1,5 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use tauri::{Manager, WebviewWindow};
+use tauri::WebviewWindow;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -17,12 +17,53 @@ fn toggle_devtools(window: WebviewWindow) {
     }
 }
 
+// 窗口控制：最小化 / 切换最大化 / 关闭
+#[cfg(desktop)]
+#[tauri::command]
+fn minimize_window(window: WebviewWindow) {
+    let _ = window.minimize();
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn toggle_maximize_window(window: WebviewWindow) {
+    if let Ok(is_max) = window.is_maximized() {
+        if is_max {
+            let _ = window.unmaximize();
+        } else {
+            let _ = window.maximize();
+        }
+    } else {
+        let _ = window.maximize();
+    }
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn close_window(window: WebviewWindow) {
+    let _ = window.close();
+}
+
+// 查询窗口是否已最大化（前端用于切换还原图标 / 移除圆角）
+#[cfg(desktop)]
+#[tauri::command]
+fn is_window_maximized(window: WebviewWindow) -> bool {
+    window.is_maximized().unwrap_or(false)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
-        .invoke_handler(tauri::generate_handler![greet, toggle_devtools])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            toggle_devtools,
+            minimize_window,
+            toggle_maximize_window,
+            close_window,
+            is_window_maximized
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

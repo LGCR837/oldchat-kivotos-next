@@ -119,6 +119,47 @@ const IS_TAURI = _detectIsTauri();
     };
     console.log('[Tauri] fetch 已替换为 plugin:http invoke，直连后端：' + 'http://60.205.94.101:8080');
 
+    // 标记 Tauri 环境（CSS 据此启用圆角阴影、三大金刚键、拖动区域）
+    document.body.classList.add('tauri-env');
+
+    // 三大金刚键：最小化 / 最大化切换 / 关闭
+    const winMinBtn = document.getElementById('winMinBtn');
+    const winMaxBtn = document.getElementById('winMaxBtn');
+    const winCloseBtn = document.getElementById('winCloseBtn');
+
+    // 根据最大化状态切换图标与圆角
+    function syncMaximizeState() {
+        invoke('is_window_maximized').then(function(isMax) {
+            if (!winMaxBtn) return;
+            const icon = winMaxBtn.querySelector('i');
+            if (!icon) return;
+            if (isMax) {
+                icon.className = 'fa-solid fa-clone';
+                winMaxBtn.title = '还原';
+                document.body.classList.add('is-maximized');
+            } else {
+                icon.className = 'fa-regular fa-square';
+                winMaxBtn.title = '最大化';
+                document.body.classList.remove('is-maximized');
+            }
+        }).catch(function(err) { console.error('[Tauri] is_window_maximized:', err); });
+    }
+
+    if (winMinBtn) winMinBtn.addEventListener('click', function() {
+        invoke('minimize_window').catch(function(err) { console.error('[Tauri] minimize_window:', err); });
+    });
+    if (winMaxBtn) winMaxBtn.addEventListener('click', function() {
+        invoke('toggle_maximize_window').then(syncMaximizeState).catch(function(err) { console.error('[Tauri] toggle_maximize_window:', err); });
+    });
+    if (winCloseBtn) winCloseBtn.addEventListener('click', function() {
+        invoke('close_window').catch(function(err) { console.error('[Tauri] close_window:', err); });
+    });
+
+    // 监听窗口尺寸变化（拖动边缘最大化 / 系统快捷键还原等场景）
+    window.addEventListener('resize', syncMaximizeState);
+    // 初始化一次
+    syncMaximizeState();
+
     // Ctrl+Alt+Shift+F12 切换 DevTools；拦截 F12 单键（WebView2 默认会打开 DevTools）
     window.addEventListener('keydown', function(e) {
         if (e.key === 'F12') {
@@ -1929,7 +1970,7 @@ document.addEventListener('DOMContentLoaded', () => {
             imgEl.src = resolveMediaUrl(mediaUrl);
             imgEl.style.cssText = 'max-width:200px;max-height:200px;border-radius:8px;cursor:pointer;';
             imgEl.className = 'chat-image';
-            imgEl.onclick = () => openImageViewer(mediaUrl);
+            imgEl.onclick = () => openImageViewer(resolveMediaUrl(mediaUrl));
             imgEl.onerror = function() { this.style.display='none'; };
 
             const msgDiv = document.createElement('div');

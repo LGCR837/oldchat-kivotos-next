@@ -319,13 +319,53 @@ body::-webkit-scrollbar {
 	cursor: pointer;
 	padding: 4px 8px;
 	border-radius: 6px;
-	margin-left: auto;
 	align-items: center;
 	justify-content: center;
 }
 
 .header-menu-btn:hover {
 	background: rgba(255, 255, 255, 0.2);
+}
+
+/* 右侧容器：群聊设置按钮 + 窗口控制按钮 */
+.header-right {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+/* Tauri 环境下窗口控制按钮（三大金刚键） */
+.window-controls {
+	display: none;
+	align-items: center;
+	gap: 2px;
+	-webkit-app-region: no-drag;
+}
+
+.win-ctrl-btn {
+	background: transparent;
+	border: none;
+	color: #ffffff;
+	font-size: 12px;
+	cursor: pointer;
+	padding: 8px 12px;
+	border-radius: 4px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	height: 32px;
+	width: 36px;
+	line-height: 1;
+	transition: background-color 0.15s ease;
+}
+
+.win-ctrl-btn:hover {
+	background: rgba(255, 255, 255, 0.2);
+}
+
+.win-ctrl-btn:active {
+	background: rgba(255, 255, 255, 0.3);
 }
 
 .messages {
@@ -1806,3 +1846,48 @@ body::-webkit-scrollbar {
     outline: none;
 }
 .mp-uid-input:focus { border-color: var(--accent); }
+
+/* ===== Tauri 桌面端环境适配 ===== */
+/* 窗口圆角 + 阴影（依赖 transparent:true） */
+.tauri-env body {
+    background: transparent;
+}
+
+.tauri-env .app-container {
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12), 0 8px 32px rgba(0, 0, 0, 0.22);
+}
+
+/* 最大化时直角，避免边缘被裁切 */
+.tauri-env.is-maximized .app-container {
+    border-radius: 0;
+    box-shadow: none;
+}
+
+/* Tauri 环境下显示三大金刚键 */
+.tauri-env .window-controls {
+    display: flex;
+}
+
+/* 拖动区域：header 可拖动，按钮可点击 */
+.tauri-env .sidebar-header,
+.tauri-env .chat-header {
+    -webkit-app-region: drag;
+}
+
+.tauri-env .sidebar-header button,
+.tauri-env .sidebar-header .user-info,
+.tauri-env .chat-header button,
+.tauri-env .header-right {
+    -webkit-app-region: no-drag;
+}
+
+/* 禁止选中文本：左侧列表 + 编辑框按钮区（textarea 仍可输入选择） */
+.sidebar-header,
+.contact-list,
+.input-buttons,
+.more-menu {
+    -webkit-user-select: none;
+    user-select: none;
+}

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "oldchat-kivotos-next-app",
+  "productName": "OldChat For Kivotos",
   "version": "0.1.0",
   "identifier": "aoharureverie.oldchat.kivotosnextapp",
   "build": {
@@ -10,9 +10,11 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "oldchat-kivotos-next-app",
+        "title": "OldChat For Kivotos",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "decorations": false,
+        "transparent": true
       }
     ],
     "security": {
