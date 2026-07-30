@@ -2045,12 +2045,32 @@ document.addEventListener('DOMContentLoaded', () => {
         return '';
     }
 
+    // 新消息通知：仅 Tauri 生效，由 Rust 端根据窗口状态决定闪烁任务栏 / 系统通知
+    function notifyNewMessage(title, body) {
+        if (!IS_TAURI) return;
+        const invoke = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
+                       (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);
+        if (!invoke) return;
+        invoke('notify_new_message', { title: String(title || ''), body: String(body || '') }).catch(() => {});
+    }
+
+    // 消息预览：非文本类型显示类型标签
+    function messagePreview(d) {
+        const msgType = d.msg_type || 'text';
+        if (msgType === 'image') return '[图片]';
+        if (msgType === 'video') return '[视频]';
+        if (msgType === 'voice') return '[语音]';
+        if (msgType === 'resource') return '[文件]';
+        return d.body || '';
+    }
+
     function handleWsMessage(msg) {
         if (!msg || !msg.type) return;
         if (msg.type === 'direct_message') {
             const d = msg.data || {};
             const fromUid = d.from_uid || '';
             if (fromUid.toUpperCase() === myUid.toUpperCase()) return;
+            notifyNewMessage(lookupName(fromUid), messagePreview(d));
             const convKey = `direct:${fromUid}`;
             // 只在当前会话匹配时才显示消息
             if (!currentConv || currentConv.key !== convKey) {
@@ -2078,6 +2098,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const groupId = d.group_id || '';
             const fromUid = d.from_uid || '';
             if (fromUid.toUpperCase() === myUid.toUpperCase()) return;
+            const _grp = contacts.groups.find(g => g.id === groupId);
+            notifyNewMessage(((_grp && _grp.name) || groupId) + ' · ' + lookupName(fromUid), messagePreview(d));
             const convKey = `group:${groupId}`;
             // 只在当前会话匹配时才显示消息
             if (!currentConv || currentConv.key !== convKey) {
