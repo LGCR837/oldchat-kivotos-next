@@ -1,5 +1,5 @@
 {
   "port": 5520,
   "upstream": "http://60.205.94.101:8080",
-  "static_dir": "./public"
+  "static_dir": "./src"
 }

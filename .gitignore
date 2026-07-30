@@ -25,3 +25,7 @@ dist-ssr
 
 # Build output
 build/
+
+# Nginx
+nginx.exe
+temp/
