@@ -653,6 +653,435 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const emojiPlazaBtn = document.getElementById('emojiPlazaBtn');
 
+    // 侧边栏顶部选项卡切换逻辑
+    const sidebarTabs = document.getElementById('sidebarTabs');
+    const sidebarPanelsTrack = document.getElementById('sidebarPanelsTrack');
+    const tabBtns = sidebarTabs ? sidebarTabs.querySelectorAll('.tab-btn') : [];
+    const sidebarPanels = sidebarPanelsTrack ? sidebarPanelsTrack.querySelectorAll('.sidebar-panel') : [];
+    const mainPanels = document.querySelectorAll('.chat-area > .main-panel');
+
+    function switchTab(tabName) {
+        const targetBtn = sidebarTabs.querySelector(`.tab-btn[data-tab="${tabName}"]`);
+        if (!targetBtn || targetBtn.classList.contains('active')) return;
+        const index = Array.from(tabBtns).indexOf(targetBtn);
+        if (index < 0) return;
+
+        // 切换选项卡按钮高亮
+        tabBtns.forEach(b => b.classList.remove('active'));
+        targetBtn.classList.add('active');
+
+        // 侧边栏面板左右滑动
+        if (sidebarPanelsTrack) {
+            sidebarPanelsTrack.style.transform = `translateX(-${index * 25}%)`;
+        }
+        sidebarPanels.forEach(p => p.classList.toggle('active', p.dataset.panel === tabName));
+
+        // 右侧主面板淡入淡出
+        mainPanels.forEach(p => p.classList.toggle('active', p.dataset.panel === tabName));
+
+        // 切换到音乐面板时加载列表（仅首次）
+        if (tabName === 'music' && !musicLoaded) {
+            loadMusicList();
+        }
+    }
+
+    if (sidebarTabs) {
+        sidebarTabs.addEventListener('click', (e) => {
+            const btn = e.target.closest('.tab-btn');
+            if (!btn) return;
+            switchTab(btn.dataset.tab);
+        });
+    }
+
+    // ===== 音乐列表（侧边栏，复用 contact-item 样式） =====
+    const musicList = document.getElementById('musicList');
+    const musicTabs = document.getElementById('musicTabs');
+    const musicWorkspace = document.getElementById('musicWorkspace');
+    let musicTab = 'plaza';          // plaza / ranking / mine
+    let musicLoaded = false;         // 是否已加载过
+    let musicCurrentPage = 1;
+    const musicPageSize = 20;
+    let musicData = [];              // 当前已加载的音乐列表（用于上一首/下一首）
+
+    function musicEndpoint() {
+        if (musicTab === 'mine') return '/v1/music/plaza/mine';
+        if (musicTab === 'ranking') return '/v1/music/plaza/ranking';
+        return '/v1/music/plaza';
+    }
+
+    function createMusicItem(m) {
+        const div = document.createElement('div');
+        div.className = 'contact-item music-item';
+        div.dataset.musicId = m.id || '';
+        div.dataset.musicUrl = m.media_url || m.song_url || '';
+        div.dataset.musicName = m.name || '未知歌曲';
+        div.dataset.musicArtist = m.owner_name || m.artist || '未知';
+        div.dataset.musicCover = m.cover_url ? resolveMediaUrl(m.cover_url) : '';
+        const cover = m.cover_url ? resolveMediaUrl(m.cover_url) : 'assets/default-avatar.png';
+        const artist = m.owner_name || m.artist || '未知';
+        div.innerHTML = `<img class="contact-avatar" src="${cover}" onerror="this.src='assets/default-avatar.png'"><div class="contact-info"><div class="name">${escapeHtml(m.name || '未知歌曲')}</div><div class="uid">${escapeHtml(artist)}</div></div>`;
+        div.addEventListener('click', () => playMusic(m));
+        return div;
+    }
+
+    async function loadMusicList() {
+        if (!musicList) return;
+        musicList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--secondary-text);">加载中...</div>';
+        try {
+            const offset = (musicCurrentPage - 1) * musicPageSize;
+            const res = await apiFetch(musicEndpoint() + `?limit=${musicPageSize}&offset=${offset}`);
+            const data = await res.json();
+            const items = (data.items || data.list || data.data || (Array.isArray(data) ? data : [])).filter(Boolean);
+            musicData = items;
+            musicList.innerHTML = '';
+            if (items.length === 0) {
+                musicList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--secondary-text);">暂无音乐</div>';
+            } else {
+                items.forEach(m => musicList.appendChild(createMusicItem(m)));
+            }
+            musicLoaded = true;
+        } catch (e) {
+            console.error('[music] load failed:', e);
+            musicList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--secondary-text);">加载失败</div>';
+        }
+    }
+
+    if (musicTabs) {
+        musicTabs.addEventListener('click', (e) => {
+            const btn = e.target.closest('.music-tab-btn');
+            if (!btn || btn.classList.contains('active')) return;
+            musicTabs.querySelectorAll('.music-tab-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            musicTab = btn.dataset.musicTab;
+            musicCurrentPage = 1;
+            loadMusicList();
+        });
+    }
+
+    // ===== 音乐播放器（参考 CRMusic） =====
+    let musicAudio = null;             // 全局 audio 元素，跨选项卡不销毁
+    let musicLrcObj = null;            // 解析后的歌词数组
+    let musicLrcIndex = -1;            // 当前高亮歌词索引
+    let musicIsPlaying = false;
+    let musicCurrentItem = null;       // 当前播放的音乐对象
+    let musicManualScroll = false;
+    let musicManualScrollTimer = null;
+    let musicScrollAnim = null;
+    let musicLoop = true;              // 默认单曲循环
+
+    function ensureMusicAudio() {
+        if (musicAudio) return;
+        musicAudio = new Audio();
+        musicAudio.loop = true;  // 默认单曲循环
+        musicAudio.addEventListener('timeupdate', onMusicTimeUpdate);
+        musicAudio.addEventListener('loadedmetadata', updateMusicProgressUI);
+        musicAudio.addEventListener('play', () => { musicIsPlaying = true; updateMusicPlayBtn(); });
+        musicAudio.addEventListener('pause', () => { musicIsPlaying = false; updateMusicPlayBtn(); });
+        musicAudio.addEventListener('ended', () => {
+            // loop=true 时浏览器自动重播，不会触发 ended；这里仅作为非循环时的兜底
+            if (!musicLoop) playNextMusic();
+        });
+    }
+
+    function toggleMusicLoop() {
+        musicLoop = !musicLoop;
+        if (musicAudio) musicAudio.loop = musicLoop;
+        const btn = musicWorkspace?.querySelector('#musicLoopBtn');
+        if (btn) {
+            btn.classList.toggle('active', musicLoop);
+            btn.innerHTML = musicLoop
+                ? '<i class="fa-solid fa-repeat"></i><span class="loop-badge">1</span>'
+                : '<i class="fa-solid fa-repeat"></i>';
+        }
+    }
+
+    // LRC 解析（参考 crmusic.html）
+    function parseLRC(lrc) {
+        const result = [];
+        (lrc || '').split("\n").forEach(line => {
+            const arr = line.split("]");
+            if (!arr[1]) return;
+            const timeParts = arr[0].substring(1).split(":");
+            let time = 0;
+            if (timeParts.length === 3) {
+                time = +timeParts[0] * 3600 + +timeParts[1] * 60 + +timeParts[2];
+            } else if (timeParts.length === 2) {
+                time = +timeParts[0] * 60 + +timeParts[1];
+            } else {
+                return;
+            }
+            const text = arr.slice(1).join(']').trim();
+            if (text) result.push({ time, text });
+        });
+        return result.sort((a, b) => a.time - b.time);
+    }
+
+    function findLrcIndex() {
+        if (!musicLrcObj || musicLrcObj.length === 0) return -1;
+        const t = (musicAudio.currentTime || 0) + 0.1;
+        if (t < musicLrcObj[0].time) return 0;
+        if (t > musicLrcObj[musicLrcObj.length - 1].time) return musicLrcObj.length - 1;
+        for (let i = 0; i < musicLrcObj.length; i++) {
+            if (t < musicLrcObj[i].time) return Math.max(0, i - 1);
+        }
+        return 0;
+    }
+
+    function smoothScrollLyricsTo(targetTop, duration) {
+        const container = musicWorkspace?.querySelector('.music-lyrics-container');
+        if (!container) return;
+        if (musicScrollAnim) cancelAnimationFrame(musicScrollAnim);
+        const startTop = container.scrollTop;
+        const dist = targetTop - startTop;
+        if (Math.abs(dist) < 1) { container.scrollTop = targetTop; return; }
+        const startTime = null;
+        const step = (ts) => {
+            const start = startTime || (startTime = ts);
+            const progress = Math.min((ts - start) / duration, 1);
+            const ease = 1 - Math.pow(1 - progress, 3);
+            container.scrollTop = startTop + dist * ease;
+            if (progress < 1) musicScrollAnim = requestAnimationFrame(step);
+            else musicScrollAnim = null;
+        };
+        musicScrollAnim = requestAnimationFrame(step);
+    }
+
+    function onMusicTimeUpdate() {
+        updateMusicProgressUI();
+        if (!musicLrcObj || musicLrcObj.length === 0) return;
+        const idx = findLrcIndex();
+        if (idx === musicLrcIndex || idx < 0) return;
+        musicLrcIndex = idx;
+        const container = musicWorkspace?.querySelector('.music-lyrics-container');
+        if (!container) return;
+        const lis = container.querySelectorAll('li');
+        lis.forEach(li => li.classList.remove('active'));
+        if (lis[idx]) {
+            lis[idx].classList.add('active');
+            if (!musicManualScroll) {
+                const half = container.clientHeight / 2;
+                const target = lis[idx].offsetTop + lis[idx].offsetHeight / 2 - half;
+                smoothScrollLyricsTo(target, 500);
+            }
+        }
+    }
+
+    function updateMusicProgressUI() {
+        if (!musicWorkspace) return;
+        const fill = musicWorkspace.querySelector('.music-progress-fill');
+        const curEl = musicWorkspace.querySelector('.music-progress-time.cur');
+        const durEl = musicWorkspace.querySelector('.music-progress-time.dur');
+        const cur = musicAudio.currentTime || 0;
+        const dur = musicAudio.duration || 0;
+        const pct = dur > 0 ? (cur / dur) * 100 : 0;
+        if (fill) fill.style.width = pct + '%';
+        if (curEl) curEl.textContent = formatMusicTime(cur);
+        if (durEl) durEl.textContent = formatMusicTime(dur);
+    }
+
+    function formatMusicTime(s) {
+        if (!s || !isFinite(s)) return '0:00';
+        const m = Math.floor(s / 60);
+        const sec = Math.floor(s % 60);
+        return m + ':' + (sec < 10 ? '0' : '') + sec;
+    }
+
+    function updateMusicPlayBtn() {
+        if (!musicWorkspace) return;
+        const btn = musicWorkspace.querySelector('.music-btn.play-btn i');
+        if (btn) {
+            btn.className = musicIsPlaying ? 'fa-solid fa-pause' : 'fa-solid fa-play';
+        }
+        // 同步左侧列表项高亮
+        document.querySelectorAll('.music-item').forEach(el => {
+            el.classList.toggle('active', musicCurrentItem && el.dataset.musicId == musicCurrentItem.id);
+        });
+    }
+
+    function renderMusicWorkspace(m) {
+        if (!musicWorkspace) return;
+        const cover = m.cover_url ? resolveMediaUrl(m.cover_url) : '';
+        const bgStyle = cover ? `style="background-image:url('${escapeAttr(cover)}')"` : '';
+        // 保留右上角三大金刚键
+        const winControls = musicWorkspace.querySelector('.music-win-controls');
+        musicWorkspace.innerHTML = '';
+        const content = document.createElement('div');
+        content.innerHTML = `
+            <div class="music-bg-layer" ${bgStyle}></div>
+            <div class="music-bg-overlay"></div>
+            <div class="music-lyrics-container"><ul></ul></div>
+            <div class="music-controls">
+                <img class="music-cover" src="${cover || 'assets/default-avatar.png'}" onerror="this.src='assets/default-avatar.png'">
+                <div class="music-meta">
+                    <span class="music-title">${escapeHtml(m.name || '未知歌曲')}</span>
+                    <span class="music-artist">${escapeHtml(m.owner_name || m.artist || '未知')}</span>
+                </div>
+                <div class="music-progress-wrap">
+                    <span class="music-progress-time cur">0:00</span>
+                    <div class="music-progress-bar"><div class="music-progress-fill"></div></div>
+                    <span class="music-progress-time dur">0:00</span>
+                </div>
+                <button class="music-btn loop-btn ${musicLoop ? 'active' : ''}" id="musicLoopBtn" title="单曲循环">${musicLoop ? '<i class="fa-solid fa-repeat"></i><span class="loop-badge">1</span>' : '<i class="fa-solid fa-repeat"></i>'}</button>
+                <button class="music-btn" id="musicPrevBtn" title="上一首"><i class="fa-solid fa-backward-step"></i></button>
+                <button class="music-btn play-btn" id="musicPlayBtn" title="播放/暂停"><i class="fa-solid fa-play"></i></button>
+                <button class="music-btn" id="musicNextBtn" title="下一首"><i class="fa-solid fa-forward-step"></i></button>
+            </div>
+        `;
+        while (content.firstChild) musicWorkspace.appendChild(content.firstChild);
+        if (winControls) musicWorkspace.appendChild(winControls);
+        // 重置歌词容器显示状态（加载前先隐藏，加载成功后再显示）
+        const lrcContainer = musicWorkspace.querySelector('.music-lyrics-container');
+        if (lrcContainer) lrcContainer.style.display = 'none';
+        // 绑定控制按钮
+        const playBtn = musicWorkspace.querySelector('#musicPlayBtn');
+        const prevBtn = musicWorkspace.querySelector('#musicPrevBtn');
+        const nextBtn = musicWorkspace.querySelector('#musicNextBtn');
+        const loopBtn = musicWorkspace.querySelector('#musicLoopBtn');
+        if (playBtn) playBtn.onclick = toggleMusicPlay;
+        if (prevBtn) prevBtn.onclick = playPrevMusic;
+        if (nextBtn) nextBtn.onclick = playNextMusic;
+        if (loopBtn) loopBtn.onclick = function(e) { e.stopPropagation(); toggleMusicLoop(); };
+        // 进度条点击
+        const progressBar = musicWorkspace.querySelector('.music-progress-bar');
+        if (progressBar) progressBar.onclick = function(e) {
+            if (!musicAudio || !musicAudio.duration) return;
+            const rect = progressBar.getBoundingClientRect();
+            const pct = (e.clientX - rect.left) / rect.width;
+            musicAudio.currentTime = Math.max(0, Math.min(musicAudio.duration, musicAudio.duration * pct));
+        };
+        // 歌词容器手动滚动恢复 + 点击跳转
+        if (lrcContainer) {
+            lrcContainer.addEventListener('wheel', enterMusicManualMode, { passive: true });
+            lrcContainer.addEventListener('touchmove', enterMusicManualMode, { passive: true });
+            lrcContainer.addEventListener('click', function(e) {
+                const li = e.target.closest('li');
+                if (!li || li.classList.contains('empty-lrc') || li.dataset.time === undefined) return;
+                musicAudio.currentTime = parseFloat(li.dataset.time);
+                musicManualScroll = false;
+                clearTimeout(musicManualScrollTimer);
+            });
+        }
+    }
+
+    function enterMusicManualMode() {
+        musicManualScroll = true;
+        clearTimeout(musicManualScrollTimer);
+        musicManualScrollTimer = setTimeout(() => {
+            musicManualScroll = false;
+            onMusicTimeUpdate();
+        }, 3000);
+    }
+
+    async function loadMusicLyrics(musicId) {
+        if (!musicWorkspace) return;
+        const lrcContainer = musicWorkspace.querySelector('.music-lyrics-container');
+        const ul = lrcContainer?.querySelector('ul');
+        if (!ul || !lrcContainer) return;
+        try {
+            const res = await apiFetch('/v1/music/plaza/lyrics', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ music_id: musicId })
+            });
+            const data = await res.json();
+            // 接口可能返回字符串、{lyric: "..."}、{lyrics: "..."}、{content: "..."} 等
+            const lrcText = typeof data === 'string' ? data : (data.lyric || data.lyrics || data.content || data.data || data.lrc || '');
+            musicLrcObj = parseLRC(lrcText);
+            musicLrcIndex = -1;
+            ul.innerHTML = '';
+            if (musicLrcObj.length === 0) {
+                // 无歌词时隐藏整个歌词区域
+                lrcContainer.style.display = 'none';
+            } else {
+                lrcContainer.style.display = '';
+                const frag = document.createDocumentFragment();
+                musicLrcObj.forEach(item => {
+                    const li = document.createElement('li');
+                    li.textContent = item.text;
+                    li.dataset.time = item.time;
+                    frag.appendChild(li);
+                });
+                ul.appendChild(frag);
+            }
+        } catch (e) {
+            console.error('[music] lyrics load failed:', e);
+            lrcContainer.style.display = 'none';
+            musicLrcObj = null;
+        }
+    }
+
+    async function playMusic(m) {
+        ensureMusicAudio();
+        const url = m.media_url || m.song_url || '';
+        if (!url) { console.warn('[music] no url'); return; }
+        const fullUrl = resolveMediaUrl(url);
+        musicCurrentItem = m;
+        renderMusicWorkspace(m);
+        musicAudio.src = fullUrl;
+        musicAudio.loop = musicLoop;  // src 变更后重新确保循环状态
+        musicLrcObj = null;
+        musicLrcIndex = -1;
+        try {
+            await musicAudio.play();
+        } catch (e) {
+            console.warn('[music] play failed:', e);
+        }
+        // 加载歌词
+        if (m.id) {
+            loadMusicLyrics(m.id);
+        } else {
+            const lrcContainer = musicWorkspace?.querySelector('.music-lyrics-container');
+            if (lrcContainer) lrcContainer.style.display = 'none';
+        }
+        updateMusicPlayBtn();
+    }
+
+    function toggleMusicPlay() {
+        if (!musicAudio) return;
+        if (musicAudio.paused) {
+            musicAudio.play().catch(e => console.warn('[music] play:', e));
+        } else {
+            musicAudio.pause();
+        }
+    }
+
+    function playPrevMusic() {
+        if (!musicData.length || !musicCurrentItem) return;
+        const idx = musicData.findIndex(m => m.id == musicCurrentItem.id);
+        if (idx < 0) return;
+        const prev = musicData[(idx - 1 + musicData.length) % musicData.length];
+        playMusic(prev);
+    }
+
+    function playNextMusic() {
+        if (!musicData.length || !musicCurrentItem) return;
+        const idx = musicData.findIndex(m => m.id == musicCurrentItem.id);
+        if (idx < 0) return;
+        const next = musicData[(idx + 1) % musicData.length];
+        playMusic(next);
+    }
+
+    function escapeAttr(s) {
+        return String(s || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    // 音乐界面右上角三大金刚键
+    const tauriInvoke = (typeof window !== 'undefined') && (window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke);
+    if (IS_TAURI && tauriInvoke) {
+        const musicWinMinBtn = document.getElementById('musicWinMinBtn');
+        const musicWinMaxBtn = document.getElementById('musicWinMaxBtn');
+        const musicWinCloseBtn = document.getElementById('musicWinCloseBtn');
+        if (musicWinMinBtn) musicWinMinBtn.addEventListener('click', () => {
+            tauriInvoke('minimize_window').catch(e => console.error('[music] minimize:', e));
+        });
+        if (musicWinMaxBtn) musicWinMaxBtn.addEventListener('click', () => {
+            tauriInvoke('toggle_maximize_window').catch(e => console.error('[music] maximize:', e));
+        });
+        if (musicWinCloseBtn) musicWinCloseBtn.addEventListener('click', () => {
+            tauriInvoke('close_window').catch(e => console.error('[music] close:', e));
+        });
+    }
+
     const mergeMessages = document.querySelector('meta[name="theme-merge-messages"]')?.content === 'true';
     let lastRenderedMsg = null;
 
@@ -1960,7 +2389,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const isSelfByFlag = msg.is_me === true || msg.isSelf === true;
         const isSelf = isSelfByUid || isSelfByFlag;
 
-        const sender = isSelf ? '' : (msg.from_name || msg.sender_name || msg.display_name || lookupName(fromUid) || fromUid || '未知用户');
+        const sender = isSelf ? (myName || '我') : (msg.from_name || msg.sender_name || msg.display_name || lookupName(fromUid) || fromUid || '未知用户');
         const time = new Date(msg.created_at * 1000).toLocaleTimeString('zh-CN', { hour12: false });
         let content = '';
 
@@ -2002,11 +2431,11 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             msgDiv.appendChild(avatarImg);
 
-            if (!isSelf && sender) {
+            if (sender) {
                 const senderDiv = document.createElement('div');
                 senderDiv.className = 'message-sender';
                 senderDiv.textContent = sender;
-                if (sender === fromUid && fromUid) {
+                if (!isSelf && sender === fromUid && fromUid) {
                     fetchUserProfile(fromUid).then(profile => {
                         if (profile && senderDiv.isConnected) {
                             senderDiv.textContent = profile.display_name || profile.username || sender;
@@ -2203,11 +2632,11 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         msgDiv.appendChild(avatarImg);
 
-        if (!isSelf && sender) {
+        if (sender) {
             const senderDiv = document.createElement('div');
             senderDiv.className = 'message-sender';
             senderDiv.textContent = sender;
-            if (sender === fromUid && fromUid) {
+            if (!isSelf && sender === fromUid && fromUid) {
                 fetchUserProfile(fromUid).then(profile => {
                     if (profile && senderDiv.isConnected) {
                         senderDiv.textContent = profile.display_name || profile.username || sender;

@@ -17,6 +17,57 @@
             font-weight: 500;
             text-align: center;
             flex-shrink: 0;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-header .login-title {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+            pointer-events: none;
+        }
+        /* Tauri 环境下的窗口控制按钮（仅最小化 + 关闭，无最大化） */
+        .login-win-controls {
+            display: none;
+            align-items: center;
+            gap: 2px;
+            -webkit-app-region: no-drag;
+            position: absolute;
+            right: 6px;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+        .login-win-controls .win-ctrl-btn {
+            background: transparent;
+            border: none;
+            color: #fff;
+            font-size: 12px;
+            cursor: pointer;
+            padding: 8px 12px;
+            border-radius: 4px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            height: 32px;
+            width: 36px;
+            line-height: 1;
+            transition: background-color 0.15s ease;
+        }
+        .login-win-controls .win-ctrl-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        .login-win-controls .win-ctrl-btn:active {
+            background: rgba(255, 255, 255, 0.3);
+        }
+        .tauri-env .login-win-controls {
+            display: flex;
+        }
+        .tauri-env .login-header {
+            -webkit-app-region: drag;
         }
         .login-body {
             flex: 1;
@@ -124,7 +175,13 @@
     </style>
 </head>
 <body>
-    <div class="login-header">OldChat for Kivotos</div>
+    <div class="login-header">
+        <span class="login-title">OldChat for Kivotos</span>
+        <div class="login-win-controls" id="loginWinControls">
+            <button class="win-ctrl-btn" id="loginWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
+            <button class="win-ctrl-btn" id="loginWinCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+    </div>
     <div class="login-body">
         <div class="login-card">
             <div class="login-card-top">
@@ -317,6 +374,19 @@
                 }
             });
             console.log('[Tauri] 已注册 Ctrl+Alt+Shift+F12 切换 DevTools');
+
+            // 标记 Tauri 环境（CSS 据此显示窗口控制按钮 + 启用标题栏拖动）
+            document.body.classList.add('tauri-env');
+
+            // 登录窗口控制按钮：仅最小化 + 关闭（无最大化）
+            var loginWinMinBtn = document.getElementById('loginWinMinBtn');
+            var loginWinCloseBtn = document.getElementById('loginWinCloseBtn');
+            if (loginWinMinBtn) loginWinMinBtn.addEventListener('click', function() {
+                invoke('minimize_window').catch(function(err) { console.error('[Tauri] minimize_window:', err); });
+            });
+            if (loginWinCloseBtn) loginWinCloseBtn.addEventListener('click', function() {
+                invoke('close_window').catch(function(err) { console.error('[Tauri] close_window:', err); });
+            });
         })();
 
         // 主题初始化

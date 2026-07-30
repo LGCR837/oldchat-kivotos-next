@@ -277,6 +277,102 @@ body::-webkit-scrollbar {
     min-width: 0;
     min-height: 0;
     overflow: hidden;
+    position: relative;
+}
+
+/* 侧边栏顶部图标选项卡 */
+.sidebar-tabs {
+	display: flex;
+	align-items: center;
+	justify-content: space-around;
+	height: 42px;
+	flex-shrink: 0;
+	background: var(--sidebar-bg);
+	box-sizing: border-box;
+	-webkit-user-select: none;
+	user-select: none;
+}
+
+.tab-btn {
+	flex: 1;
+	height: 100%;
+	background: transparent;
+	border: none;
+	color: var(--secondary-text);
+	font-size: 16px;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	border-radius: 0;
+	transition: color 0.2s ease, background-color 0.2s ease;
+	position: relative;
+}
+
+.tab-btn:hover {
+	color: var(--text);
+	background: var(--hover);
+}
+
+.tab-btn.active {
+	color: var(--accent);
+}
+
+.tab-btn.active::after {
+	content: '';
+	position: absolute;
+	bottom: 0;
+	left: 50%;
+	transform: translateX(-50%);
+	width: 60%;
+	height: 2px;
+	background: var(--accent);
+	border-radius: 2px 2px 0 0;
+}
+
+/* 侧边栏面板滑动容器 */
+.sidebar-panels {
+	flex: 1;
+	overflow: hidden;
+	position: relative;
+	min-height: 0;
+}
+
+.sidebar-panels-track {
+	display: flex;
+	height: 100%;
+	width: 400%;
+	transition: transform 0.3s ease;
+}
+
+.sidebar-panel {
+	width: 25%;
+	flex-shrink: 0;
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	min-height: 0;
+}
+
+/* 右侧主面板（淡入淡出） */
+.main-panel {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.3s ease;
+	overflow: hidden;
+	min-height: 0;
+	min-width: 0;
+}
+
+.main-panel.active {
+	opacity: 1;
+	pointer-events: auto;
 }
 
 .chat-header {
@@ -411,7 +507,7 @@ body::-webkit-scrollbar {
 	flex-direction: column;
 	max-width: 70%;
 	word-wrap: break-word;
-	margin-bottom: 4px;
+	margin-bottom: 2px;
     overflow-wrap: break-word;
 	position: relative;
 }
@@ -429,7 +525,7 @@ body::-webkit-scrollbar {
 .message.self .msg-avatar {
 	position: absolute;
 	right: -46px;
-	top: 0;
+	top: 15px;
 	margin: 0;
 }
 
@@ -446,7 +542,7 @@ body::-webkit-scrollbar {
 .message.other {
 	align-self: flex-start;
 	display: grid;
-	grid-template-columns: auto 1fr;
+	grid-template-columns: auto minmax(0, 1fr);
 	grid-template-rows: auto auto auto;
 	column-gap: 10px;
 	row-gap: 0;
@@ -623,7 +719,15 @@ body::-webkit-scrollbar {
 }
 
 .message.other .message-bubble {
-	background-color: var(--bubble-other)
+	background-color: var(--bubble-other);
+	justify-self: start;
+	width: fit-content;
+	max-width: 100%;
+}
+
+/* 自己消息的昵称隐藏但保留高度，避免布局跳动 */
+.message.self .message-sender {
+	visibility: hidden;
 }
 
 .message.other .message-bubble::before,
@@ -745,6 +849,338 @@ body::-webkit-scrollbar {
 @keyframes pulse-music {
 	0%, 100% { transform: scale(1); opacity: 0.7; }
 	50% { transform: scale(1.15); opacity: 1; }
+}
+
+/* 音乐子选项卡（广场/排行/我的） */
+.music-tabs {
+	display: flex;
+	gap: 0;
+	flex-shrink: 0;
+	-webkit-user-select: none;
+	user-select: none;
+}
+
+.music-tab-btn {
+	flex: 1;
+	padding: 9px 8px;
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--secondary-text);
+	background: transparent;
+	border: none;
+	border-bottom: 2px solid transparent;
+	cursor: pointer;
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
+	transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+}
+
+.music-tab-btn:hover {
+	background: var(--hover);
+}
+
+.music-tab-btn.active {
+	color: var(--accent);
+	border-bottom-color: var(--accent);
+}
+
+/* ===== 音乐右侧工作区（参考 CRMusic） ===== */
+.music-workspace {
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+	background: var(--bg);
+	display: flex;
+	flex-direction: column;
+}
+
+/* 背景图层（封面图模糊放大） */
+.music-bg-layer {
+	position: absolute;
+	inset: 0;
+	background-size: cover;
+	background-position: center center;
+	background-repeat: no-repeat;
+	filter: blur(36px) brightness(0.55) saturate(1.2);
+	transform: scale(1.15);
+	z-index: 0;
+	pointer-events: none;
+	transition: background-image 0.6s ease;
+}
+
+.music-bg-overlay {
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(transparent 0%, rgba(0,0,0,0.25) 100%);
+	z-index: 1;
+	pointer-events: none;
+}
+
+/* 空状态 */
+.music-empty-state {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 14px;
+	color: rgba(255, 255, 255, 0.55);
+	z-index: 2;
+	pointer-events: none;
+}
+
+.music-empty-state i {
+	font-size: 4rem;
+	opacity: 0.5;
+}
+
+.music-empty-state p {
+	font-size: 14px;
+	font-weight: 500;
+}
+
+/* 歌词容器 */
+.music-lyrics-container {
+	position: relative;
+	z-index: 2;
+	flex: 1;
+	overflow-y: auto;
+	scrollbar-width: none;
+	text-align: center;
+	color: #e8f0ff;
+	text-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+	padding: 0 24px;
+	box-sizing: border-box;
+}
+
+.music-lyrics-container::-webkit-scrollbar {
+	display: none;
+}
+
+.music-lyrics-container ul {
+	list-style: none;
+	padding: calc(50% - 30px) 0;
+	margin: 0;
+}
+
+.music-lyrics-container li {
+	padding: 10px 16px;
+	font-size: 15px;
+	font-weight: 500;
+	color: rgba(255, 255, 255, 0.55);
+	transition: color 0.4s ease, transform 0.4s ease, font-size 0.4s ease;
+	cursor: pointer;
+	word-break: break-word;
+	max-width: 80%;
+	margin: 0 auto;
+	line-height: 1.5;
+}
+
+.music-lyrics-container li:hover {
+	color: rgba(255, 255, 255, 0.8);
+}
+
+.music-lyrics-container li.active {
+	color: #ffffff;
+	font-size: 1.2em;
+	font-weight: 700;
+	text-shadow: 0 0 14px rgba(232, 240, 255, 0.5), 0 2px 4px rgba(0, 0, 0, 0.35);
+}
+
+.music-lyrics-container li.empty-lrc {
+	color: rgba(255, 255, 255, 0.4);
+	font-style: italic;
+	cursor: default;
+}
+
+/* 底部音频控制栏 */
+.music-controls {
+	position: relative;
+	z-index: 3;
+	flex-shrink: 0;
+	margin-top: auto;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 12px 20px 16px;
+	background: linear-gradient(transparent, rgba(0,0,0,0.55));
+	color: #fff;
+	flex-wrap: nowrap;
+}
+
+.music-controls .music-cover {
+	width: 48px;
+	height: 48px;
+	border-radius: 8px;
+	object-fit: cover;
+	background: rgba(255,255,255,0.1);
+	flex-shrink: 0;
+}
+
+.music-controls .music-meta {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.music-controls .music-meta .music-title {
+	font-size: 14px;
+	font-weight: 600;
+	color: #fff;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.music-controls .music-meta .music-artist {
+	font-size: 12px;
+	color: rgba(255,255,255,0.7);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.music-controls .music-btn {
+	background: transparent;
+	border: none;
+	color: #fff;
+	width: 36px;
+	height: 36px;
+	border-radius: 50%;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 14px;
+	transition: background 0.2s, transform 0.1s, color 0.2s;
+	flex-shrink: 0;
+}
+
+.music-controls .music-btn:hover {
+	color: var(--accent);
+}
+
+.music-controls .music-btn:active {
+	transform: scale(0.92);
+}
+
+.music-controls .music-btn.play-btn {
+	width: 44px;
+	height: 44px;
+	font-size: 16px;
+}
+
+.music-controls .music-btn.play-btn:hover {
+	color: var(--accent);
+}
+
+.music-controls .music-btn.loop-btn {
+	color: #fff;
+	position: relative;
+}
+
+.music-controls .music-btn.loop-btn.active {
+	color: #fff;
+}
+
+.music-controls .loop-badge {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 1;
+	color: #fff;
+	pointer-events: none;
+}
+
+.music-progress-wrap {
+	flex: 1 1 auto;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 80px;
+	overflow: hidden;
+}
+
+.music-progress-bar {
+	flex: 1;
+	height: 4px;
+	background: rgba(255,255,255,0.2);
+	border-radius: 2px;
+	cursor: pointer;
+	position: relative;
+	min-width: 60px;
+}
+
+.music-progress-fill {
+	height: 100%;
+	background: #fff;
+	border-radius: 2px;
+	width: 0%;
+	transition: width 0.1s linear;
+}
+
+.music-progress-time {
+	font-size: 11px;
+	color: rgba(255,255,255,0.7);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	min-width: 36px;
+	text-align: center;
+}
+
+/* 音乐界面右上角透明三大金刚键（仅 Tauri，鼠标靠近按钮区域显示） */
+.music-win-controls {
+	position: absolute;
+	top: 0;
+	right: 0;
+	z-index: 10;
+	display: none;
+	align-items: center;
+	gap: 2px;
+	-webkit-app-region: no-drag;
+	opacity: 0;
+	transition: opacity 0.25s ease;
+	/* 扩大透明触发区，方便鼠标靠近 */
+	padding: 8px;
+}
+
+.tauri-env .music-win-controls {
+	display: flex;
+}
+
+.music-win-controls:hover {
+	opacity: 1;
+}
+
+.music-win-controls .win-ctrl-btn {
+	background: transparent;
+	border: none;
+	color: #fff;
+	font-size: 12px;
+	cursor: pointer;
+	padding: 8px 12px;
+	border-radius: 4px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	height: 32px;
+	width: 36px;
+	line-height: 1;
+	transition: background-color 0.15s ease;
+	text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+}
+
+.music-win-controls .win-ctrl-btn:hover {
+	background: rgba(255, 255, 255, 0.18);
+}
+
+.music-win-controls .win-ctrl-btn:active {
+	background: rgba(255, 255, 255, 0.28);
 }
 
 
@@ -1885,6 +2321,7 @@ body::-webkit-scrollbar {
 
 /* 禁止选中文本：左侧列表 + 编辑框按钮区（textarea 仍可输入选择） */
 .sidebar-header,
+.sidebar-tabs,
 .contact-list,
 .input-buttons,
 .more-menu {

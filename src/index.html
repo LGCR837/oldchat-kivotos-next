@@ -17,47 +17,86 @@
                 <button id="themeToggleBtn" class="icon-btn" title="切换主题"><i class="fa-solid fa-circle-half-stroke"></i></button>
                 <button id="pinSidebarBtn" class="icon-btn" title="取消固定"><i class="fa-solid fa-thumbtack"></i></button>
             </div>
-            <div class="contact-list" id="contactList"></div>
+            <div class="sidebar-tabs" id="sidebarTabs">
+                <button class="tab-btn active" data-tab="chat" title="聊天"><i class="fa-solid fa-comment"></i></button>
+                <button class="tab-btn" data-tab="contacts" title="联系人"><i class="fa-solid fa-user"></i></button>
+                <button class="tab-btn" data-tab="music" title="音乐"><i class="fa-solid fa-music"></i></button>
+                <button class="tab-btn" data-tab="settings" title="设置"><i class="fa-solid fa-gear"></i></button>
+            </div>
+            <div class="sidebar-panels">
+                <div class="sidebar-panels-track" id="sidebarPanelsTrack">
+                    <div class="sidebar-panel active" data-panel="chat">
+                        <div class="contact-list" id="contactList"></div>
+                    </div>
+                    <div class="sidebar-panel" data-panel="contacts"></div>
+                    <div class="sidebar-panel" data-panel="music">
+                        <div class="music-tabs" id="musicTabs">
+                            <button class="music-tab-btn active" data-music-tab="plaza">广场</button>
+                            <button class="music-tab-btn" data-music-tab="ranking">排行</button>
+                            <button class="music-tab-btn" data-music-tab="mine">我的</button>
+                        </div>
+                        <div class="contact-list" id="musicList"></div>
+                    </div>
+                    <div class="sidebar-panel" data-panel="settings"></div>
+                </div>
+            </div>
         </aside>
         <main class="chat-area">
-            <div class="chat-header" id="chatHeader">
-                <button class="mobile-menu-btn" id="mobileMenuBtn"><i class="fa-solid fa-chevron-left"></i></button>
-                <span class="chat-title">OldChat for Kivotos</span>
-                <div class="header-right">
-                    <button class="header-menu-btn" id="headerMenuBtn" style="display:none;" title="群聊设置"><i class="fa-solid fa-ellipsis-vertical"></i></button>
-                    <div class="window-controls" id="windowControls">
-                        <button class="win-ctrl-btn" id="winMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
-                        <button class="win-ctrl-btn" id="winMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
-                        <button class="win-ctrl-btn" id="winCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+            <div class="main-panel active" data-panel="chat">
+                <div class="chat-header" id="chatHeader">
+                    <button class="mobile-menu-btn" id="mobileMenuBtn"><i class="fa-solid fa-chevron-left"></i></button>
+                    <span class="chat-title">OldChat for Kivotos</span>
+                    <div class="header-right">
+                        <button class="header-menu-btn" id="headerMenuBtn" style="display:none;" title="群聊设置"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+                        <div class="window-controls" id="windowControls">
+                            <button class="win-ctrl-btn" id="winMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
+                            <button class="win-ctrl-btn" id="winMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
+                            <button class="win-ctrl-btn" id="winCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+                        </div>
+                    </div>
+                </div>
+                <div class="messages" id="messagesContainer"></div>
+                <div class="input-area" id="inputArea">
+                    <div class="mention-popup" id="mentionPopup">
+                        <input type="text" class="mention-search" id="mentionSearch" placeholder="搜索成员...">
+                        <div class="mention-list" id="mentionList"></div>
+                    </div>
+                    <div class="quote-preview" id="quotePreview" style="display: none;">
+                        <span class="quote-preview-text"></span>
+                        <button id="cancelQuoteBtn" class="icon-btn" title="取消引用">✖</button>
+                    </div>
+                    <textarea id="messageInput" placeholder="输入消息..." rows="1"></textarea>
+                    <div class="input-buttons">
+                        <button id="nowPlayingBtn" class="btn" style="display:none;" title="跳转到正在播放的语音"><i class="fa-solid fa-music"></i></button>
+                        <button id="sendImageBtn" class="btn">图片</button>
+                        <button id="emojiPlazaBtn" class="btn">表情</button>
+                        <button id="moreBtn" class="btn">更多</button>
+                        <button id="sendBtn" class="btn primary">发送</button>
+                    </div>
+                    <div class="more-menu" id="moreMenu">
+                        <button id="sendFileBtn">上传文件</button>
+                        <button id="sendUrlImageBtn">发送直链图片 (仅限网页端)</button>
+                        <button id="sendUrlVoiceBtn">发送直链音频</button>
+                        <button id="sendEmoticonBtn">内置表情</button>
+                    </div>
+                    <input type="file" id="fileInput" style="display: none" multiple>
+                </div>
+            </div>
+            <div class="main-panel" data-panel="contacts"></div>
+            <div class="main-panel" data-panel="music">
+                <div class="music-workspace" id="musicWorkspace">
+                    <div class="music-win-controls" id="musicWinControls">
+                        <button class="win-ctrl-btn" id="musicWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
+                        <button class="win-ctrl-btn" id="musicWinMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
+                        <button class="win-ctrl-btn" id="musicWinCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <div class="music-empty-state">
+                        <i class="fa-solid fa-music"></i>
+                        <p>从左侧选择一首歌曲</p>
                     </div>
                 </div>
             </div>
-            <div class="messages" id="messagesContainer"></div>
-            <div class="input-area" id="inputArea">
-                <div class="mention-popup" id="mentionPopup">
-                    <input type="text" class="mention-search" id="mentionSearch" placeholder="搜索成员...">
-                    <div class="mention-list" id="mentionList"></div>
-                </div>
-                <div class="quote-preview" id="quotePreview" style="display: none;">
-                    <span class="quote-preview-text"></span>
-                    <button id="cancelQuoteBtn" class="icon-btn" title="取消引用">✖</button>
-                </div>
-                <textarea id="messageInput" placeholder="输入消息..." rows="1"></textarea>
-                <div class="input-buttons">
-                    <button id="nowPlayingBtn" class="btn" style="display:none;" title="跳转到正在播放的语音"><i class="fa-solid fa-music"></i></button>
-                    <button id="sendImageBtn" class="btn">图片</button>
-                    <button id="emojiPlazaBtn" class="btn">表情</button>
-                    <button id="moreBtn" class="btn">更多</button>
-                    <button id="sendBtn" class="btn primary">发送</button>
-                </div>
-                <div class="more-menu" id="moreMenu">
-                    <button id="sendFileBtn">上传文件</button>
-                    <button id="sendUrlImageBtn">发送直链图片 (仅限网页端)</button>
-                    <button id="sendUrlVoiceBtn">发送直链音频</button>
-                    <button id="sendEmoticonBtn">内置表情</button>
-                </div>
-                <input type="file" id="fileInput" style="display: none" multiple>
-            </div>
+            <div class="main-panel" data-panel="settings"></div>
         </main>
     </div>
     <div class="url-input-overlay" id="urlInputOverlay" style="display:none;">
