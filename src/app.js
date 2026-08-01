@@ -489,12 +489,20 @@ function openImageViewer(src) {
 					applyTransform();
 				}
 
-				// Single finger tap at 1x = close
-				if (wasSingleFinger && didNotMove && img._scale <= 1) {
-					hasDragged = false;
+				// Single finger tap: at 1x = close, zoomed = reset to 1x
+			if (wasSingleFinger && didNotMove) {
+				hasDragged = false;
+				if (img._scale <= 1) {
 					closeViewer();
-					return;
+				} else {
+					img._scale = 1;
+					img._translateX = 0;
+					img._translateY = 0;
+					img.style.transition = 'transform 0.3s ease';
+					applyTransform();
 				}
+				return;
+			}
 				hasDragged = didNotMove ? false : true;
 			} else if (e.touches.length === 1) {
 				// Went from 2 fingers to 1: start pan from remaining finger
@@ -1016,6 +1024,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!url) { console.warn('[music] no url'); return; }
         const fullUrl = resolveMediaUrl(url);
         musicCurrentItem = m;
+        // 紧凑模式下折叠侧边栏，显示音乐工作区
+        if (isMobile()) {
+            sidebar.classList.add('collapsed');
+            expandChat();
+        }
         renderMusicWorkspace(m);
         musicAudio.src = fullUrl;
         musicAudio.loop = musicLoop;  // src 变更后重新确保循环状态
@@ -1779,6 +1792,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let contextMenu = null;
     let contextMsgId = null;
+    let lastSelectedText = '';  // mouseup 时保存选区文本，供 contextmenu 使用
+
+    // 在消息区域抬起鼠标时保存选区文本（右键 mousedown 可能清除选区）
+    document.addEventListener('mouseup', () => {
+        const sel = window.getSelection();
+        lastSelectedText = (sel && sel.toString()) ? sel.toString() : '';
+    });
 
     // 滚动加载历史消息状态
     const convOffset = {};        // convKey → 当前已加载的消息偏移量
@@ -2091,7 +2111,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 created_at: d.created_at,
             };
             appendMessage(msgObj, convKey, seenMsgIds[convKey]);
-            scrollToBottom(true);
+            scrollToBottom();
             apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ with_uid: fromUid }) });
         } else if (msg.type === 'group_message') {
             const d = msg.data || {};
@@ -2121,7 +2141,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 group_id: groupId,
             };
             appendMessage(msgObj, convKey, seenMsgIds[convKey]);
-            scrollToBottom(true);
+            scrollToBottom();
             apiFetch('/v1/groups/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ group_id: groupId }) });
         } else if (msg.type === 'direct_recall') {
             const d = msg.data || {};
@@ -3570,11 +3590,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.addEventListener('contextmenu', (e) => {
         hideContextMenu();
-        
-        // 排除输入框区域（textarea 和其父级）
+
+        // 排除输入框区域（textarea 和其父级），保留系统右键菜单（复制/粘贴等）
         if (e.target.closest('.input-area') || e.target.closest('textarea') || e.target.closest('#messageInput')) {
             return;  // 让系统默认菜单弹出
         }
+
+        // 接管所有其他区域的系统右键行为
+        e.preventDefault();
 
         // 联系人列表右键菜单
         const contactItem = e.target.closest('.contact-item');
@@ -3621,9 +3644,9 @@ document.addEventListener('DOMContentLoaded', () => {
         // 优先显示消息菜单
         const msgDiv = e.target.closest('.message');
         if (msgDiv) {
+            // 右键 mousedown 可能已清除选区，优先用 getSelection，回退到 mouseup 时保存的文本
             const sel = window.getSelection();
-            const selectedText = sel && sel.toString() ? sel.toString() : '';
-            e.preventDefault();
+            const selectedText = (sel && sel.toString()) ? sel.toString() : lastSelectedText;
             const msgId = msgDiv.dataset.msgId;
             if (!msgId) return;
 
@@ -3720,11 +3743,9 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
     
-        // 其次判断是否在右侧聊天区域（.chat-area 或 .messages）的空白处
-        // 注意：此时已经排除了 input-area
-        const chatArea = e.target.closest('.chat-area');
-        if (chatArea) {
-            e.preventDefault();
+        // 其次判断是否在聊天面板（data-panel="chat"）的空白处
+        const chatPanel = e.target.closest('.main-panel[data-panel="chat"]');
+        if (chatPanel) {
             const menu = document.createElement('div');
             menu.className = 'custom-context-menu';
             menu.style.left = e.clientX + 'px';

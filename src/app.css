@@ -1018,8 +1018,9 @@ body::-webkit-scrollbar {
 }
 
 .music-controls .music-meta {
-	flex: 1;
+	flex: 0 1 auto;
 	min-width: 0;
+	margin-right: auto;
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
