@@ -155,6 +155,19 @@ const IS_TAURI = _detectIsTauri();
         invoke('close_window').catch(function(err) { console.error('[Tauri] close_window:', err); });
     });
 
+    // 其他面板的窗口控制（联系人、设置）
+    function bindWinControls(prefix) {
+        var minBtn = document.getElementById(prefix + 'WinMinBtn');
+        var maxBtn = document.getElementById(prefix + 'WinMaxBtn');
+        var closeBtn = document.getElementById(prefix + 'WinCloseBtn');
+        if (minBtn) minBtn.addEventListener('click', function() { invoke('minimize_window').catch(function(){}); });
+        if (maxBtn) maxBtn.addEventListener('click', function() { invoke('toggle_maximize_window').then(syncMaximizeState).catch(function(){}); });
+        if (closeBtn) closeBtn.addEventListener('click', function() { invoke('close_window').catch(function(){}); });
+    }
+    bindWinControls('contacts');
+    bindWinControls('settings');
+    bindWinControls('musicWin');
+
     // 监听窗口尺寸变化（拖动边缘最大化 / 系统快捷键还原等场景）
     window.addEventListener('resize', syncMaximizeState);
     // 初始化一次
@@ -628,9 +641,37 @@ if (!localStorage.getItem('oc_access_token')) {
 document.addEventListener('DOMContentLoaded', () => {
     // 从 localStorage 读取用户信息（登录页写入）
     const storedUser = JSON.parse(localStorage.getItem('oc_user') || '{}');
-    const myUid = storedUser.uid || '';
+    const myUid = storedUser.ncuid || storedUser.uid || '';  // API用
+    const myDisplayUid = storedUser.uid || storedUser.ncuid || '';  // 给人看
     const myName = storedUser.display_name || storedUser.username || '';
     const myAvatar = storedUser.avatar_url || '';
+
+    // ===== NCUID 兼容层 =====
+    // ncuid 给机器看（API调用），uid 给人看（界面显示）
+    function getUid(obj) {
+        if (!obj) return '';
+        return obj.ncuid || obj.uid || '';
+    }
+    function getDisplayUid(obj) {
+        if (!obj) return '';
+        return obj.uid || obj.ncuid || '';
+    }
+    function getFromUid(obj) {
+        if (!obj) return '';
+        return obj.from_ncuid || obj.from_uid || obj.sender_ncuid || obj.sender_uid || '';
+    }
+    function getFromName(obj) {
+        if (!obj) return '';
+        return obj.from_name || obj.sender_name || obj.display_name || '';
+    }
+    function getFromAvatar(obj) {
+        if (!obj) return '';
+        return obj.from_avatar || obj.sender_avatar || obj.avatar_url || '';
+    }
+    function uidEq(a, b) {
+        if (!a || !b) return false;
+        return a.toUpperCase() === b.toUpperCase();
+    }
 
     // 设置侧边栏用户名
     const sidebarUserNameEl = document.getElementById('sidebarUserName');
@@ -691,6 +732,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (tabName === 'music' && !musicLoaded) {
             loadMusicList();
         }
+
+        // 切换到设置面板时渲染设置页面
+        if (tabName === 'settings') {
+            renderSettingsPage(currentSettingsTab || 'profile');
+        }
     }
 
     if (sidebarTabs) {
@@ -742,10 +788,43 @@ document.addEventListener('DOMContentLoaded', () => {
             const items = (data.items || data.list || data.data || (Array.isArray(data) ? data : [])).filter(Boolean);
             musicData = items;
             musicList.innerHTML = '';
-            if (items.length === 0) {
+            if (items.length === 0 && musicCurrentPage === 1) {
                 musicList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--secondary-text);">暂无音乐</div>';
             } else {
                 items.forEach(m => musicList.appendChild(createMusicItem(m)));
+                // 加载更多按钮
+                if (items.length >= musicPageSize) {
+                    const loadMoreDiv = document.createElement('div');
+                    loadMoreDiv.style.cssText = 'padding:10px;text-align:center;';
+                    const loadMoreBtn = document.createElement('button');
+                    loadMoreBtn.className = 'btn';
+                    loadMoreBtn.textContent = '加载更多';
+                    loadMoreBtn.style.cssText = 'padding:6px 16px;border-radius:16px;border:1px solid var(--border);background:var(--chat-bg);color:var(--text);font-size:12px;cursor:pointer;font-family:inherit;';
+                    loadMoreBtn.addEventListener('click', async () => {
+                        loadMoreBtn.textContent = '加载中...';
+                        loadMoreBtn.disabled = true;
+                        musicCurrentPage++;
+                        try {
+                            const offset2 = (musicCurrentPage - 1) * musicPageSize;
+                            const res2 = await apiFetch(musicEndpoint() + `?limit=${musicPageSize}&offset=${offset2}`);
+                            const data2 = await res2.json();
+                            const items2 = (data2.items || data2.list || data2.data || (Array.isArray(data2) ? data2 : [])).filter(Boolean);
+                            musicData = musicData.concat(items2);
+                            items2.forEach(m => musicList.insertBefore(createMusicItem(m), loadMoreDiv));
+                            if (items2.length < musicPageSize) {
+                                loadMoreDiv.remove();
+                            } else {
+                                loadMoreBtn.textContent = '加载更多';
+                                loadMoreBtn.disabled = false;
+                            }
+                        } catch (e) {
+                            loadMoreBtn.textContent = '加载失败，点击重试';
+                            loadMoreBtn.disabled = false;
+                        }
+                    });
+                    loadMoreDiv.appendChild(loadMoreBtn);
+                    musicList.appendChild(loadMoreDiv);
+                }
             }
             musicLoaded = true;
         } catch (e) {
@@ -1142,7 +1221,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const [profRes, momentsRes] = await Promise.all([
                     apiFetch('/v1/users/profile?uid=' + encodeURIComponent(uid)),
-                    apiFetch('/v1/moments/user?uid=' + encodeURIComponent(uid) + '&limit=50')
+                    apiFetch('/v1/moments/user?ncuid=' + encodeURIComponent(uid) + '&limit=50')
                 ]);
                 const u = await profRes.json();
                 const momentsData = await momentsRes.json();
@@ -1161,7 +1240,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     try {
                         const reqRes = await apiFetch('/v1/friends/requests');
                         const reqData = await reqRes.json();
-                        const incoming = (reqData.requests || []).some(r => r.from_uid.toUpperCase() === uid.toUpperCase());
+                        const incoming = (reqData.requests || []).some(r => uidEq(getUid(r) || r.from_ncuid || r.from_uid, uid));
                         if (incoming) relation = 'pending_received';
                     } catch (e) {}
                 }
@@ -1212,11 +1291,14 @@ document.addEventListener('DOMContentLoaded', () => {
                             });
                             media += '</div>';
                         }
-                        momentsHtml += '<div style="background:var(--chat-bg);border-radius:12px;padding:14px 16px;border:1px solid var(--border);">' +
+                        momentsHtml += '<div style="background:var(--chat-bg);border-radius:12px;padding:14px 16px;border:1px solid var(--border);" data-moment-id="' + (m.id || '') + '">' +
                             '<div style="font-size:11px;color:var(--secondary-text);margin-bottom:6px;">' + fmtTs(m.created_at) + '</div>' +
                             '<div style="font-size:14px;color:var(--text);line-height:1.6;white-space:pre-wrap;word-break:break-word;">' + (m.body || '') + '</div>' +
                             media +
-                            (m.likes > 0 ? '<div style="font-size:12px;color:var(--secondary-text);margin-top:8px;">❤ ' + m.likes + '</div>' : '') +
+                            '<div style="display:flex;gap:16px;margin-top:10px;align-items:center;">' +
+                                '<button class="sp-like-btn" data-moment-id="' + (m.id || '') + '" style="background:none;border:none;color:' + (m.liked ? '#ff4757' : 'var(--secondary-text)') + ';font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px;"><i class="fa-solid fa-heart"></i> ' + (m.likes || 0) + '</button>' +
+                                '<button class="sp-comment-btn" data-moment-id="' + (m.id || '') + '" style="background:none;border:none;color:var(--secondary-text);font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px;"><i class="fa-solid fa-comment"></i> ' + (m.comments_count || 0) + '</button>' +
+                            '</div>' +
                             '</div>';
                     });
                     momentsHtml += '</div>';
@@ -1241,7 +1323,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     '<div style="background:var(--chat-bg);padding:28px 20px 20px;display:flex;flex-direction:column;align-items:center;border-bottom:1px solid var(--border);">' +
                         '<img src="' + resolveMediaUrl(avatar) + '" style="width:80px;height:80px;border-radius:50%;object-fit:cover;margin-bottom:12px;background:var(--border);" onerror="this.src=\'' + defaultAvatar + '\'">' +
                         '<div style="font-size:20px;font-weight:600;color:var(--text);margin-bottom:4px;">' + (u.display_name || u.username) + '</div>' +
-                        '<div style="font-size:12px;color:var(--secondary-text);margin-bottom:4px;">' + u.uid + '</div>' +
+                        '<div style="font-size:12px;color:var(--secondary-text);margin-bottom:4px;">' + getDisplayUid(u) + '</div>' +
                         (u.signature ? '<div style="font-size:13px;color:var(--secondary-text);margin-bottom:12px;text-align:center;max-width:300px;">' + escapeHtml(u.signature) + '</div>' : '') +
                         (btnHtml ? '<div style="display:flex;gap:10px;">' + btnHtml + '</div>' : '') +
                     '</div>' +
@@ -1249,14 +1331,59 @@ document.addEventListener('DOMContentLoaded', () => {
                     '<div style="font-size:14px;font-weight:600;color:var(--text);padding:14px 16px 8px;">' + (relation === 'self' ? '我的动态' : 'TA 的动态') + '</div>' +
                     momentsHtml;
 
+                // 点赞和评论事件
+                scroll.querySelectorAll('.sp-like-btn').forEach(btn => {
+                    btn.addEventListener('click', async (e) => {
+                        e.stopPropagation();
+                        const momentId = btn.dataset.momentId;
+                        if (!momentId) return;
+                        try {
+                            const res = await apiFetch('/v1/moments/' + momentId + '/like', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+                            const data = await res.json();
+                            if (data.error) { alert(data.error); return; }
+                            // 更新按钮状态
+                            const icon = btn.querySelector('i');
+                            if (data.liked) {
+                                btn.style.color = '#ff4757';
+                                icon.className = 'fa-solid fa-heart';
+                            } else {
+                                btn.style.color = 'var(--secondary-text)';
+                                icon.className = 'fa-regular fa-heart';
+                            }
+                            const count = parseInt(btn.textContent.trim()) || 0;
+                            btn.lastChild.textContent = ' ' + (data.liked ? count + 1 : Math.max(0, count - 1));
+                        } catch (e) { console.error(e); }
+                    });
+                });
+                scroll.querySelectorAll('.sp-comment-btn').forEach(btn => {
+                    btn.addEventListener('click', async (e) => {
+                        e.stopPropagation();
+                        const momentId = btn.dataset.momentId;
+                        if (!momentId) return;
+                        const commentText = prompt('输入评论：');
+                        if (!commentText || !commentText.trim()) return;
+                        try {
+                            const res = await apiFetch('/v1/moments/' + momentId + '/comments', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ body: commentText.trim() })
+                            });
+                            const data = await res.json();
+                            if (data.error) { alert(data.error); return; }
+                            const count = parseInt(btn.textContent.trim()) || 0;
+                            btn.lastChild.textContent = ' ' + (count + 1);
+                        } catch (e) { alert('评论失败'); }
+                    });
+                });
+
                 window.spMsg = function() {
                     closePanel();
-                    if (currentConv && currentConv.key === 'direct:' + u.uid) return;
-                    let found = contacts.friends.find(f => f.uid === u.uid);
+                    if (currentConv && currentConv.key === 'direct:' + getUid(u)) return;
+                    let found = contacts.friends.find(f => f.uid === getUid(u));
                     if (found) {
-                        switchConversation('direct', u.uid, found.name);
+                        switchConversation('direct', getUid(u), found.name);
                     } else {
-                        switchConversation('direct', u.uid, u.display_name || u.username);
+                        switchConversation('direct', getUid(u), u.display_name || u.username);
                     }
                 };
                 window.spAddFriend = async function() {
@@ -1272,7 +1399,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         // 先查询好友申请列表，找到对应 request_id
                         const reqRes = await apiFetch('/v1/friends/requests');
                         const reqData = await reqRes.json();
-                        const req = (reqData.requests || []).find(r => r.from_uid.toUpperCase() === uid.toUpperCase());
+                        const req = (reqData.requests || []).find(r => uidEq(getUid(r) || r.from_ncuid || r.from_uid, uid));
                         if (!req) { alert('未找到好友申请'); return; }
                         const r = await apiFetch('/v1/friends/respond', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({request_id: req.id, accept: action === 'accept'}) });
                         const d = await r.json();
@@ -1333,7 +1460,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function markAllRead(convType, convId) {
         try {
             if (convType === 'direct') {
-                await apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({with_uid: convId}) });
+                await apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({with_ncuid: convId}) });
             } else {
                 await apiFetch('/v1/groups/read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({group_id: convId}) });
             }
@@ -1370,8 +1497,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const info = (groupsData.groups || []).find(g => g.group_id === groupId) || {};
                 if (membersData.error) { scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">' + membersData.error + '</div>'; return; }
                 const members = (membersData.members || []).map(m => ({
-                    uid: m.uid,
-                    name: m.display_name || m.username || m.uid,
+                    uid: getUid(m),
+                    name: m.display_name || m.username || getUid(m),
                     avatar: m.avatar_url || ''
                 }));
                 const avatar = info.avatar_url || defaultAvatar;
@@ -1379,10 +1506,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 let membersHtml = '';
                 members.forEach(m => {
-                    const isMe = m.uid.toUpperCase() === myUid.toUpperCase();
+                    const isMe = uidEq(getUid(m), myUid);
                     membersHtml += `<div class="gm-member-item">` +
                         `<img class="gm-member-avatar" src="${resolveMediaUrl(m.avatar || defaultAvatar)}" onerror="this.src='${defaultAvatar}'">` +
-                        `<div class="gm-member-info"><div class="gm-member-name">${escapeHtml(m.name)}</div><div class="gm-member-uid">${escapeHtml(m.uid)}</div></div>` +
+                        `<div class="gm-member-info"><div class="gm-member-name">${escapeHtml(m.name)}</div><div class="gm-member-uid">${escapeHtml(getDisplayUid(m))}</div></div>` +
                         (isMe ? '<span class="gm-member-tag">我</span>' : '') +
                         `</div>`;
                 });
@@ -1450,14 +1577,14 @@ document.addEventListener('DOMContentLoaded', () => {
         function openInvitePanel(groupId, existingMembers) {
             const inviteOverlay = document.createElement('div');
             inviteOverlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:10000;background:var(--bg);display:flex;flex-direction:column;font-family:inherit;opacity:0;transition:opacity 0.2s;';
-            const existingUids = new Set(existingMembers.map(m => m.uid.toUpperCase()));
+            const existingUids = new Set(existingMembers.map(m => getUid(m).toUpperCase()));
             const friends = (contacts.friends || []).filter(f => !existingUids.has(f.uid.toUpperCase()));
             let friendsHtml = '';
             if (friends.length > 0) {
                 friends.forEach(f => {
                     friendsHtml += `<div class="gm-friend-item" data-uid="${escapeHtml(f.uid)}">` +
                         `<img class="gm-friend-avatar" src="${resolveMediaUrl(f.avatar || defaultAvatar)}" onerror="this.src='${defaultAvatar}'">` +
-                        `<div class="gm-friend-info"><div class="gm-friend-name">${escapeHtml(f.name)}</div><div class="gm-friend-uid">${escapeHtml(f.uid)}</div></div>` +
+                        `<div class="gm-friend-info"><div class="gm-friend-name">${escapeHtml(f.name)}</div><div class="gm-friend-uid">${escapeHtml(getDisplayUid(f))}</div></div>` +
                         `<button class="gm-friend-invite-btn">邀请</button>` +
                         `</div>`;
                 });
@@ -1582,11 +1709,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (friends.length > 0) {
                     friends.forEach(f => {
                         const fAvatar = f.avatar_url || defaultAvatar;
-                        const displayName = f.remark_name || f.display_name || f.username || f.uid;
+                        const displayName = f.remark_name || f.display_name || f.username || getUid(f);
                         friendsHtml += `<div class="mp-req-item" data-uid="${escapeHtml(f.uid)}">` +
                             `<img class="mp-req-avatar" src="${resolveMediaUrl(fAvatar)}" onerror="this.src='${defaultAvatar}'">` +
                             `<div class="mp-req-info"><div class="mp-req-name">${escapeHtml(displayName)}</div>` +
-                            `<div class="mp-req-time">${escapeHtml(f.uid)}</div></div>` +
+                            `<div class="mp-req-time">${escapeHtml(getDisplayUid(f))}</div></div>` +
                             `<button class="mp-req-chat-btn" data-uid="${escapeHtml(f.uid)}">私聊</button>` +
                             `</div>`;
                     });
@@ -1603,7 +1730,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         `</div>` +
                         `<input type="file" id="mpAvatarInput" accept="image/*" style="display:none">` +
                         `<div class="mp-field" id="mpNameField"><div class="mp-field-name" id="mpNameText">${escapeHtml(currentProfile.display_name || currentProfile.username)}</div></div>` +
-                        `<div class="mp-field" id="mpUidField"><div class="mp-field-uid" id="mpUidText">${escapeHtml(currentProfile.uid)}</div></div>` +
+                        `<div class="mp-field" id="mpUidField"><div class="mp-field-uid" id="mpUidText">${escapeHtml(myDisplayUid)}</div></div>` +
                         `<div class="mp-field" id="mpBioField"><div class="mp-field-bio" id="mpBioText">${currentProfile.signature ? escapeHtml(currentProfile.signature) : '点击添加签名'}</div></div>` +
                         `<button class="mp-space-btn" id="mpSpaceBtn">查看我的空间</button>` +
                     '</div>' +
@@ -1717,7 +1844,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 document.getElementById('mpUidField').addEventListener('click', () => {
                     const field = document.getElementById('mpUidField');
-                    const val = currentProfile.uid;
+                    const val = getUid(currentProfile);
                     field.innerHTML = `<input class="mp-edit-input" id="mpUidInput" value="${escapeHtml(val)}" style="font-size:13px;font-weight:400;text-transform:uppercase;">`;
                     const input = document.getElementById('mpUidInput');
                     input.focus();
@@ -1736,7 +1863,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             });
                             const d = await r.json();
                             if (d.error) { alert(d.error); return; }
-                            currentProfile.uid = newVal;
+                            currentProfile.ncuid = newVal;
                             field.innerHTML = `<div class="mp-field-uid" id="mpUidText">${escapeHtml(newVal)}</div>`;
                         } catch (err) { alert('保存失败'); }
                     };
@@ -1862,8 +1989,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (frData.error) { alert(frData.error); return; }
             contacts = {
                 friends: (frData.friends || []).map(f => ({
-                    uid: f.uid,
-                    name: f.display_name || f.username || f.uid,
+                    uid: getUid(f),
+                    displayUid: getDisplayUid(f),
+                    name: f.display_name || f.username || getUid(f),
                     username: f.username,
                     display_name: f.display_name,
                     avatar: f.avatar_url || '',
@@ -1900,10 +2028,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const dData = await dRes.json();
             const gData = await gRes.json();
             if (dData.error || gData.error) return;
-            // 统计私聊未读（按 from_uid 分组）
+            // 统计私聊未读（按 from_ncuid 分组）
             const directCount = {};
             (dData.messages || []).forEach(m => {
-                const uid = m.from_uid;
+                const uid = m.from_ncuid || m.from_uid;
                 directCount[uid] = (directCount[uid] || 0) + 1;
             });
             for (const [uid, count] of Object.entries(directCount)) {
@@ -2088,8 +2216,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!msg || !msg.type) return;
         if (msg.type === 'direct_message') {
             const d = msg.data || {};
-            const fromUid = d.from_uid || '';
-            if (fromUid.toUpperCase() === myUid.toUpperCase()) return;
+            const fromUid = getFromUid(d);
+            if (uidEq(fromUid, myUid)) return;
             notifyNewMessage(lookupName(fromUid), messagePreview(d));
             const convKey = `direct:${fromUid}`;
             // 只在当前会话匹配时才显示消息
@@ -2102,8 +2230,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const msgObj = {
                 id: d.id,
                 from_uid: fromUid,
-                from_name: lookupName(fromUid),
-                from_avatar: '',
+                from_name: getFromName(d) || lookupName(fromUid),
+                from_avatar: getFromAvatar(d),
                 body: d.body || '',
                 msg_type: d.msg_type || 'text',
                 media_url: d.media_url || null,
@@ -2116,8 +2244,8 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (msg.type === 'group_message') {
             const d = msg.data || {};
             const groupId = d.group_id || '';
-            const fromUid = d.from_uid || '';
-            if (fromUid.toUpperCase() === myUid.toUpperCase()) return;
+            const fromUid = getFromUid(d);
+            if (uidEq(fromUid, myUid)) return;
             const _grp = contacts.groups.find(g => g.id === groupId);
             notifyNewMessage(((_grp && _grp.name) || groupId) + ' · ' + lookupName(fromUid), messagePreview(d));
             const convKey = `group:${groupId}`;
@@ -2131,8 +2259,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const msgObj = {
                 id: d.id,
                 from_uid: fromUid,
-                from_name: lookupName(fromUid),
-                from_avatar: '',
+                from_name: getFromName(d) || lookupName(fromUid),
+                from_avatar: getFromAvatar(d),
                 body: d.body || '',
                 msg_type: d.msg_type || 'text',
                 media_url: d.media_url || null,
@@ -2146,18 +2274,18 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (msg.type === 'direct_recall') {
             const d = msg.data || {};
             const messageId = d.message_id || '';
-            const fromUid = d.from_uid || '';
+            const fromUid = getFromUid(d);
             const convKey = `direct:${fromUid}`;
             if (currentConv && currentConv.key === convKey) {
                 const target = document.querySelector(`.message[data-msg-id="${CSS.escape(messageId)}"]`);
                 if (target) {
+                    const recallName = uidEq(fromUid, myUid) ? '你' : (lookupName(fromUid) || fromUid);
                     const sep = document.createElement('div');
                     sep.className = 'time-separator';
-                    sep.textContent = '[消息已撤回]';
+                    sep.textContent = recallName + ' 撤回了一条消息';
                     target.replaceWith(sep);
                 }
             }
-            // 清理已撤回消息的去重记录
             if (seenMsgIds[convKey]) {
                 seenMsgIds[convKey].delete(messageId);
             }
@@ -2165,13 +2293,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const d = msg.data || {};
             const messageId = d.message_id || '';
             const groupId = d.group_id || '';
+            const fromUid = getFromUid(d);
             const convKey = `group:${groupId}`;
             if (currentConv && currentConv.key === convKey) {
                 const target = document.querySelector(`.message[data-msg-id="${CSS.escape(messageId)}"]`);
                 if (target) {
+                    const recallName = uidEq(fromUid, myUid) ? '你' : (lookupName(fromUid) || fromUid);
                     const sep = document.createElement('div');
                     sep.className = 'time-separator';
-                    sep.textContent = '[消息已撤回]';
+                    sep.textContent = recallName + ' 撤回了一条消息';
                     target.replaceWith(sep);
                 }
             }
@@ -2185,6 +2315,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderContacts() {
+        // 聊天列表（原有）
         contactList.innerHTML = '';
         if (contacts.groups.length > 0) {
             const sep = document.createElement('div');
@@ -2206,6 +2337,184 @@ document.addEventListener('DOMContentLoaded', () => {
                 contactList.appendChild(div);
             });
         }
+        // 联系人页面
+        renderContactsPage();
+    }
+
+    async function renderContactsPage() {
+        const groupList = document.getElementById('contactsGroupList');
+        const friendList = document.getElementById('contactsFriendList');
+        const reqList = document.getElementById('friendRequestsList');
+        const mainContent = document.getElementById('contactsMainContent');
+        if (!groupList || !friendList) return;
+
+        // 群聊
+        groupList.innerHTML = '';
+        contacts.groups.forEach(g => {
+            const div = createContactItem(g.id, g.name, 'group', g.avatar);
+            div.addEventListener('click', (e) => {
+                e.stopPropagation();
+                showContactDetail('group', g.id, g.name, g.avatar, mainContent);
+            });
+            groupList.appendChild(div);
+        });
+        if (contacts.groups.length === 0) {
+            groupList.innerHTML = '<div style="padding:12px 15px;font-size:12px;color:var(--secondary-text);">暂无群聊</div>';
+        }
+
+        // 好友
+        friendList.innerHTML = '';
+        contacts.friends.forEach(f => {
+            const div = createContactItem(f.uid, f.name, 'direct', f.avatar);
+            div.addEventListener('click', (e) => {
+                e.stopPropagation();
+                showContactDetail('direct', f.uid, f.name, f.avatar, mainContent);
+            });
+            friendList.appendChild(div);
+        });
+        if (contacts.friends.length === 0) {
+            friendList.innerHTML = '<div style="padding:12px 15px;font-size:12px;color:var(--secondary-text);">暂无好友</div>';
+        }
+
+        // 好友申请
+        if (reqList) {
+            await loadFriendRequests(reqList);
+        }
+    }
+
+    function showContactDetail(type, id, name, avatar, container) {
+        if (!container) return;
+        // 高亮左侧选中
+        document.querySelectorAll('.sidebar-panel[data-panel="contacts"] .contact-item').forEach(ci => ci.classList.remove('active'));
+        const convKey = type + ':' + id;
+        const target = document.querySelector(`.sidebar-panel[data-panel="contacts"] [data-conv-key="${convKey}"]`);
+        if (target) target.classList.add('active');
+
+        const avatarUrl = avatar ? resolveMediaUrl(avatar) : 'assets/default-avatar.png';
+        if (type === 'group') {
+            const group = contacts.groups.find(g => g.id === id);
+            container.innerHTML = `
+                <div class="contacts-detail-panel">
+                    <div class="contacts-detail-header">
+                        <img src="${avatarUrl}" onerror="this.src='assets/default-avatar.png'">
+                        <div class="detail-name">${escapeHtml(name)}</div>
+                        <div class="detail-uid">群ID: ${escapeHtml(id)}</div>
+                        ${group && group.member_count ? `<div style="font-size:12px;color:var(--secondary-text);margin-bottom:8px;">${group.member_count} 位成员</div>` : ''}
+                        <div class="contacts-detail-actions">
+                            <button class="btn primary" id="cdSendMessage">发消息</button>
+                            <button class="btn" id="cdGroupManage">群管理</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            container.querySelector('#cdSendMessage')?.addEventListener('click', () => {
+                switchConversation('group', id, name);
+                switchTab('chat');
+            });
+            container.querySelector('#cdGroupManage')?.addEventListener('click', () => {
+                openGroupManagePanel(id, name);
+            });
+        } else {
+            const friend = contacts.friends.find(f => f.uid === id);
+            const displayId = friend ? friend.displayUid : id;
+            container.innerHTML = `
+                <div class="contacts-detail-panel">
+                    <div class="contacts-detail-header">
+                        <img src="${avatarUrl}" onerror="this.src='assets/default-avatar.png'">
+                        <div class="detail-name">${escapeHtml(name)}</div>
+                        <div class="detail-uid">${escapeHtml(displayId)}</div>
+                        <div class="contacts-detail-actions">
+                            <button class="btn primary" id="cdSendMessage">发消息</button>
+                            <button class="btn" id="cdViewSpace">查看主页</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            container.querySelector('#cdSendMessage')?.addEventListener('click', () => {
+                switchConversation('direct', id, name);
+                switchTab('chat');
+            });
+            container.querySelector('#cdViewSpace')?.addEventListener('click', () => {
+                openSpacePanel(id);
+            });
+        }
+    }
+
+    async function loadFriendRequests(container) {
+        container.innerHTML = '<div style="padding:8px 15px;font-size:12px;color:var(--secondary-text);">加载中...</div>';
+        try {
+            const res = await apiFetch('/v1/friends/requests');
+            const data = await res.json();
+            const requests = (data.requests || []).filter(r => r.status === 0 || r.status === 'pending');
+            container.innerHTML = '';
+            if (requests.length === 0) {
+                container.innerHTML = '<div style="padding:8px 15px;font-size:12px;color:var(--secondary-text);">暂无新申请</div>';
+                return;
+            }
+            requests.forEach(req => {
+                const item = document.createElement('div');
+                item.className = 'friend-request-item';
+                const avatar = req.avatar_url || req.from_avatar || 'assets/default-avatar.png';
+                const name = req.from_display_name || req.from_name || req.display_name || req.from_username || getUid(req) || '未知用户';
+                item.innerHTML = `
+                    <img class="contact-avatar" src="${resolveMediaUrl(avatar)}" onerror="this.src='assets/default-avatar.png'">
+                    <div class="friend-request-info">
+                        <div class="name">${escapeHtml(name)}</div>
+                        <div class="uid">${escapeHtml(getUid(req) || req.from_uid || '')}</div>
+                    </div>
+                    <div class="friend-request-actions">
+                        <button class="accept-btn" data-req-id="${req.id}">同意</button>
+                        <button class="reject-btn" data-req-id="${req.id}">拒绝</button>
+                    </div>
+                `;
+                item.querySelector('.accept-btn').addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    await respondFriendRequest(req.id, true, container);
+                });
+                item.querySelector('.reject-btn').addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    await respondFriendRequest(req.id, false, container);
+                });
+                item.addEventListener('click', () => {
+                    if (getUid(req)) openSpacePanel(getUid(req));
+                });
+                container.appendChild(item);
+            });
+        } catch (e) {
+            console.error('[friends/requests]', e);
+            container.innerHTML = '<div style="padding:8px 15px;font-size:12px;color:var(--secondary-text);">加载失败</div>';
+        }
+    }
+
+    async function respondFriendRequest(requestId, accept, container) {
+        try {
+            const res = await apiFetch('/v1/friends/respond', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ request_id: requestId, accept })
+            });
+            const data = await res.json();
+            if (data.error) { alert(data.error); return; }
+            // 刷新
+            loadContacts();
+        } catch (e) { alert('操作失败'); }
+    }
+
+    // 添加好友按钮
+    const addFriendBtn = document.getElementById('addFriendBtn');
+    if (addFriendBtn) {
+        addFriendBtn.addEventListener('click', () => {
+            const uid = prompt('请输入对方 UID：');
+            if (!uid || !uid.trim()) return;
+            apiFetch('/v1/friends/request', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ to_uid: uid.trim() })
+            }).then(r => r.json()).then(d => {
+                if (d.error) { alert(d.error); return; }
+                alert('好友请求已发送');
+            }).catch(() => alert('请求失败'));
+        });
     }
 
     function createContactItem(id, name, type, avatar) {
@@ -2405,7 +2714,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function createMessageElement(msg, convKey, currentSeen) {
         if (!msg || !msg.id) return null;
 
-        const fromUid = msg.from_uid || msg.sender_uid || '';
+        const fromUid = getFromUid(msg) || msg.from_uid || msg.sender_uid || '';
         const msgType = msg.msg_type || 'text';
 
         if (msgType === 'system') {
@@ -2421,7 +2730,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (msgType === 'recall') {
             const div = document.createElement('div');
             div.className = 'time-separator';
-            div.textContent = msg.body || '[消息已撤回]';
+            const recallFrom = getFromUid(msg) || msg.from_uid || msg.sender_uid || '';
+            const recallName = recallFrom.toUpperCase() === myUid.toUpperCase() ? '你' : (lookupName(recallFrom) || recallFrom || '');
+            div.textContent = recallName ? recallName + ' 撤回了一条消息' : (msg.body || '[消息已撤回]');
             div.dataset.msgId = msg.id;
             div.dataset.msgType = 'recall';
             return div;
@@ -2514,16 +2825,16 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (obj.quote) {
                             const quote = obj.quote;
                             displayText = `<div class="quote-block" data-quoted-id="${escapeHtml(quote.id || '')}">
-                                <div class="quote-sender">${escapeHtml(quote.from_name || quote.from_uid || '')}</div>
+                                <div class="quote-sender">${escapeHtml(quote.from_name || quote.from_ncuid || quote.from_uid || '')}</div>
                                 <div>${escapeHtml(quote.text || '')}</div>
                             </div>` + (displayText ? `<div style="white-space: pre-wrap; word-break: break-word;">${displayText}</div>` : '');
                         }
                         if (obj.mentions && Array.isArray(obj.mentions)) {
                             obj.mentions.forEach(m => {
-                                const name = m.name || m.uid;
+                                const name = m.name || m.uid || m.ncuid;
                                 const regex = new RegExp(`@${escapeRegExp(name)}\u200B?`, 'g');
                                 displayText = displayText.replace(regex,
-                                    `<span class="mention-highlight" data-uid="${escapeHtml(m.uid || '')}">@${escapeHtml(name)}</span>`);
+                                    `<span class="mention-highlight" data-uid="${escapeHtml(m.ncuid || m.uid || '')}">@${escapeHtml(name)}</span>`);
                             });
                         }
                         displayText = displayText.replace(/\n/g, '<br>');
@@ -2587,16 +2898,16 @@ document.addEventListener('DOMContentLoaded', () => {
                             const quote = obj.quote;
                             quoteHtml = `
                                 <div class="quote-block" data-quoted-id="${escapeHtml(quote.id || '')}">
-                                    <div class="quote-sender">${escapeHtml(quote.from_name || quote.from_uid || '')}</div>
+                                    <div class="quote-sender">${escapeHtml(quote.from_name || quote.from_ncuid || quote.from_uid || '')}</div>
                                     <div>${escapeHtml(quote.text || '')}</div>
                                 </div>`;
                         }
                         if (obj.mentions && Array.isArray(obj.mentions)) {
                             obj.mentions.forEach(m => {
-                                const name = m.name || m.uid;
+                                const name = m.name || m.uid || m.ncuid;
                                 const regex = new RegExp(`@${escapeRegExp(name)}\u200B?`, 'g');
                                 textBody = textBody.replace(regex,
-                                    `<span class="mention-highlight" data-uid="${escapeHtml(m.uid || '')}">@${escapeHtml(name)}</span>`);
+                                    `<span class="mention-highlight" data-uid="${escapeHtml(m.ncuid || m.uid || '')}">@${escapeHtml(name)}</span>`);
                             });
                         }
                         textBody = textBody.replace(/\n/g, '<br>');
@@ -2698,6 +3009,37 @@ document.addEventListener('DOMContentLoaded', () => {
         timeDiv.className = 'message-time';
         timeDiv.textContent = time;
         msgDiv.appendChild(timeDiv);
+
+        // 阅后即焚支持
+        let burnSeconds = 0;
+        try {
+            const parsed = JSON.parse(msg.body || '{}');
+            burnSeconds = parsed.burn_after_seconds || msg.burn_after_seconds || 0;
+        } catch (e) {
+            burnSeconds = msg.burn_after_seconds || 0;
+        }
+        if (burnSeconds > 0) {
+            msgDiv.classList.add('burn-message');
+            bubble.style.setProperty('display', 'none', 'important');
+            const burnHint = document.createElement('div');
+            burnHint.className = 'burn-hint';
+            burnHint.textContent = '阅后即焚';
+            msgDiv.insertBefore(burnHint, timeDiv);
+            burnHint.addEventListener('click', (e) => {
+                e.stopPropagation();
+                burnHint.style.display = 'none';
+                bubble.style.removeProperty('display');
+                msgDiv.classList.add('revealed');
+                setTimeout(() => {
+                    bubble.style.setProperty('display', 'none', 'important');
+                    const recalled = document.createElement('div');
+                    recalled.className = 'time-separator';
+                    recalled.textContent = sender + ' 撤回了一条消息';
+                    msgDiv.appendChild(recalled);
+                    msgDiv.classList.add('burned');
+                }, burnSeconds * 1000);
+            });
+        }
 
         if (bubble) {
             msgDiv.dataset.plainText = bubble.innerText;
@@ -3080,7 +3422,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const name = match[1];
                 const member = mentionMembers.find(m => m.name === name);
                 if (member) {
-                    mentions.push({ uid: member.uid, name: member.name });
+                    mentions.push({ ncuid: member.uid, name: member.name });
                 }
             }
         }
@@ -3301,8 +3643,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await res.json();
             // Go 返回 {members: [{uid, username, display_name, avatar_url, role, joined_at}]}
             groupMembers = (data.members || []).map(m => ({
-                uid: m.uid,
-                name: m.display_name || m.username || m.uid,
+                uid: getUid(m),
+                name: m.display_name || m.username || getUid(m),
                 avatar: m.avatar_url || ''
             }));
             mentionMembers = groupMembers;
@@ -3338,6 +3680,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const nameLower = m.name.toLowerCase();
             if (nameLower.includes(lower)) return true;
             if (m.uid.toLowerCase().includes(lower)) return true;
+            if (m.ncuid && m.ncuid.toLowerCase().includes(lower)) return true;
             // 全拼搜索
             const pinyin = getPinyinInitials(m.name).toLowerCase();
             if (pinyin.includes(lower)) return true;
@@ -3468,9 +3811,91 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     const sendEmoticonBtn = document.getElementById('sendEmoticonBtn');
-    sendEmoticonBtn.addEventListener('click', () => {
-        showEmoticonPicker();
-    });
+    if (sendEmoticonBtn) {
+        sendEmoticonBtn.addEventListener('click', () => {
+            showEmoticonPicker();
+        });
+    }
+
+    // 阅后即焚弹窗
+    const sendBurnBtn = document.getElementById('sendBurnBtn');
+    const burnDialogOverlay = document.getElementById('burnDialogOverlay');
+    const burnDialogCancel = document.getElementById('burnDialogCancel');
+    const burnDialogSend = document.getElementById('burnDialogSend');
+    const burnTimeSelect = document.getElementById('burnTimeSelect');
+    const burnTextInput = document.getElementById('burnTextInput');
+
+    if (sendBurnBtn) {
+        sendBurnBtn.addEventListener('click', () => {
+            burnTextInput.value = '';
+            burnTimeSelect.value = '10';
+            burnDialogOverlay.style.display = 'flex';
+            burnTextInput.focus();
+            moreMenu.classList.remove('show');
+        });
+    }
+    if (burnDialogCancel) burnDialogCancel.addEventListener('click', () => { burnDialogOverlay.style.display = 'none'; });
+    if (burnDialogOverlay) burnDialogOverlay.addEventListener('click', (e) => { if (e.target === burnDialogOverlay) burnDialogOverlay.style.display = 'none'; });
+    if (burnDialogSend) {
+        burnDialogSend.addEventListener('click', () => {
+            const text = burnTextInput.value.trim();
+            if (!text) { alert('请输入内容'); return; }
+            const seconds = parseInt(burnTimeSelect.value) || 10;
+            const burnPayload = { v: 2, text: text, burn_after_seconds: seconds };
+            sendMessage(JSON.stringify(burnPayload), 'text');
+            burnDialogOverlay.style.display = 'none';
+        });
+    }
+
+    // 红包弹窗
+    const sendRedPacketBtn = document.getElementById('sendRedPacketBtn');
+    const rpDialogOverlay = document.getElementById('redPacketDialogOverlay');
+    const rpDialogCancel = document.getElementById('rpDialogCancel');
+    const rpDialogSend = document.getElementById('rpDialogSend');
+    const rpAmountInput = document.getElementById('rpAmountInput');
+    const rpCountInput = document.getElementById('rpCountInput');
+    const rpTitleInput = document.getElementById('rpTitleInput');
+
+    if (sendRedPacketBtn) {
+        sendRedPacketBtn.addEventListener('click', () => {
+            if (!currentConv) { alert('请先选择会话'); return; }
+            rpAmountInput.value = '';
+            rpCountInput.value = '1';
+            rpTitleInput.value = '恭喜发财';
+            rpDialogOverlay.style.display = 'flex';
+            rpAmountInput.focus();
+            moreMenu.classList.remove('show');
+        });
+    }
+    if (rpDialogCancel) rpDialogCancel.addEventListener('click', () => { rpDialogOverlay.style.display = 'none'; });
+    if (rpDialogOverlay) rpDialogOverlay.addEventListener('click', (e) => { if (e.target === rpDialogOverlay) rpDialogOverlay.style.display = 'none'; });
+    if (rpDialogSend) {
+        rpDialogSend.addEventListener('click', async () => {
+            if (!currentConv) { alert('请先选择会话'); return; }
+            const amount = parseFloat(rpAmountInput.value);
+            if (!amount || amount <= 0) { alert('请输入有效金额'); return; }
+            const count = parseInt(rpCountInput.value) || 1;
+            const title = rpTitleInput.value.trim() || '恭喜发财';
+            try {
+                const payload = { title: title, total_amount: amount, total_count: count };
+                if (currentConv.type === 'group') {
+                    payload.group_id = currentConv.id;
+                } else {
+                    payload.to_uid = currentConv.id;
+                }
+                const res = await apiFetch('/v1/redpackets/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const text = await res.text();
+                let data = {};
+                try { data = JSON.parse(text); } catch (e) {}
+                if (data.error) { alert(data.error); return; }
+                rpDialogOverlay.style.display = 'none';
+            } catch (e) { alert('发送失败'); }
+        });
+    }
 
     fileInput.addEventListener('change', async (e) => {
         const files = e.target.files;
@@ -3720,7 +4145,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (d.error) {
                                 alert(d.error || '撤回失败');
                             } else {
-                                const recallText = '[消息已撤回]';
+                                const recallText = '你 撤回了一条消息';
                                 const timeSep = document.createElement('div');
                                 timeSep.className = 'time-separator';
                                 timeSep.textContent = recallText;
@@ -4134,6 +4559,300 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     // 连接 WebSocket
     initWebSocket();
+
+    // ===== 设置页面 =====
+    let currentSettingsTab = 'profile';
+    const settingsContent = document.getElementById('settingsContent');
+
+    function renderSettingsPage(tab) {
+        currentSettingsTab = tab;
+        if (!settingsContent) return;
+
+        // 更新侧边栏按钮高亮
+        document.querySelectorAll('.sidebar-panel[data-panel="settings"] .contact-item').forEach(b => {
+            b.classList.toggle('active', b.dataset.settings === tab);
+        });
+
+        if (tab === 'profile') {
+            renderSettingsProfile();
+        } else if (tab === 'appearance') {
+            renderSettingsAppearance();
+        } else if (tab === 'checkin') {
+            renderSettingsCheckin();
+        } else if (tab === 'about') {
+            renderSettingsAbout();
+        }
+    }
+
+    function renderSettingsProfile() {
+        const u = storedUser;
+        settingsContent.innerHTML = `
+            <h3>我的</h3>
+            <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;cursor:pointer;" id="settingsProfileCard">
+                <img src="${resolveMediaUrl(myAvatar || '')}" style="width:64px;height:64px;border-radius:50%;object-fit:cover;background:var(--border);" onerror="this.src='assets/default-avatar.png'">
+                <div>
+                    <div style="font-size:18px;font-weight:600;color:var(--text);">${escapeHtml(myName || '未登录')}</div>
+                    <div style="font-size:13px;color:var(--secondary-text);">${escapeHtml(myUid || '')}</div>
+                </div>
+            </div>
+            <div class="settings-group">
+                <div class="settings-item" id="settingsEditProfile">
+                    <span class="label">编辑资料</span>
+                    <span class="value"><i class="fa-solid fa-chevron-right"></i></span>
+                </div>
+                <div class="settings-item" id="settingsMyMoments">
+                    <span class="label">我的动态</span>
+                    <span class="value"><i class="fa-solid fa-chevron-right"></i></span>
+                </div>
+                <div class="settings-item" id="settingsMyFavorites">
+                    <span class="label">我的收藏</span>
+                    <span class="value"><i class="fa-solid fa-chevron-right"></i></span>
+                </div>
+                <div class="settings-item" id="settingsMyMusic">
+                    <span class="label">我的音乐</span>
+                    <span class="value"><i class="fa-solid fa-chevron-right"></i></span>
+                </div>
+            </div>
+            <div class="settings-group">
+                <div class="settings-item" id="settingsLogout" style="color:#ff4757;">
+                    <span class="label">退出登录</span>
+                    <span class="value"><i class="fa-solid fa-right-from-bracket"></i></span>
+                </div>
+            </div>
+        `;
+        document.getElementById('settingsProfileCard')?.addEventListener('click', () => openMyProfile());
+        document.getElementById('settingsEditProfile')?.addEventListener('click', () => openMyProfile());
+        document.getElementById('settingsMyMoments')?.addEventListener('click', () => openSpacePanel(myUid));
+        document.getElementById('settingsMyFavorites')?.addEventListener('click', () => {
+            alert('收藏功能开发中');
+        });
+        document.getElementById('settingsMyMusic')?.addEventListener('click', () => {
+            switchTab('music');
+            musicTab = 'mine';
+            musicLoaded = false;
+            musicCurrentPage = 1;
+            loadMusicList();
+        });
+        document.getElementById('settingsLogout')?.addEventListener('click', () => {
+            if (confirm('确定退出登录？')) {
+                localStorage.removeItem('oc_access_token');
+                localStorage.removeItem('oc_refresh_token');
+                localStorage.removeItem('oc_user');
+                window.location.href = 'login.html';
+            }
+        });
+    }
+
+    function renderSettingsAppearance() {
+        const currentTheme = localStorage.getItem('theme') || 'light';
+        settingsContent.innerHTML = `
+            <h3>界面</h3>
+            <div class="settings-group">
+                <div class="settings-item" id="settingsThemeToggle">
+                    <span class="label">深色模式</span>
+                    <span class="value">${currentTheme === 'dark' ? '已开启' : '已关闭'} <i class="fa-solid fa-chevron-right"></i></span>
+                </div>
+            </div>
+            ${IS_TAURI ? `
+            <h3 style="margin-top:20px;">服务器配置 (Tauri)</h3>
+            <div class="settings-group">
+                <div class="settings-input-row">
+                    <label>Base URL</label>
+                    <input type="text" id="settingsBaseUrl" value="${BACKEND_ORIGIN}" placeholder="http://host:port">
+                </div>
+                <div class="settings-input-row">
+                    <label>Media URL</label>
+                    <input type="text" id="settingsMediaUrl" value="${resolveMediaUrl('').replace(/\/$/, '')}" placeholder="http://host:port">
+                </div>
+                <div class="settings-input-row">
+                    <label></label>
+                    <button id="settingsSaveUrls">保存并重载</button>
+                </div>
+            </div>` : ''}
+        `;
+        document.getElementById('settingsThemeToggle')?.addEventListener('click', () => {
+            const newTheme = (localStorage.getItem('theme') || 'light') === 'dark' ? 'light' : 'dark';
+            localStorage.setItem('theme', newTheme);
+            applyTheme(newTheme);
+            renderSettingsAppearance();
+        });
+        if (IS_TAURI) {
+            document.getElementById('settingsSaveUrls')?.addEventListener('click', () => {
+                const base = document.getElementById('settingsBaseUrl')?.value?.trim();
+                const media = document.getElementById('settingsMediaUrl')?.value?.trim();
+                if (base) localStorage.setItem('oc_custom_base_url', base);
+                if (media) localStorage.setItem('oc_custom_media_url', media);
+                window.location.reload();
+            });
+        }
+    }
+
+    async function renderSettingsCheckin() {
+        settingsContent.innerHTML = '<h3>签到墙</h3><div style="text-align:center;padding:20px;color:var(--secondary-text);">加载中...</div>';
+        try {
+            let wallData = {};
+            try {
+                const wallRes = await apiFetch('/v1/me/checkin/wall?limit=50');
+                if (wallRes.status === 404) {
+                    settingsContent.innerHTML = '<h3>签到墙</h3><div style="text-align:center;padding:60px 20px;color:var(--secondary-text);"><i class="fa-solid fa-hammer" style="font-size:32px;margin-bottom:12px;display:block;"></i>功能建设中，敬请期待</div>';
+                    return;
+                }
+                const wallText = await wallRes.text();
+                try { wallData = JSON.parse(wallText); } catch (e) { console.warn('[checkin] wall not JSON:', wallText.slice(0, 100)); }
+            } catch (e) {
+                settingsContent.innerHTML = '<h3>签到墙</h3><div style="text-align:center;padding:60px 20px;color:var(--secondary-text);"><i class="fa-solid fa-hammer" style="font-size:32px;margin-bottom:12px;display:block;"></i>功能建设中，敬请期待</div>';
+                return;
+            }
+
+            const checkedIn = wallData.checked_in || false;
+            const checkinCount = wallData.checkin_count || 0;
+            const alreadyPosted = wallData.already_posted || false;
+            const items = wallData.featured_messages || [];
+
+            let html = `<h3>签到墙</h3>`;
+            html += `<div class="checkin-header">`;
+            html += `<button class="checkin-btn" id="checkinDoBtn" ${checkedIn ? 'disabled' : ''}>${checkedIn ? '✓ 今日已签到 (' + checkinCount + '天)' : '签到'}</button>`;
+            html += `</div>`;
+
+            // 留言输入
+            if (checkedIn && !alreadyPosted) {
+                html += `<div style="margin-bottom:16px;display:flex;gap:8px;align-items:center;">`;
+                html += `<input type="text" id="checkinMsgInput" placeholder="留下今日一句话..." style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:inherit;outline:none;">`;
+                html += `<button class="checkin-btn" id="checkinPostBtn" style="padding:8px 16px;font-size:13px;">留言</button>`;
+                html += `</div>`;
+            }
+
+            html += `<div class="checkin-wall">`;
+            if (items.length === 0) {
+                html += '<div style="text-align:center;padding:20px;color:var(--secondary-text);">暂无签到记录</div>';
+            }
+            items.forEach(item => {
+                const u = item.user || {};
+                const avatar = u.avatar_url ? resolveMediaUrl(u.avatar_url) : 'assets/default-avatar.png';
+                const name = u.display_name || u.username || u.uid || '匿名';
+                const contentText = item.content_text || '';
+                const imageUrl = item.image_url ? resolveMediaUrl(item.image_url) : '';
+                const time = item.created_at ? new Date(item.created_at).toLocaleString('zh-CN') : '';
+                html += `<div class="checkin-card" data-post-id="${item.id || ''}">`;
+                html += `<div class="checkin-user">`;
+                html += `<img src="${avatar}" onerror="this.src='assets/default-avatar.png'">`;
+                html += `<div><div class="name">${escapeHtml(name)}</div><div class="time">${time}</div></div>`;
+                html += `</div>`;
+                if (contentText) html += `<div class="checkin-body">${escapeHtml(contentText)}</div>`;
+                if (imageUrl) html += `<img src="${imageUrl}" style="max-width:100%;max-height:200px;border-radius:8px;margin-top:8px;cursor:pointer;" onclick="openImageViewer('${imageUrl}')" onerror="this.style.display='none'">`;
+                html += `<div class="checkin-actions">`;
+                html += `<button class="checkin-action-btn sp-c-like ${item.liked_by_me ? 'liked' : ''}" data-id="${item.id || ''}" data-liked="${item.liked_by_me || false}">`;
+                html += `<i class="fa-${item.liked_by_me ? 'solid' : 'regular'} fa-heart"></i> ${item.like_count || 0}</button>`;
+                html += `<button class="checkin-action-btn sp-c-comment" data-id="${item.id || ''}">`;
+                html += `<i class="fa-regular fa-comment"></i> ${item.comment_count || 0}</button>`;
+                html += `</div></div>`;
+            });
+            html += '</div>';
+            settingsContent.innerHTML = html;
+
+            // 签到按钮
+            document.getElementById('checkinDoBtn')?.addEventListener('click', async () => {
+                try {
+                    const res = await apiFetch('/v1/me/checkin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                    const text = await res.text();
+                    let data = {};
+                    try { data = JSON.parse(text); } catch (e) {}
+                    if (data.error) { alert(data.error); return; }
+                    renderSettingsCheckin();
+                } catch (e) { alert('签到失败'); }
+            });
+
+            // 留言
+            document.getElementById('checkinPostBtn')?.addEventListener('click', async () => {
+                const input = document.getElementById('checkinMsgInput');
+                const msg = (input?.value || '').trim();
+                if (!msg) { alert('请输入留言内容'); return; }
+                try {
+                    const res = await apiFetch('/v1/me/checkin/wall/comment', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ body: msg })
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (data.error) { alert(data.error); return; }
+                    renderSettingsCheckin();
+                } catch (e) { alert('留言失败'); }
+            });
+
+            // 点赞
+            settingsContent.querySelectorAll('.sp-c-like').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const id = btn.dataset.id;
+                    if (!id) return;
+                    const isLiked = btn.dataset.liked === 'true';
+                    try {
+                        const endpoint = isLiked ? '/me/checkin/wall/unlike' : '/me/checkin/wall/like';
+                        const res = await apiFetch(endpoint, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ post_id: id })
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (data.error) { alert(data.error); return; }
+                        renderSettingsCheckin();
+                    } catch (e) { console.error(e); }
+                });
+            });
+
+            // 评论
+            settingsContent.querySelectorAll('.sp-c-comment').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const id = btn.dataset.id;
+                    if (!id) return;
+                    const text = prompt('输入评论：');
+                    if (!text || !text.trim()) return;
+                    try {
+                        const res = await apiFetch('/v1/me/checkin/wall/comment', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ post_id: id, body: text.trim() })
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (data.error) { alert(data.error); return; }
+                        renderSettingsCheckin();
+                    } catch (e) { alert('评论失败'); }
+                });
+            });
+        } catch (e) {
+            console.error('[checkin]', e);
+            settingsContent.innerHTML = '<h3>签到墙</h3><div style="text-align:center;padding:20px;color:var(--secondary-text);">加载失败</div>';
+        }
+    }
+
+    function renderSettingsAbout() {
+        settingsContent.innerHTML = `
+            <h3>关于</h3>
+            <div class="settings-group">
+                <div class="settings-item">
+                    <span class="label">应用名称</span>
+                    <span class="value">OldChat for Kivotos</span>
+                </div>
+                <div class="settings-item">
+                    <span class="label">运行模式</span>
+                    <span class="value">${IS_TAURI ? 'Tauri 桌面端' : '浏览器 (Nginx)'}</span>
+                </div>
+                <div class="settings-item">
+                    <span class="label">后端地址</span>
+                    <span class="value">${BACKEND_ORIGIN}</span>
+                </div>
+            </div>
+        `;
+    }
+
+    // 设置页面导航点击 — 仅通过侧边栏面板
+    document.querySelector('.sidebar-panel[data-panel="settings"]')?.addEventListener('click', (e) => {
+        const item = e.target.closest('[data-settings]');
+        if (!item) return;
+        const tab = item.dataset.settings;
+        // 高亮侧边栏
+        document.querySelectorAll('.sidebar-panel[data-panel="settings"] .contact-item').forEach(ci => ci.classList.remove('active'));
+        item.classList.add('active');
+        renderSettingsPage(tab);
+    });
+    // 默认渲染
+    renderSettingsPage('profile');
 
     // ===== @ 提及点击跳转 =====
     messagesContainer.addEventListener('click', (e) => {

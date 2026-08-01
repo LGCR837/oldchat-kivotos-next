@@ -28,7 +28,23 @@
                     <div class="sidebar-panel active" data-panel="chat">
                         <div class="contact-list" id="contactList"></div>
                     </div>
-                    <div class="sidebar-panel" data-panel="contacts"></div>
+                    <div class="sidebar-panel" data-panel="contacts">
+                    <div class="contacts-section">
+                        <div class="contacts-section-header">
+                            <span>好友申请</span>
+                            <button class="icon-btn" id="addFriendBtn" title="添加好友"><i class="fa-solid fa-user-plus"></i></button>
+                        </div>
+                        <div id="friendRequestsList" class="contact-list"></div>
+                    </div>
+                    <div class="contacts-section">
+                        <div class="contacts-section-header"><span>群聊</span></div>
+                        <div id="contactsGroupList" class="contact-list"></div>
+                    </div>
+                    <div class="contacts-section">
+                        <div class="contacts-section-header"><span>好友</span></div>
+                        <div id="contactsFriendList" class="contact-list"></div>
+                    </div>
+                </div>
                     <div class="sidebar-panel" data-panel="music">
                         <div class="music-tabs" id="musicTabs">
                             <button class="music-tab-btn active" data-music-tab="plaza">广场</button>
@@ -37,7 +53,14 @@
                         </div>
                         <div class="contact-list" id="musicList"></div>
                     </div>
-                    <div class="sidebar-panel" data-panel="settings"></div>
+                    <div class="sidebar-panel" data-panel="settings">
+                        <div class="contact-list" style="padding:8px 0;">
+                            <div class="contact-item active" data-settings="profile" style="cursor:pointer;"><div class="contact-info"><div class="name">我的</div></div></div>
+                            <div class="contact-item" data-settings="appearance" style="cursor:pointer;"><div class="contact-info"><div class="name">界面</div></div></div>
+                            <div class="contact-item" data-settings="checkin" style="cursor:pointer;"><div class="contact-info"><div class="name">签到墙</div></div></div>
+                            <div class="contact-item" data-settings="about" style="cursor:pointer;"><div class="contact-info"><div class="name">关于</div></div></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </aside>
@@ -77,12 +100,30 @@
                         <button id="sendFileBtn">上传文件</button>
                         <button id="sendUrlImageBtn">发送直链图片 (仅限网页端)</button>
                         <button id="sendUrlVoiceBtn">发送直链音频</button>
-                        <button id="sendEmoticonBtn">内置表情</button>
+                        <button id="sendBurnBtn">阅后即焚</button>
+                        <button id="sendRedPacketBtn">发红包</button>
                     </div>
                     <input type="file" id="fileInput" style="display: none" multiple>
                 </div>
             </div>
-            <div class="main-panel" data-panel="contacts"></div>
+            <div class="main-panel" data-panel="contacts">
+                <div class="chat-header">
+                    <span class="chat-title">联系人</span>
+                    <div class="header-right">
+                        <div class="window-controls" id="contactsWinControls">
+                            <button class="win-ctrl-btn" id="contactsWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
+                            <button class="win-ctrl-btn" id="contactsWinMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
+                            <button class="win-ctrl-btn" id="contactsWinCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+                        </div>
+                    </div>
+                </div>
+                <div class="contacts-main-content" id="contactsMainContent">
+                    <div class="contacts-detail-empty">
+                        <i class="fa-solid fa-user-group" style="font-size:48px;color:var(--secondary-text);margin-bottom:16px;"></i>
+                        <p style="color:var(--secondary-text);">从左侧选择联系人查看详情</p>
+                    </div>
+                </div>
+            </div>
             <div class="main-panel" data-panel="music">
                 <div class="music-workspace" id="musicWorkspace">
                     <div class="music-win-controls" id="musicWinControls">
@@ -96,7 +137,21 @@
                     </div>
                 </div>
             </div>
-            <div class="main-panel" data-panel="settings"></div>
+            <div class="main-panel" data-panel="settings">
+                <div class="chat-header">
+                    <span class="chat-title">设置</span>
+                    <div class="header-right">
+                        <div class="window-controls" id="settingsWinControls">
+                            <button class="win-ctrl-btn" id="settingsWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
+                            <button class="win-ctrl-btn" id="settingsWinMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
+                            <button class="win-ctrl-btn" id="settingsWinCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-layout">
+                    <div class="settings-content" id="settingsContent"></div>
+                </div>
+            </div>
         </main>
     </div>
     <div class="url-input-overlay" id="urlInputOverlay" style="display:none;">
@@ -106,6 +161,50 @@
             <div class="url-input-actions">
                 <button id="urlInputCancel" class="btn">取消</button>
                 <button id="urlInputSend" class="btn primary">发送</button>
+            </div>
+        </div>
+    </div>
+    <div class="url-input-overlay" id="burnDialogOverlay" style="display:none;">
+        <div class="url-input-dialog" style="max-width:380px;">
+            <div class="url-input-title">发送阅后即焚消息</div>
+            <div style="margin-bottom:12px;">
+                <label style="font-size:12px;color:var(--secondary-text);display:block;margin-bottom:4px;">焚毁时间</label>
+                <select id="burnTimeSelect" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:inherit;outline:none;">
+                    <option value="5">5 秒</option>
+                    <option value="10" selected>10 秒</option>
+                    <option value="30">30 秒</option>
+                    <option value="60">60 秒</option>
+                    <option value="300">5 分钟</option>
+                </select>
+            </div>
+            <div style="margin-bottom:12px;">
+                <label style="font-size:12px;color:var(--secondary-text);display:block;margin-bottom:4px;">消息内容</label>
+                <textarea id="burnTextInput" placeholder="输入阅后即焚内容..." rows="3" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:inherit;outline:none;resize:vertical;box-sizing:border-box;"></textarea>
+            </div>
+            <div class="url-input-actions">
+                <button id="burnDialogCancel" class="btn">取消</button>
+                <button id="burnDialogSend" class="btn primary">发送</button>
+            </div>
+        </div>
+    </div>
+    <div class="url-input-overlay" id="redPacketDialogOverlay" style="display:none;">
+        <div class="url-input-dialog" style="max-width:380px;">
+            <div class="url-input-title">发送红包</div>
+            <div style="margin-bottom:10px;">
+                <label style="font-size:12px;color:var(--secondary-text);display:block;margin-bottom:4px;">总金额</label>
+                <input type="number" id="rpAmountInput" placeholder="金额" min="0.01" step="0.01" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:inherit;outline:none;box-sizing:border-box;">
+            </div>
+            <div style="margin-bottom:10px;">
+                <label style="font-size:12px;color:var(--secondary-text);display:block;margin-bottom:4px;">个数</label>
+                <input type="number" id="rpCountInput" placeholder="个数" min="1" value="1" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:inherit;outline:none;box-sizing:border-box;">
+            </div>
+            <div style="margin-bottom:12px;">
+                <label style="font-size:12px;color:var(--secondary-text);display:block;margin-bottom:4px;">标题</label>
+                <input type="text" id="rpTitleInput" placeholder="恭喜发财" value="恭喜发财" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg);color:var(--text);font-family:inherit;outline:none;box-sizing:border-box;">
+            </div>
+            <div class="url-input-actions">
+                <button id="rpDialogCancel" class="btn">取消</button>
+                <button id="rpDialogSend" class="btn primary">发送</button>
             </div>
         </div>
     </div>

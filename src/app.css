@@ -924,7 +924,7 @@ body::-webkit-scrollbar {
 	align-items: center;
 	justify-content: center;
 	gap: 14px;
-	color: rgba(255, 255, 255, 0.55);
+	color: var(--secondary-text);
 	z-index: 2;
 	pointer-events: none;
 }
@@ -2328,4 +2328,336 @@ body::-webkit-scrollbar {
 .more-menu {
     -webkit-user-select: none;
     user-select: none;
+}
+
+/* ===== 联系人页面样式 ===== */
+.contacts-section {
+    margin-bottom: 4px;
+}
+.contacts-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 15px 4px;
+    font-size: 11px;
+    color: var(--secondary-text);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.contacts-section-header .icon-btn {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+    border-radius: 6px;
+}
+.contacts-section-header .icon-btn:hover {
+    background: var(--hover);
+}
+.friend-request-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 15px;
+    border-radius: 8px;
+    margin: 2px 8px;
+    background: var(--chat-bg);
+    border: 1px solid var(--border);
+}
+.friend-request-item .contact-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+.friend-request-info {
+    flex: 1;
+    min-width: 0;
+}
+.friend-request-info .name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.friend-request-info .uid {
+    font-size: 11px;
+    color: var(--secondary-text);
+}
+.friend-request-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.friend-request-actions button {
+    padding: 4px 12px;
+    border-radius: 14px;
+    border: none;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 500;
+}
+.friend-request-actions .accept-btn {
+    background: var(--accent);
+    color: #fff;
+}
+.friend-request-actions .reject-btn {
+    background: var(--hover);
+    color: var(--secondary-text);
+}
+
+/* ===== 设置页面布局 ===== */
+.settings-layout {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+.settings-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 24px;
+}
+.settings-content h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0 0 16px;
+}
+.settings-group {
+    background: var(--chat-bg);
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    margin-bottom: 16px;
+    overflow: hidden;
+}
+.settings-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.settings-item:last-child {
+    border-bottom: none;
+}
+.settings-item:hover {
+    background: var(--hover);
+}
+.settings-item .label {
+    font-size: 14px;
+    color: var(--text);
+}
+.settings-item .value {
+    font-size: 13px;
+    color: var(--secondary-text);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.settings-item .value i {
+    font-size: 12px;
+}
+.settings-input-row {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+}
+.settings-input-row:last-child {
+    border-bottom: none;
+}
+.settings-input-row label {
+    font-size: 13px;
+    color: var(--text);
+    width: 80px;
+    flex-shrink: 0;
+}
+.settings-input-row input {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: inherit;
+    outline: none;
+}
+.settings-input-row input:focus {
+    border-color: var(--accent);
+}
+.settings-input-row button {
+    padding: 6px 14px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    white-space: nowrap;
+}
+
+/* ===== 阅后即焚消息样式 ===== */
+.burn-message .burn-hint {
+    font-style: italic;
+    color: var(--secondary-text);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 4px 0;
+}
+.burn-message .burn-hint:hover {
+    color: var(--text);
+}
+.burn-message .message-bubble {
+    display: none !important;
+}
+.burn-message.revealed .message-bubble {
+    display: block !important;
+}
+.burn-message.burned .message-bubble {
+    display: none !important;
+}
+.burn-message.burned .burn-hint {
+    display: none !important;
+}
+
+/* ===== 签到墙样式 ===== */
+.checkin-wall {
+    max-width: 600px;
+}
+.checkin-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+}
+.checkin-btn {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 20px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+}
+.checkin-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.checkin-card {
+    background: var(--chat-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+}
+.checkin-card .checkin-user {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+.checkin-card .checkin-user img {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+.checkin-card .checkin-user .name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+}
+.checkin-card .checkin-user .time {
+    font-size: 11px;
+    color: var(--secondary-text);
+}
+.checkin-card .checkin-body {
+    font-size: 14px;
+    color: var(--text);
+    line-height: 1.5;
+}
+.checkin-card .checkin-actions {
+    display: flex;
+    gap: 16px;
+    margin-top: 8px;
+}
+.checkin-card .checkin-action-btn {
+    background: none;
+    border: none;
+    color: var(--secondary-text);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.checkin-card .checkin-action-btn:hover {
+    color: var(--accent);
+}
+.checkin-card .checkin-action-btn.liked {
+    color: #ff4757;
+}
+
+/* ===== 联系人主面板 ===== */
+.contacts-main-content {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+}
+.contacts-detail-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+.contacts-detail-panel {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+}
+.contacts-detail-header {
+    background: var(--chat-bg);
+    padding: 28px 20px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+}
+.contacts-detail-header img {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    object-fit: cover;
+    margin-bottom: 12px;
+    background: var(--border);
+}
+.contacts-detail-header .detail-name {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+}
+.contacts-detail-header .detail-uid {
+    font-size: 12px;
+    color: var(--secondary-text);
+    margin-bottom: 12px;
+}
+.contacts-detail-actions {
+    display: flex;
+    gap: 10px;
 }
