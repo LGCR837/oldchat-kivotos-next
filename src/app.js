@@ -648,6 +648,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ===== NCUID 兼容层 =====
     // ncuid 给机器看（API调用），uid 给人看（界面显示）
+    // ncuid 均以 "nc_" 开头，据此选择 API 参数名
+    function isNcuid(id) {
+        return typeof id === 'string' && id.startsWith('nc_');
+    }
     function getUid(obj) {
         if (!obj) return '';
         return obj.ncuid || obj.uid || '';
@@ -671,6 +675,20 @@ document.addEventListener('DOMContentLoaded', () => {
     function uidEq(a, b) {
         if (!a || !b) return false;
         return a.toUpperCase() === b.toUpperCase();
+    }
+    // 构建私聊目标参数：ncuid → to_ncuid，旧 uid → to_uid
+    function toUidParam(id) {
+        return isNcuid(id) ? { to_ncuid: id } : { to_uid: id };
+    }
+    // 构建私聊历史/已读参数：ncuid → with_ncuid，旧 uid → with_uid
+    function withUidParam(id) {
+        return isNcuid(id) ? { with_ncuid: id } : { with_uid: id };
+    }
+    // 构建用户资料查询参数：ncuid → ?ncuid=，旧 uid → ?uid=
+    function profileQuery(id) {
+        return isNcuid(id)
+            ? '/v1/users/profile?ncuid=' + encodeURIComponent(id)
+            : '/v1/users/profile?uid=' + encodeURIComponent(id);
     }
 
     // 设置侧边栏用户名
@@ -1220,7 +1238,7 @@ document.addEventListener('DOMContentLoaded', () => {
         async function load() {
             try {
                 const [profRes, momentsRes] = await Promise.all([
-                    apiFetch('/v1/users/profile?uid=' + encodeURIComponent(uid)),
+                    apiFetch(profileQuery(uid)),
                     apiFetch('/v1/moments/user?ncuid=' + encodeURIComponent(uid) + '&limit=50')
                 ]);
                 const u = await profRes.json();
@@ -1296,7 +1314,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             '<div style="font-size:14px;color:var(--text);line-height:1.6;white-space:pre-wrap;word-break:break-word;">' + (m.body || '') + '</div>' +
                             media +
                             '<div style="display:flex;gap:16px;margin-top:10px;align-items:center;">' +
-                                '<button class="sp-like-btn" data-moment-id="' + (m.id || '') + '" style="background:none;border:none;color:' + (m.liked ? '#ff4757' : 'var(--secondary-text)') + ';font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px;"><i class="fa-solid fa-heart"></i> ' + (m.likes || 0) + '</button>' +
+                                '<button class="sp-like-btn" data-moment-id="' + (m.id || '') + '" data-liked="' + (m.liked ? '1' : '0') + '" style="background:none;border:none;color:' + (m.liked ? '#ff4757' : 'var(--secondary-text)') + ';font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px;"><i class="' + (m.liked ? 'fa-solid' : 'fa-regular') + ' fa-heart"></i> ' + (m.likes || 0) + '</button>' +
                                 '<button class="sp-comment-btn" data-moment-id="' + (m.id || '') + '" style="background:none;border:none;color:var(--secondary-text);font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px;"><i class="fa-solid fa-comment"></i> ' + (m.comments_count || 0) + '</button>' +
                             '</div>' +
                             '</div>';
@@ -1337,21 +1355,30 @@ document.addEventListener('DOMContentLoaded', () => {
                         e.stopPropagation();
                         const momentId = btn.dataset.momentId;
                         if (!momentId) return;
+                        const isLiked = btn.dataset.liked === '1';
+                        const endpoint = isLiked ? '/v1/moments/unlike' : '/v1/moments/like';
                         try {
-                            const res = await apiFetch('/v1/moments/' + momentId + '/like', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+                            const res = await apiFetch(endpoint, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ moment_id: momentId })
+                            });
                             const data = await res.json();
                             if (data.error) { alert(data.error); return; }
                             // 更新按钮状态
                             const icon = btn.querySelector('i');
-                            if (data.liked) {
+                            const newLiked = !isLiked;
+                            btn.dataset.liked = newLiked ? '1' : '0';
+                            if (newLiked) {
                                 btn.style.color = '#ff4757';
                                 icon.className = 'fa-solid fa-heart';
                             } else {
                                 btn.style.color = 'var(--secondary-text)';
                                 icon.className = 'fa-regular fa-heart';
                             }
-                            const count = parseInt(btn.textContent.trim()) || 0;
-                            btn.lastChild.textContent = ' ' + (data.liked ? count + 1 : Math.max(0, count - 1));
+                            const countEl = btn.lastChild;
+                            const curCount = parseInt(countEl.textContent.trim()) || 0;
+                            countEl.textContent = ' ' + (newLiked ? curCount + 1 : Math.max(0, curCount - 1));
                         } catch (e) { console.error(e); }
                     });
                 });
@@ -1360,19 +1387,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         e.stopPropagation();
                         const momentId = btn.dataset.momentId;
                         if (!momentId) return;
-                        const commentText = prompt('输入评论：');
-                        if (!commentText || !commentText.trim()) return;
-                        try {
-                            const res = await apiFetch('/v1/moments/' + momentId + '/comments', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ body: commentText.trim() })
-                            });
-                            const data = await res.json();
-                            if (data.error) { alert(data.error); return; }
-                            const count = parseInt(btn.textContent.trim()) || 0;
-                            btn.lastChild.textContent = ' ' + (count + 1);
-                        } catch (e) { alert('评论失败'); }
+                        openMomentCommentsPanel(momentId, btn);
                     });
                 });
 
@@ -1388,7 +1403,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 };
                 window.spAddFriend = async function() {
                     try {
-                        const r = await apiFetch('/v1/friends/request', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({to_uid: uid}) });
+                        const r = await apiFetch('/v1/friends/request', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(toUidParam(uid)) });
                         const d = await r.json();
                         if (d.error) { alert(d.error); return; }
                         load();
@@ -1460,7 +1475,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function markAllRead(convType, convId) {
         try {
             if (convType === 'direct') {
-                await apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({with_ncuid: convId}) });
+                await apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(withUidParam(convId)) });
             } else {
                 await apiFetch('/v1/groups/read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({group_id: convId}) });
             }
@@ -1468,6 +1483,117 @@ document.addEventListener('DOMContentLoaded', () => {
             delete unreadCounts[convKey];
             updateUnreadBadge(convKey, 0);
         } catch (e) { console.error(e); }
+    }
+
+    // 动态评论弹窗：展示评论列表并支持添加
+    function openMomentCommentsPanel(momentId, triggerBtn) {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:10000;background:var(--bg);display:flex;flex-direction:column;font-family:inherit;opacity:0;transition:opacity 0.2s;';
+        overlay.innerHTML = `
+            <div style="background:var(--header-bg);color:#fff;padding:13px 12px;display:flex;align-items:center;font-size:15px;font-weight:500;flex-shrink:0;position:relative;">
+                <button id="mc-back" style="position:absolute;left:12px;background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:4px 8px;border-radius:8px;"><i class="fa-solid fa-chevron-left"></i></button>
+                <span style="width:100%;text-align:center;">评论</span>
+            </div>
+            <div id="mc-scroll" style="flex:1;overflow-y:auto;scrollbar-color:rgba(0,0,0,0.2) transparent;padding:12px;"></div>
+            <div style="flex-shrink:0;padding:10px 12px;border-top:1px solid var(--border-color);display:flex;gap:8px;background:var(--panel-bg);">
+                <input id="mc-input" type="text" placeholder="写下你的评论..." style="flex:1;padding:8px 12px;border-radius:18px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:14px;font-family:inherit;outline:none;">
+                <button id="mc-send" style="padding:8px 18px;border-radius:18px;border:none;background:var(--header-bg);color:#fff;font-size:14px;cursor:pointer;font-family:inherit;">发送</button>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        requestAnimationFrame(() => overlay.style.opacity = '1');
+
+        const scrollEl = overlay.querySelector('#mc-scroll');
+        const inputEl = overlay.querySelector('#mc-input');
+        const sendBtn = overlay.querySelector('#mc-send');
+        const backBtn = overlay.querySelector('#mc-back');
+
+        function closePanel() { overlay.remove(); }
+        backBtn.addEventListener('click', closePanel);
+
+        function fmtTs(ts) {
+            if (!ts) return '';
+            const d = new Date(ts * 1000);
+            const pad = n => (n < 10 ? '0' : '') + n;
+            return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+        }
+
+        async function loadComments() {
+            scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">加载中...</div>';
+            try {
+                const res = await apiFetch('/v1/moments/comments?moment_id=' + encodeURIComponent(momentId));
+                const data = await res.json();
+                if (data.error) {
+                    scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">' + escapeHtml(data.error) + '</div>';
+                    return;
+                }
+                const comments = data.comments || [];
+                if (comments.length === 0) {
+                    scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">还没有评论，快来抢沙发~</div>';
+                    return;
+                }
+                scrollEl.innerHTML = comments.map(c => {
+                    const cid = getUid(c) || c.from_ncuid || c.from_uid || '';
+                    const cname = c.from_name || c.display_name || c.username || (cid ? lookupName(cid) : '') || '匿名用户';
+                    const cavatar = c.from_avatar || c.avatar_url || (cid ? lookupAvatar(cid) : '') || '';
+                    const avatarSrc = cavatar ? resolveMediaUrl(cavatar) : 'assets/default-avatar.png';
+                    return '<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--border-color);">' +
+                        '<img src="' + avatarSrc + '" onerror="this.src=\'assets/default-avatar.png\'" style="width:36px;height:36px;border-radius:50%;flex-shrink:0;cursor:pointer;" data-uid="' + escapeHtml(cid) + '" />' +
+                        '<div style="flex:1;min-width:0;">' +
+                            '<div style="font-size:13px;font-weight:500;color:var(--text);">' + escapeHtml(cname) + '</div>' +
+                            '<div style="font-size:14px;color:var(--text);margin:4px 0;word-break:break-word;white-space:pre-wrap;">' + escapeHtml(c.body || '') + '</div>' +
+                            '<div style="font-size:11px;color:var(--secondary-text);">' + fmtTs(c.created_at) + '</div>' +
+                        '</div>' +
+                    '</div>';
+                }).join('');
+                // 头像点击跳转用户空间
+                scrollEl.querySelectorAll('img[data-uid]').forEach(img => {
+                    img.addEventListener('click', () => {
+                        const uid = img.dataset.uid;
+                        if (uid) { closePanel(); openSpacePanel(uid); }
+                    });
+                });
+            } catch (e) {
+                scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">加载失败</div>';
+                console.error(e);
+            }
+        }
+
+        async function sendComment() {
+            const text = inputEl.value.trim();
+            if (!text) return;
+            sendBtn.disabled = true;
+            sendBtn.textContent = '...';
+            try {
+                const res = await apiFetch('/v1/moments/comment', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ moment_id: momentId, body: text })
+                });
+                const data = await res.json();
+                if (data.error) { alert(data.error); return; }
+                inputEl.value = '';
+                // 更新按钮上的评论计数
+                if (triggerBtn) {
+                    const countEl = triggerBtn.lastChild;
+                    const count = parseInt(countEl.textContent.trim()) || 0;
+                    countEl.textContent = ' ' + (count + 1);
+                }
+                loadComments();
+            } catch (e) { alert('评论失败'); }
+            sendBtn.disabled = false;
+            sendBtn.textContent = '发送';
+        }
+
+        sendBtn.addEventListener('click', sendComment);
+        inputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendComment();
+            }
+        });
+
+        loadComments();
     }
 
     function openGroupManagePanel(groupId, groupName) {
@@ -1692,7 +1818,7 @@ document.addEventListener('DOMContentLoaded', () => {
         async function load() {
             try {
                 const [profRes, friendsRes] = await Promise.all([
-                    apiFetch('/v1/users/profile?uid=' + encodeURIComponent(myUid)),
+                    apiFetch(profileQuery(myUid)),
                     apiFetch('/v1/friends')
                 ]);
                 const prof = await profRes.json();
@@ -1783,7 +1909,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const r = await apiFetch('/v1/friends/request', {
                             method: 'POST',
                             headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({ to_uid: val.toUpperCase() })
+                            body: JSON.stringify(toUidParam(val.toUpperCase()))
                         });
                         const d = await r.json();
                         if (d.error) { alert(d.error); } else { alert('已发送申请'); input.value = ''; }
@@ -2155,7 +2281,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (Date.now() - cached._ts < CACHE_TTL) return cached;
         }
         try {
-            const res = await apiFetch('/v1/users/profile?uid=' + encodeURIComponent(uid));
+            const res = await apiFetch(profileQuery(uid));
             const data = await res.json();
             if (!data.error) {
                 data._ts = Date.now();
@@ -2240,7 +2366,7 @@ document.addEventListener('DOMContentLoaded', () => {
             };
             appendMessage(msgObj, convKey, seenMsgIds[convKey]);
             scrollToBottom();
-            apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ with_uid: fromUid }) });
+            apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(withUidParam(fromUid)) });
         } else if (msg.type === 'group_message') {
             const d = msg.data || {};
             const groupId = d.group_id || '';
@@ -2509,7 +2635,7 @@ document.addEventListener('DOMContentLoaded', () => {
             apiFetch('/v1/friends/request', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ to_uid: uid.trim() })
+                body: JSON.stringify(toUidParam(uid.trim()))
             }).then(r => r.json()).then(d => {
                 if (d.error) { alert(d.error); return; }
                 alert('好友请求已发送');
@@ -2591,11 +2717,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const reqId = ++switchRequestId;
 
         try {
-            // Go 后端: direct 用 with_uid, group 用 group_id；返回 DESC（新→旧），需反转为 ASC（旧→新）
+            // Go 后端: direct 用 with_uid/with_ncuid, group 用 group_id；返回 DESC（新→旧），需反转为 ASC（旧→新）
             // V2 接口用 offset 分页
+            const withParam = isNcuid(id) ? 'with_ncuid' : 'with_uid';
             const historyUrl = type === 'group'
                 ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`
-                : `/v1/direct/messages/v2?with_uid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
+                : `/v1/direct/messages/v2?${withParam}=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
             const res = await apiFetch(historyUrl);
             const data = await res.json();
 
@@ -2632,7 +2759,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (type === 'group') {
                 await apiFetch('/v1/groups/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ group_id: id }) });
             } else {
-                await apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ with_uid: id }) });
+                await apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(withUidParam(id)) });
             }
 
             // 设置滚动到顶部加载更多
@@ -2648,7 +2775,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const offset = convOffset[convKey] || 0;
                     const olderUrl = type === 'group'
                         ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=${offset}`
-                        : `/v1/direct/messages/v2?with_uid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=${offset}`;
+                        : `/v1/direct/messages/v2?${withParam}=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=${offset}`;
                     const res = await apiFetch(olderUrl);
                     const data = await res.json();
                     console.log('[LOAD_MORE] response:', olderUrl, 'msgs:', (data.messages||[]).length);
@@ -2978,7 +3105,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         avatarImg.addEventListener('click', (e) => {
             e.stopPropagation();
-            const uid = isSelf ? myUid : msg.from_uid;
+            const uid = isSelf ? myUid : fromUid;
             if (uid) {
                 openSpacePanel(uid);
             }
@@ -3453,13 +3580,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 media_url: mediaUrl || '',
                 thumb_url: thumbUrl || ''
               }
-            : {
-                to_uid: currentConv.id,
+            : Object.assign({
                 body: body,
                 msg_type: msgType,
                 media_url: mediaUrl || '',
                 thumb_url: thumbUrl || ''
-              };
+              }, toUidParam(currentConv.id));
 
         // 立即显示发送中消息（半透明）
         const tempId = 'temp_' + Date.now();
@@ -3881,7 +4007,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (currentConv.type === 'group') {
                     payload.group_id = currentConv.id;
                 } else {
-                    payload.to_uid = currentConv.id;
+                    Object.assign(payload, toUidParam(currentConv.id));
                 }
                 const res = await apiFetch('/v1/redpackets/send', {
                     method: 'POST',
@@ -3966,7 +4092,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const sendPayload = currentConv.type === 'group'
                 ? { group_id: currentConv.id, body: '', msg_type: msgType, media_url: upData.url, thumb_url: upData.thumb_url || '' }
-                : { to_uid: currentConv.id, body: '', msg_type: msgType, media_url: upData.url, thumb_url: upData.thumb_url || '' };
+                : Object.assign({ body: '', msg_type: msgType, media_url: upData.url, thumb_url: upData.thumb_url || '' }, toUidParam(currentConv.id));
             const sendEndpoint = currentConv.type === 'group' ? '/v1/groups/message/send' : '/v1/direct/send';
             const res = await apiFetch(sendEndpoint, {
                 method: 'POST',
