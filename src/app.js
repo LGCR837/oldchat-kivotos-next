@@ -908,10 +908,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ===== NCUID 兼容层 =====
     // ncuid 给机器看（API调用），uid 给人看（界面显示）
-    // ncuid 均以 "nc_" 开头，据此选择 API 参数名
-    function isNcuid(id) {
-        return typeof id === 'string' && id.startsWith('nc_');
-    }
+    // 注意：ncuid 不一定以 nc_ 开头（官方文档示例值为 USR-ABCD1234）
+    // 服务端在 ?uid=/with_uid/to_uid 参数中同时接受 uid 和 ncuid 值，
+    // 因此不再需要前缀判断，统一使用 _uid 系列参数即可。
     function getUid(obj) {
         if (!obj) return '';
         return obj.ncuid || obj.uid || '';
@@ -942,19 +941,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!fromUid) return false;
         return uidEq(fromUid, myUid) || uidEq(fromUid, myDisplayUid);
     }
-    // 构建私聊目标参数：ncuid → to_ncuid，旧 uid → to_uid
+    // 构建私聊目标参数：服务端 to_uid 同时接受 uid/ncuid
     function toUidParam(id) {
-        return isNcuid(id) ? { to_ncuid: id } : { to_uid: id };
+        return { to_uid: id };
     }
-    // 构建私聊历史/已读参数：ncuid → with_ncuid，旧 uid → with_uid
+    // 构建私聊历史/已读参数：服务端 with_uid 同时接受 uid/ncuid
     function withUidParam(id) {
-        return isNcuid(id) ? { with_ncuid: id } : { with_uid: id };
+        return { with_uid: id };
     }
-    // 构建用户资料查询参数：ncuid → ?ncuid=，旧 uid → ?uid=
+    // 构建用户资料查询参数：服务端 ?uid= 同时接受 uid/ncuid
     function profileQuery(id) {
-        return isNcuid(id)
-            ? '/v1/users/profile?ncuid=' + encodeURIComponent(id)
-            : '/v1/users/profile?uid=' + encodeURIComponent(id);
+        return '/v1/users/profile?uid=' + encodeURIComponent(id);
     }
 
     // 设置侧边栏用户名
@@ -1505,7 +1502,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const [profRes, momentsRes] = await Promise.all([
                     apiFetch(profileQuery(uid)),
-                    apiFetch('/v1/moments/user?ncuid=' + encodeURIComponent(uid) + '&limit=50')
+                    apiFetch('/v1/moments/user?uid=' + encodeURIComponent(uid) + '&limit=50')
                 ]);
                 const u = await profRes.json();
                 const momentsData = await momentsRes.json();
@@ -3309,12 +3306,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const reqId = ++switchRequestId;
 
         try {
-            // Go 后端: direct 用 with_uid/with_ncuid, group 用 group_id；返回 DESC（新→旧），需反转为 ASC（旧→新）
+            // Go 后端: direct 用 with_uid, group 用 group_id；返回 DESC（新→旧），需反转为 ASC（旧→新）
             // V2 接口用 offset 分页
-            const withParam = isNcuid(id) ? 'with_ncuid' : 'with_uid';
+            // 服务端 with_uid 同时接受 uid/ncuid，无需区分
             const historyUrl = type === 'group'
                 ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`
-                : `/v1/direct/messages/v2?${withParam}=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
+                : `/v1/direct/messages/v2?with_uid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
             const res = await apiFetch(historyUrl);
             const data = await res.json();
 
