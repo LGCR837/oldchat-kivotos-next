@@ -1298,6 +1298,10 @@ body::-webkit-scrollbar {
 	background: var(--hover)
 }
 
+.context-menu-item[style*="opacity:0.4"]:hover {
+	background: transparent
+}
+
 
 
 .context-menu-divider {

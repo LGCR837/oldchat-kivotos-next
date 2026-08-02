@@ -264,6 +264,228 @@ function escapeRegExp(string) {
     return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// ==================== 媒体文件永久缓存层 ====================
+// 两层缓存：
+//   1. 内存 Map（快速命中，当前会话）
+//   2. IndexedDB（永久存储，跨会话 / 跨关闭）
+(function () {
+    const DB_NAME = 'oldchat_media_cache_v1';
+    const STORE_NAME = 'media';
+    const memCache = new Map();  // url -> Blob
+    let dbPromise = null;
+    let mediasOriginSet = [];   // 延迟初始化，DOMContentLoaded 之后设置
+
+    function openDb() {
+        return new Promise((resolve, reject) => {
+            try {
+                const req = indexedDB.open(DB_NAME, 1);
+                req.onupgradeneeded = (e) => {
+                    const db = e.target.result;
+                    if (!db.objectStoreNames.contains(STORE_NAME)) {
+                        db.createObjectStore(STORE_NAME, { keyPath: 'url' });
+                    }
+                };
+                req.onsuccess = (e) => resolve(e.target.result);
+                req.onerror = (e) => { console.error('[MediaCache] openDb error', e.target.error); reject(e.target.error); };
+            } catch (e) { console.error('[MediaCache] openDb ex', e); reject(e); }
+        });
+    }
+    function getDb() {
+        if (!dbPromise) dbPromise = openDb();
+        return dbPromise;
+    }
+    function idbGet(url) {
+        return getDb().then(db => new Promise((resolve, reject) => {
+            try {
+                const tx = db.transaction(STORE_NAME, 'readonly');
+                const st = tx.objectStore(STORE_NAME).get(url);
+                st.onsuccess = () => resolve(st.result);
+                st.onerror = (e) => reject(e.target.error);
+            } catch (e) { reject(e); }
+        }));
+    }
+    function idbPut(url, blob, mime) {
+        return getDb().then(db => new Promise((resolve, reject) => {
+            try {
+                const tx = db.transaction(STORE_NAME, 'readwrite');
+                tx.objectStore(STORE_NAME).put({ url, blob, mime, ts: Date.now() });
+                tx.oncomplete = () => resolve();
+                tx.onerror = (e) => reject(e.target.error);
+            } catch (e) { reject(e); }
+        }));
+    }
+
+    // 判断 URL 是否属于需要缓存的远程媒体
+    function shouldCache(url) {
+        if (!url) return false;
+        if (/^(data:|blob:|about:|chrome-extension:|tauri:|ipc\.localhost)/i.test(url)) return false;
+        if (/^(https?:)?\/\//i.test(url)) return true;
+        return false;
+    }
+
+    async function fetchAndStore(url) {
+        // 使用原生 fetch（绕过 Tauri 的 http 插件层，让它走 webview 网络栈，避免跨域）
+        // 但对于非跨域场景也可以走 Tauri。这里统一使用 window.__nativeFetch（已保留） 或 XHR
+        let blob;
+        let mime = '';
+        try {
+            const resp = await (typeof window.__nativeFetch === 'function'
+                ? window.__nativeFetch(url, { credentials: 'omit', mode: 'cors', cache: 'force-cache' })
+                : fetch(url, { credentials: 'omit', mode: 'cors', cache: 'force-cache' }));
+            if (!resp || !resp.ok) throw new Error('fetch failed');
+            mime = resp.headers ? (resp.headers.get('content-type') || '') : '';
+            blob = await resp.blob();
+        } catch (e) {
+            // fetch 失败兜底：XHR
+            blob = await new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('GET', url, true);
+                xhr.responseType = 'blob';
+                xhr.onload = () => {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        mime = xhr.getResponseHeader('content-type') || '';
+                        resolve(xhr.response);
+                    } else reject(new Error('xhr status ' + xhr.status));
+                };
+                xhr.onerror = () => reject(xhr.statusText || 'network');
+                xhr.send();
+            });
+        }
+        if (blob && blob.size) {
+            memCache.set(url, blob);
+            idbPut(url, blob, mime).catch(() => {});
+        }
+        return blob;
+    }
+
+    async function getBlob(url) {
+        if (memCache.has(url)) return memCache.get(url);
+        try {
+            const rec = await idbGet(url);
+            if (rec && rec.blob) { memCache.set(url, rec.blob); return rec.blob; }
+        } catch (e) {}
+        return await fetchAndStore(url);
+    }
+
+    function getCachedUrlOrPass(url, callback) {
+        // 返回: { blobUrl } 通过 callback 异步返回，同步返回 false 表示需要等待
+        if (!shouldCache(url)) { callback(url); return; }
+        getBlob(url).then(blob => {
+            try { callback(URL.createObjectURL(blob)); }
+            catch (e) { callback(url); }
+        }).catch(() => callback(url));
+    }
+
+    // 处理单个元素的 src / poster / style.backgroundImage
+    function processElement(el) {
+        if (!(el instanceof Element)) return;
+        const tag = (el.tagName || '').toLowerCase();
+        const MEDIA_ATTRS = ['src', 'poster'];
+        MEDIA_ATTRS.forEach(attr => {
+            const raw = el.getAttribute('data-mc-orig-' + attr);
+            const val = raw || el.getAttribute(attr);
+            if (!val) return;
+            if (!raw && shouldCache(val)) {
+                el.setAttribute('data-mc-orig-' + attr, val);
+                // 标记正在处理中，防止重复触发
+                if (el.getAttribute('data-mc-' + attr + '-loading') === '1') return;
+                el.setAttribute('data-mc-' + attr + '-loading', '1');
+                getCachedUrlOrPass(val, (newUrl) => {
+                    if (newUrl !== val) {
+                        try { el.setAttribute(attr, newUrl); } catch (e) {}
+                    }
+                    el.removeAttribute('data-mc-' + attr + '-loading');
+                });
+            }
+        });
+        // style backgroundImage / background
+        if (el instanceof HTMLElement && el.style && (el.style.backgroundImage || el.getAttribute('style'))) {
+            const bgCss = el.style.cssText || '';
+            if (/url\(\s*["']?(https?:)?\/\//i.test(bgCss) || /url\(\s*["']?\/[a-z]/i.test(bgCss)) {
+                const orig = el.getAttribute('data-mc-orig-style');
+                if (!orig) {
+                    el.setAttribute('data-mc-orig-style', bgCss);
+                    // 提取所有 url(...) 替换
+                    const urlRegex = /url\(\s*["']?([^"')\s]+)["']?\s*\)/gi;
+                    const matches = [];
+                    let m;
+                    urlRegex.lastIndex = 0;
+                    while ((m = urlRegex.exec(bgCss)) !== null) matches.push(m);
+                    if (matches.length === 0) return;
+                    const newCssPromise = Promise.all(matches.map((m) => {
+                        const rawUrl = m[1];
+                        const resolved = resolveMediaUrl(rawUrl);  // 用全局的 resolve
+                        return new Promise(res => getCachedUrlOrPass(resolved, (nu) => res({ old: m[0], new: `url("${nu}")` })));
+                    }));
+                    newCssPromise.then(reps => {
+                        let css = bgCss;
+                        reps.forEach(r => { css = css.replace(r.old, r.new); });
+                        el.style.cssText = css;
+                    });
+                }
+            }
+        }
+    }
+
+    // MutationObserver 拦截 DOM 变化
+    let observer = null;
+    function startObserver() {
+        if (observer) return;
+        try {
+            observer = new MutationObserver(muts => {
+                for (const mut of muts) {
+                    if (mut.type === 'childList') {
+                        mut.addedNodes.forEach(n => {
+                            if (n.nodeType === 1) {
+                                processElement(n);
+                                if (n.querySelectorAll) {
+                                    n.querySelectorAll('img,audio,video,source,track,link[rel~="icon"],link[rel~="apple-touch-icon"]').forEach(processElement);
+                                }
+                            }
+                        });
+                    } else if (mut.type === 'attributes') {
+                        processElement(mut.target);
+                    }
+                }
+            });
+            if (document.body) {
+                observer.observe(document.body, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ['src', 'poster', 'style', 'href']
+                });
+                // 初次扫描
+                document.body.querySelectorAll('img,audio,video,source,track').forEach(processElement);
+            }
+        } catch (e) { console.error('[MediaCache] observer init fail', e); }
+    }
+
+    // 暴露到全局
+    window.__MediaCache = {
+        init: () => {
+            mediasOriginSet = [
+                (typeof MEDIA_ORIGIN !== 'undefined' ? MEDIA_ORIGIN : ''),
+                (typeof BACKEND_ORIGIN !== 'undefined' ? BACKEND_ORIGIN : '')
+            ].filter(Boolean);
+            startObserver();
+        },
+        getBlob, put: (u, b) => idbPut(u, b, b && b.type), clear: () => {
+            memCache.clear();
+            return getDb().then(db => new Promise(r => {
+                const tx = db.transaction(STORE_NAME, 'readwrite');
+                tx.objectStore(STORE_NAME).clear();
+                tx.oncomplete = () => r();
+            }));
+        }
+    };
+
+    // 保留原生 fetch 引用（如 login.html 中已定义则复用）
+    if (typeof window.__nativeFetch !== 'function' && typeof window.fetch === 'function') {
+        window.__nativeFetch = window.fetch.bind(window);
+    }
+})();
+
 function formatTimeSeparator(ts) {
     const now = new Date();
     const d = new Date(ts * 1000);
@@ -1332,7 +1554,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 let momentsHtml = '<div style="text-align:center;padding:40px;color:#999;">暂无动态</div>';
                 const mom = momentsData.moments || [];
                 if (mom.length > 0) {
-                    momentsHtml = '<div style="padding:0 16px 20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;max-width:960px;margin:0 auto;">';
+                    momentsHtml = '<div style="padding:0 16px 20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;max-width:960px;margin:0 auto;align-items:start;">';
                     mom.forEach(m => {
                         // image_url 可能是单个 URL 或 JSON 字符串数组
                         let mediaUrls = [];
@@ -1349,7 +1571,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (mediaUrls.length > 0) {
                             media = '<div style="margin-top:8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;">';
                             mediaUrls.forEach(mu => {
-                                media += '<img src="' + resolveMediaUrl(mu) + '" style="width:100%;max-height:200px;object-fit:cover;border-radius:8px;cursor:pointer;" onerror="this.style.display=\'none\'">';
+                                const resolvedUrl = resolveMediaUrl(mu);
+                                media += '<img src="' + resolvedUrl + '" style="width:100%;max-height:200px;object-fit:cover;border-radius:8px;cursor:pointer;" onclick="openImageViewer(\'' + resolvedUrl.replace(/'/g, "\\'") + '\')" onerror="this.style.display=\'none\'">';
                             });
                             media += '</div>';
                         }
@@ -1381,15 +1604,20 @@ document.addEventListener('DOMContentLoaded', () => {
                             '</div>' +
                         '</div>';
                 }
+                const coverUrl = u.cover_url ? resolveMediaUrl(u.cover_url) : '';
+                const coverHtml = coverUrl
+                    ? '<div style="position:relative;height:160px;background-image:url(\'' + coverUrl.replace(/'/g, "\\'") + '\');background-size:cover;background-position:center;"></div>'
+                    : '';
                 scroll.innerHTML =
-                    '<div style="background:var(--chat-bg);padding:28px 20px 20px;display:flex;flex-direction:column;align-items:center;">' +
-                        '<img src="' + resolveMediaUrl(avatar) + '" style="width:80px;height:80px;border-radius:50%;object-fit:cover;margin-bottom:12px;background:var(--border);" onerror="this.src=\'' + defaultAvatar + '\'">' +
+                    coverHtml +
+                    '<div style="background:var(--chat-bg);padding:28px 20px 20px;display:flex;flex-direction:column;align-items:center;' + (coverUrl ? 'margin-top:-40px;position:relative;z-index:1;' : '') + '">' +
+                        '<img src="' + resolveMediaUrl(avatar) + '" style="width:80px;height:80px;border-radius:50%;object-fit:cover;margin-bottom:12px;background:var(--border);border:3px solid var(--chat-bg);" onerror="this.src=\'' + defaultAvatar + '\'">' +
                         '<div style="font-size:20px;font-weight:600;color:var(--text);margin-bottom:4px;">' + (u.display_name || u.username) + '</div>' +
                         '<div style="font-size:12px;color:var(--secondary-text);margin-bottom:4px;">' + getDisplayUid(u) + '</div>' +
                         (u.signature ? '<div style="font-size:13px;color:var(--secondary-text);margin-bottom:12px;text-align:center;max-width:300px;">' + escapeHtml(u.signature) + '</div>' : '') +
                         (btnHtml ? '<div style="display:flex;gap:10px;">' + btnHtml + '</div>' : '') +
                     '</div>' +
-                    '<div style="background:#fff;color:var(--text);">' +
+                    '<div style="background:var(--chat-bg);color:var(--text);">' +
                     (relation === 'self' ? '<div style="font-size:14px;font-weight:600;padding:14px 16px 8px;">发表动态</div>' + postMomentHtml : '') +
                     '<div style="font-size:14px;font-weight:600;padding:14px 16px 8px;">' + (relation === 'self' ? '我的动态' : 'TA 的动态') + '</div>' +
                     momentsHtml +
@@ -1620,6 +1848,124 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data.error) { alert(data.error); return; }
                 inputEl.value = '';
                 // 更新按钮上的评论计数
+                if (triggerBtn) {
+                    const countEl = triggerBtn.lastChild;
+                    const count = parseInt(countEl.textContent.trim()) || 0;
+                    countEl.textContent = ' ' + (count + 1);
+                }
+                loadComments();
+            } catch (e) { alert('评论失败'); }
+            sendBtn.disabled = false;
+            sendBtn.textContent = '发送';
+        }
+
+        sendBtn.addEventListener('click', sendComment);
+        inputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendComment();
+            }
+        });
+
+        loadComments();
+    }
+
+    function openCheckinCommentsPanel(postId, triggerBtn) {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:10000;background:var(--bg);display:flex;flex-direction:column;font-family:inherit;opacity:0;transition:opacity 0.2s;';
+        overlay.innerHTML = `
+            <div style="background:var(--header-bg);color:#fff;padding:13px 12px;display:flex;align-items:center;font-size:15px;font-weight:500;flex-shrink:0;position:relative;">
+                <button id="cc-back" style="position:absolute;left:12px;background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:4px 8px;border-radius:8px;"><i class="fa-solid fa-chevron-left"></i></button>
+                <span style="width:100%;text-align:center;">评论</span>
+            </div>
+            <div id="cc-scroll" style="flex:1;overflow-y:auto;scrollbar-color:rgba(0,0,0,0.2) transparent;padding:12px;"></div>
+            <div style="flex-shrink:0;padding:10px 12px;border-top:1px solid var(--border);display:flex;gap:8px;background:var(--chat-bg);">
+                <input id="cc-input" type="text" placeholder="写下你的评论..." style="flex:1;padding:8px 12px;border-radius:18px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;font-family:inherit;outline:none;">
+                <button id="cc-send" style="padding:8px 18px;border-radius:18px;border:none;background:var(--header-bg);color:#fff;font-size:14px;cursor:pointer;font-family:inherit;">发送</button>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        requestAnimationFrame(() => overlay.style.opacity = '1');
+
+        const scrollEl = overlay.querySelector('#cc-scroll');
+        const inputEl = overlay.querySelector('#cc-input');
+        const sendBtn = overlay.querySelector('#cc-send');
+        const backBtn = overlay.querySelector('#cc-back');
+
+        function closePanel() { overlay.remove(); }
+        backBtn.addEventListener('click', closePanel);
+
+        function fmtTs(ts) {
+            if (!ts) return '';
+            // 兼容 Unix 秒时间戳 和 ISO 日期字符串
+            let d;
+            if (typeof ts === 'number' || /^\d+$/.test(String(ts))) {
+                d = new Date(Number(ts) * 1000);
+            } else {
+                d = new Date(ts);
+            }
+            if (isNaN(d.getTime())) return '';
+            const pad = n => (n < 10 ? '0' : '') + n;
+            return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+        }
+
+        async function loadComments() {
+            scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">加载中...</div>';
+            try {
+                const res = await apiFetch('/v1/me/checkin/wall/comments?post_id=' + encodeURIComponent(postId));
+                const data = await res.json();
+                if (data.error) {
+                    scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">' + escapeHtml(data.error) + '</div>';
+                    return;
+                }
+                const comments = data.comments || [];
+                if (comments.length === 0) {
+                    scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">还没有评论，快来抢沙发~</div>';
+                    return;
+                }
+                scrollEl.innerHTML = comments.map(c => {
+                    // 兼容签到墙格式（c.user.*, c.content_text）和动态格式（c.from_*, c.body）
+                    const cu = c.user || {};
+                    const cid = getUid(cu) || cu.uid || cu.ncuid || getUid(c) || c.from_ncuid || c.from_uid || '';
+                    const cname = cu.display_name || cu.username || cu.name || c.from_name || c.display_name || c.username || (cid ? lookupName(cid) : '') || '匿名用户';
+                    const cavatar = cu.avatar_url || c.from_avatar || c.avatar_url || (cid ? lookupAvatar(cid) : '') || '';
+                    const avatarSrc = cavatar ? resolveMediaUrl(cavatar) : 'assets/default-avatar.png';
+                    const body = c.content_text || c.body || c.text || '';
+                    return '<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">' +
+                        '<img src="' + avatarSrc + '" onerror="this.src=\'assets/default-avatar.png\'" style="width:36px;height:36px;border-radius:50%;flex-shrink:0;cursor:pointer;" data-uid="' + escapeHtml(cid) + '" />' +
+                        '<div style="flex:1;min-width:0;">' +
+                            '<div style="font-size:13px;font-weight:500;color:var(--text);">' + escapeHtml(cname) + '</div>' +
+                            '<div style="font-size:14px;color:var(--text);margin:4px 0;word-break:break-word;white-space:pre-wrap;">' + escapeHtml(body) + '</div>' +
+                            '<div style="font-size:11px;color:var(--secondary-text);">' + fmtTs(c.created_at) + '</div>' +
+                        '</div>' +
+                    '</div>';
+                }).join('');
+                scrollEl.querySelectorAll('img[data-uid]').forEach(img => {
+                    img.addEventListener('click', () => {
+                        const uid = img.dataset.uid;
+                        if (uid) { closePanel(); openSpacePanel(uid); }
+                    });
+                });
+            } catch (e) {
+                scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">加载失败</div>';
+                console.error(e);
+            }
+        }
+
+        async function sendComment() {
+            const text = inputEl.value.trim();
+            if (!text) return;
+            sendBtn.disabled = true;
+            sendBtn.textContent = '...';
+            try {
+                const res = await apiFetch('/v1/me/checkin/wall/comment', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ post_id: postId, body: text })
+                });
+                const data = await res.json();
+                if (data.error) { alert(data.error); return; }
+                inputEl.value = '';
                 if (triggerBtn) {
                     const countEl = triggerBtn.lastChild;
                     const count = parseInt(countEl.textContent.trim()) || 0;
@@ -2126,6 +2472,110 @@ document.addEventListener('DOMContentLoaded', () => {
             contextMenu = null;
             contextMsgId = null;
         }
+    }
+
+    // 自绘编辑框右键菜单
+    function showEditContextMenu(e, el) {
+        const menu = document.createElement('div');
+        menu.className = 'custom-context-menu';
+        // 菜单位置：确保不超出视口
+        const x = Math.min(e.clientX, window.innerWidth - 180);
+        const y = Math.min(e.clientY, window.innerHeight - 320);
+        menu.style.left = x + 'px';
+        menu.style.top = y + 'px';
+
+        const hasSelection = el.selectionStart !== null && el.selectionEnd !== null && el.selectionStart !== el.selectionEnd;
+        const hasContent = el.value && el.value.length > 0;
+
+        const disabledStyle = 'opacity:0.4;cursor:default;';
+        const items = [
+            { label: '撤销', action: 'undo', disabled: false },
+            { label: '重做', action: 'redo', disabled: false },
+            { divider: true },
+            { label: '剪切', action: 'cut', disabled: !hasSelection },
+            { label: '复制', action: 'copy', disabled: !hasSelection },
+            { label: '粘贴', action: 'paste', disabled: false },
+            { label: '删除', action: 'delete', disabled: !hasSelection },
+            { divider: true },
+            { label: '全选', action: 'selectall', disabled: !hasContent },
+            { divider: true },
+            { label: '清空', action: 'clear', disabled: !hasContent, danger: true }
+        ];
+
+        let menuHtml = '';
+        items.forEach(item => {
+            if (item.divider) {
+                menuHtml += '<div class="context-menu-divider"></div>';
+            } else {
+                const styleAttr = item.disabled ? ' style="' + disabledStyle + '"' : '';
+                const colorStyle = item.danger ? ' style="color:#ff6b6b;' + (item.disabled ? 'opacity:0.4;cursor:default;' : '') + '"' : styleAttr;
+                menuHtml += '<div class="context-menu-item" data-action="' + item.action + '"' + colorStyle + '>' + item.label + '</div>';
+            }
+        });
+        menu.innerHTML = menuHtml;
+        document.body.appendChild(menu);
+        requestAnimationFrame(() => menu.classList.add('show'));
+        contextMenu = menu;
+
+        menu.addEventListener('click', async (event) => {
+            const item = event.target.closest('.context-menu-item');
+            if (!item) return;
+            const action = item.dataset.action;
+            if (item.style.opacity === '0.4') { hideContextMenu(); return; }
+
+            el.focus();
+            try {
+                if (action === 'undo') {
+                    document.execCommand('undo');
+                } else if (action === 'redo') {
+                    document.execCommand('redo');
+                } else if (action === 'cut') {
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        const sel = el.value.substring(el.selectionStart, el.selectionEnd);
+                        await navigator.clipboard.writeText(sel);
+                        el.setRangeText('');
+                    } else {
+                        document.execCommand('cut');
+                    }
+                } else if (action === 'copy') {
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        const sel = el.value.substring(el.selectionStart, el.selectionEnd);
+                        await navigator.clipboard.writeText(sel);
+                    } else {
+                        document.execCommand('copy');
+                    }
+                } else if (action === 'paste') {
+                    if (navigator.clipboard && navigator.clipboard.readText) {
+                        const text = await navigator.clipboard.readText();
+                        const start = el.selectionStart;
+                        const end = el.selectionEnd;
+                        el.setRangeText(text, start, end, 'end');
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                    } else {
+                        document.execCommand('paste');
+                    }
+                } else if (action === 'delete') {
+                    el.setRangeText('');
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                } else if (action === 'selectall') {
+                    el.select();
+                } else if (action === 'clear') {
+                    el.value = '';
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            } catch (err) {
+                console.error('[edit-menu]', err);
+            }
+            hideContextMenu();
+        });
+
+        const closeHandler = (ev) => {
+            if (!menu.contains(ev.target)) {
+                hideContextMenu();
+                document.removeEventListener('click', closeHandler);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', closeHandler), 0);
     }
 
     emojiPlazaBtn.addEventListener('click', () => {
@@ -3679,7 +4129,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
 
-    async function sendMessage(body, msgType = 'text', mediaUrl = null, thumbUrl = null) {
+    async function sendMessage(body, msgType = 'text', mediaUrl = null, thumbUrl = null, burnAfterSeconds = 0) {
         if (!currentConv) return;
 
         // 检测 @mention 并转换为 v2 格式
@@ -3728,6 +4178,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 media_url: mediaUrl || '',
                 thumb_url: thumbUrl || ''
               }, toUidParam(currentConv.id));
+        if (burnAfterSeconds && burnAfterSeconds > 0) {
+            payload.burn_after_seconds = burnAfterSeconds;
+        }
 
         // 立即显示发送中消息（半透明）
         const tempId = 'temp_' + Date.now();
@@ -4109,8 +4562,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const text = burnTextInput.value.trim();
             if (!text) { alert('请输入内容'); return; }
             const seconds = parseInt(burnTimeSelect.value) || 10;
-            const burnPayload = { v: 2, text: text, burn_after_seconds: seconds };
-            sendMessage(JSON.stringify(burnPayload), 'text');
+            const burnPayload = { v: 2, text: text };
+            sendMessage(JSON.stringify(burnPayload), 'text', null, null, seconds);
             burnDialogOverlay.style.display = 'none';
         });
     }
@@ -4141,8 +4594,9 @@ document.addEventListener('DOMContentLoaded', () => {
         rpDialogSend.addEventListener('click', async () => {
             if (!currentConv) { alert('请先选择会话'); return; }
             const amount = parseFloat(rpAmountInput.value);
-            if (!amount || amount <= 0) { alert('请输入有效金额'); return; }
+            if (!amount || amount < 2) { alert('金额不能小于2'); return; }
             const count = parseInt(rpCountInput.value) || 1;
+            if (count < 2) { alert('个数不能小于2'); return; }
             const title = rpTitleInput.value.trim() || '恭喜发财';
             try {
                 const payload = { title: title, total_amount: amount, total_count: count };
@@ -4284,12 +4738,21 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('contextmenu', (e) => {
         hideContextMenu();
 
-        // 排除输入框区域（textarea 和其父级），保留系统右键菜单（复制/粘贴等）
-        if (e.target.closest('.input-area') || e.target.closest('textarea') || e.target.closest('#messageInput')) {
-            return;  // 让系统默认菜单弹出
+        // 1. 编辑框（input/textarea）显示自绘右键菜单
+        const editTarget = e.target.closest('input[type="text"], input[type="password"], input[type="search"], input[type="url"], input[type="email"], input:not([type]), textarea');
+        if (editTarget) {
+            e.preventDefault();
+            showEditContextMenu(e, editTarget);
+            return;
         }
 
-        // 接管所有其他区域的系统右键行为
+        // 2. 聊天输入区域除输入框外禁止右键
+        if (e.target.closest('.input-area')) {
+            e.preventDefault();
+            return;
+        }
+
+        // 3. 接管所有其他区域的系统右键行为
         e.preventDefault();
 
         // 联系人列表右键菜单
@@ -4959,6 +5422,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                 </div>
             </div>` : ''}
+            <h3 style="margin-top:20px;">缓存管理</h3>
+            <div class="settings-group">
+                <div class="settings-item" id="settingsClearMediaCache" style="color:#ff6b6b;">
+                    <span class="label">清除媒体缓存（图片/音频/头像）</span>
+                    <span class="value"><i class="fa-solid fa-trash-can"></i></span>
+                </div>
+                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">媒体文件永久缓存到本地，清除后下次访问重新下载</div>
+            </div>
         `;
         document.getElementById('settingsThemeToggle')?.addEventListener('click', () => {
             const newTheme = (localStorage.getItem('theme') || 'light') === 'dark' ? 'light' : 'dark';
@@ -5004,6 +5475,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 window.location.reload();
             });
         }
+        // 清除媒体缓存
+        document.getElementById('settingsClearMediaCache')?.addEventListener('click', async () => {
+            if (!confirm('确定清除所有媒体缓存吗？下次访问图片/音频/头像会重新下载。')) return;
+            try {
+                if (window.__MediaCache && typeof window.__MediaCache.clear === 'function') {
+                    await window.__MediaCache.clear();
+                }
+                // 同时尝试清除 Service Worker 缓存（如有）
+                if (window.caches && caches.keys) {
+                    try {
+                        const keys = await caches.keys();
+                        await Promise.all(keys.filter(k => /media/i.test(k) || /oldchat/i.test(k)).map(k => caches.delete(k)));
+                    } catch (e) {}
+                }
+                alert('媒体缓存已清除');
+            } catch (e) {
+                alert('清除失败: ' + (e.message || e));
+            }
+        });
     }
 
     async function renderSettingsCheckin() {
@@ -5081,15 +5571,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 } catch (e) { alert('签到失败'); }
             });
 
-            // 留言
+            // 留言（发布今日话语）
             document.getElementById('checkinPostBtn')?.addEventListener('click', async () => {
                 const input = document.getElementById('checkinMsgInput');
                 const msg = (input?.value || '').trim();
                 if (!msg) { alert('请输入留言内容'); return; }
                 try {
-                    const res = await apiFetch('/v1/me/checkin/wall/comment', {
+                    const res = await apiFetch('/v1/me/checkin/wall', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ body: msg })
+                        body: JSON.stringify({ content_text: msg })
                     });
                     const data = await res.json().catch(() => ({}));
                     if (data.error) { alert(data.error); return; }
@@ -5104,7 +5594,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (!id) return;
                     const isLiked = btn.dataset.liked === 'true';
                     try {
-                        const endpoint = isLiked ? '/me/checkin/wall/unlike' : '/me/checkin/wall/like';
+                        const endpoint = isLiked ? '/v1/me/checkin/wall/unlike' : '/v1/me/checkin/wall/like';
                         const res = await apiFetch(endpoint, {
                             method: 'POST', headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ post_id: id })
@@ -5121,17 +5611,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 btn.addEventListener('click', async () => {
                     const id = btn.dataset.id;
                     if (!id) return;
-                    const text = prompt('输入评论：');
-                    if (!text || !text.trim()) return;
-                    try {
-                        const res = await apiFetch('/v1/me/checkin/wall/comment', {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ post_id: id, body: text.trim() })
-                        });
-                        const data = await res.json().catch(() => ({}));
-                        if (data.error) { alert(data.error); return; }
-                        renderSettingsCheckin();
-                    } catch (e) { alert('评论失败'); }
+                    openCheckinCommentsPanel(id, btn);
                 });
             });
         } catch (e) {
@@ -5202,6 +5682,11 @@ document.addEventListener('DOMContentLoaded', () => {
         window.visualViewport.addEventListener('resize', () => {
             setTimeout(() => scrollToBottom(true), 100);
         });
+    }
+
+    // 启动媒体永久缓存层（图片/音频/视频/头像/背景图/封面图）
+    if (window.__MediaCache && typeof window.__MediaCache.init === 'function') {
+        try { window.__MediaCache.init(); } catch (e) { console.error('[MediaCache]', e); }
     }
 
 });
