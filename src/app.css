@@ -312,7 +312,11 @@ body::-webkit-scrollbar {
 
 .tab-btn:hover {
 	color: var(--text);
-	background: var(--hover);
+	background: rgba(0,0,0,0.04);
+}
+
+.tab-btn:focus {
+	outline: none;
 }
 
 .tab-btn.active {

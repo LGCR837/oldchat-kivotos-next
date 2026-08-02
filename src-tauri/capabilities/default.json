@@ -10,6 +10,7 @@
     {
       "identifier": "http:default",
       "allow": [
+        { "url": "http://oc.mcl0.dpdns.org/**" },
         { "url": "http://60.205.94.101:8080/**" },
         { "url": "http://60.205.94.101/**" },
         { "url": "https://**" }

@@ -247,7 +247,11 @@
         try {
             IS_TAURI = !!(window.__TAURI__ !== undefined || window.__TAURI_INTERNALS__ !== undefined);
         } catch (e) { IS_TAURI = false; }
-        var BACKEND_ORIGIN = 'http://60.205.94.101:8080';
+        var BACKEND_ORIGIN = 'http://oc.mcl0.dpdns.org';
+        try {
+            var saved = localStorage.getItem('oc_custom_base_url');
+            if (saved) BACKEND_ORIGIN = saved;
+        } catch (e) {}
 
         // ===== Tauri 环境下替换 fetch 为 plugin-http invoke =====
         (function initTauri() {

@@ -117,7 +117,7 @@ const IS_TAURI = _detectIsTauri();
             throw err;
         }
     };
-    console.log('[Tauri] fetch 已替换为 plugin:http invoke，直连后端：' + 'http://60.205.94.101:8080');
+    console.log('[Tauri] fetch 已替换为 plugin:http invoke，直连后端：' + 'http://oc.mcl0.dpdns.org');
 
     // 标记 Tauri 环境（CSS 据此启用圆角阴影、三大金刚键、拖动区域）
     document.body.classList.add('tauri-env');
@@ -193,21 +193,59 @@ const IS_TAURI = _detectIsTauri();
 // ===== 运行模式对应的 API / WS / 媒体资源基地址 =====
 // Tauri 桌面端：固定走后端完整地址（plugin-http 自带跨域能力，不需要前端反代）
 // 浏览器端：默认走 Nginx 同源反代（oc_proxy_mode=on，默认），用户可切换为直连（oc_proxy_mode=off，需要后端支持 CORS）
-const BACKEND_HOST = '60.205.94.101:8080';
-const BACKEND_ORIGIN = 'http://' + BACKEND_HOST;
+
+// 默认值（硬编码回退）
+const DEFAULT_BACKEND_ORIGIN = 'http://oc.mcl0.dpdns.org';
+const DEFAULT_MEDIA_ORIGIN   = 'http://60.205.94.101:8080';
+
+// 候选服务器列表（参考服务器发布的 client.md 约定）
+const BACKEND_URL_CANDIDATES = [
+    'http://oc.mcl0.dpdns.org',
+    'https://oc.mcl0.dpdns.org',
+    'http://60.205.94.101:8080',
+    'http://60.205.94.101:8081',
+    'http://127.0.0.1:8080'
+];
+const MEDIA_URL_CANDIDATES = [
+    'http://60.205.94.101:8080',
+    'http://60.205.94.101:8081',
+    'http://oc.mcl0.dpdns.org',
+    'https://oc.mcl0.dpdns.org',
+    'http://127.0.0.1:8080'
+];
+
+// 从 localStorage 读取用户自定义，没有则回退到默认
+function _getSavedBackendOrigin() {
+    try { return localStorage.getItem('oc_custom_base_url') || DEFAULT_BACKEND_ORIGIN; }
+    catch (e) { return DEFAULT_BACKEND_ORIGIN; }
+}
+function _getSavedMediaOrigin() {
+    try { return localStorage.getItem('oc_custom_media_url') || DEFAULT_MEDIA_ORIGIN; }
+    catch (e) { return DEFAULT_MEDIA_ORIGIN; }
+}
+
+let BACKEND_ORIGIN = _getSavedBackendOrigin();
+let MEDIA_ORIGIN   = _getSavedMediaOrigin();
+const BACKEND_HOST = (function() {
+    try { return new URL(BACKEND_ORIGIN).host; } catch (e) { return 'oc.mcl0.dpdns.org'; }
+})();
 
 // 浏览器模式下：代理模式(默认 on) → 同源反代；off → 直连后端完整地址
 const _proxyOn = IS_TAURI ? false : (localStorage.getItem('oc_proxy_mode') !== 'off');
 
-const API_BASE = IS_TAURI
-    ? BACKEND_ORIGIN + '/v1'
-    : (_proxyOn ? '/v1' : (BACKEND_ORIGIN + '/v1'));
-const WS_HOST = IS_TAURI
-    ? BACKEND_HOST
-    : (_proxyOn ? window.location.host : BACKEND_HOST);
-const MEDIA_BASE = IS_TAURI
-    ? BACKEND_ORIGIN
-    : (_proxyOn ? BACKEND_ORIGIN : '');
+let API_BASE  = IS_TAURI ? (BACKEND_ORIGIN + '/v1') : (_proxyOn ? '/v1' : (BACKEND_ORIGIN + '/v1'));
+let WS_HOST   = IS_TAURI ? BACKEND_HOST : (_proxyOn ? window.location.host : BACKEND_HOST);
+let MEDIA_BASE = IS_TAURI ? MEDIA_ORIGIN : (_proxyOn ? MEDIA_ORIGIN : '');
+
+// 供设置页更新配置后重新计算
+function refreshEndpoints() {
+    BACKEND_ORIGIN = _getSavedBackendOrigin();
+    MEDIA_ORIGIN   = _getSavedMediaOrigin();
+    const host = (function() { try { return new URL(BACKEND_ORIGIN).host; } catch (e) { return BACKEND_HOST; } })();
+    WS_HOST   = IS_TAURI ? host : (_proxyOn ? window.location.host : host);
+    API_BASE  = IS_TAURI ? (BACKEND_ORIGIN + '/v1') : (_proxyOn ? '/v1' : (BACKEND_ORIGIN + '/v1'));
+    MEDIA_BASE = IS_TAURI ? MEDIA_ORIGIN : (_proxyOn ? MEDIA_ORIGIN : '');
+}
 
 function resolveMediaUrl(url) {
     if (!url) return url;
@@ -675,6 +713,12 @@ document.addEventListener('DOMContentLoaded', () => {
     function uidEq(a, b) {
         if (!a || !b) return false;
         return a.toUpperCase() === b.toUpperCase();
+    }
+    // 判断某个发送者ID是否是自己（兼容 uid/ncuid 两种格式）
+    // myUid 优先 ncuid，myDisplayUid 是旧 uid；消息历史可能返回任一格式
+    function isSelfUid(fromUid) {
+        if (!fromUid) return false;
+        return uidEq(fromUid, myUid) || uidEq(fromUid, myDisplayUid);
     }
     // 构建私聊目标参数：ncuid → to_ncuid，旧 uid → to_uid
     function toUidParam(id) {
@@ -1309,7 +1353,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             });
                             media += '</div>';
                         }
-                        momentsHtml += '<div style="background:var(--chat-bg);border-radius:12px;padding:14px 16px;border:1px solid var(--border);" data-moment-id="' + (m.id || '') + '">' +
+                        momentsHtml += '<div style="background:var(--chat-bg);border-radius:12px;padding:14px 16px;" data-moment-id="' + (m.id || '') + '">' +
                             '<div style="font-size:11px;color:var(--secondary-text);margin-bottom:6px;">' + fmtTs(m.created_at) + '</div>' +
                             '<div style="font-size:14px;color:var(--text);line-height:1.6;white-space:pre-wrap;word-break:break-word;">' + (m.body || '') + '</div>' +
                             media +
@@ -1338,16 +1382,18 @@ document.addEventListener('DOMContentLoaded', () => {
                         '</div>';
                 }
                 scroll.innerHTML =
-                    '<div style="background:var(--chat-bg);padding:28px 20px 20px;display:flex;flex-direction:column;align-items:center;border-bottom:1px solid var(--border);">' +
+                    '<div style="background:var(--chat-bg);padding:28px 20px 20px;display:flex;flex-direction:column;align-items:center;">' +
                         '<img src="' + resolveMediaUrl(avatar) + '" style="width:80px;height:80px;border-radius:50%;object-fit:cover;margin-bottom:12px;background:var(--border);" onerror="this.src=\'' + defaultAvatar + '\'">' +
                         '<div style="font-size:20px;font-weight:600;color:var(--text);margin-bottom:4px;">' + (u.display_name || u.username) + '</div>' +
                         '<div style="font-size:12px;color:var(--secondary-text);margin-bottom:4px;">' + getDisplayUid(u) + '</div>' +
                         (u.signature ? '<div style="font-size:13px;color:var(--secondary-text);margin-bottom:12px;text-align:center;max-width:300px;">' + escapeHtml(u.signature) + '</div>' : '') +
                         (btnHtml ? '<div style="display:flex;gap:10px;">' + btnHtml + '</div>' : '') +
                     '</div>' +
-                    (relation === 'self' ? '<div style="font-size:14px;font-weight:600;color:var(--text);padding:14px 16px 8px;">发表动态</div>' + postMomentHtml : '') +
-                    '<div style="font-size:14px;font-weight:600;color:var(--text);padding:14px 16px 8px;">' + (relation === 'self' ? '我的动态' : 'TA 的动态') + '</div>' +
-                    momentsHtml;
+                    '<div style="background:#fff;color:var(--text);">' +
+                    (relation === 'self' ? '<div style="font-size:14px;font-weight:600;padding:14px 16px 8px;">发表动态</div>' + postMomentHtml : '') +
+                    '<div style="font-size:14px;font-weight:600;padding:14px 16px 8px;">' + (relation === 'self' ? '我的动态' : 'TA 的动态') + '</div>' +
+                    momentsHtml +
+                    '</div>';
 
                 // 点赞和评论事件
                 scroll.querySelectorAll('.sp-like-btn').forEach(btn => {
@@ -1624,6 +1670,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (membersData.error) { scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">' + membersData.error + '</div>'; return; }
                 const members = (membersData.members || []).map(m => ({
                     uid: getUid(m),
+                    displayUid: getDisplayUid(m),
                     name: m.display_name || m.username || getUid(m),
                     avatar: m.avatar_url || ''
                 }));
@@ -1632,10 +1679,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 let membersHtml = '';
                 members.forEach(m => {
-                    const isMe = uidEq(getUid(m), myUid);
-                    membersHtml += `<div class="gm-member-item">` +
+                    const mUid = m.uid;
+                    const isMe = isSelfUid(mUid);
+                    membersHtml += `<div class="gm-member-item" data-uid="${escapeHtml(mUid)}" style="cursor:pointer;">` +
                         `<img class="gm-member-avatar" src="${resolveMediaUrl(m.avatar || defaultAvatar)}" onerror="this.src='${defaultAvatar}'">` +
-                        `<div class="gm-member-info"><div class="gm-member-name">${escapeHtml(m.name)}</div><div class="gm-member-uid">${escapeHtml(getDisplayUid(m))}</div></div>` +
+                        `<div class="gm-member-info"><div class="gm-member-name">${escapeHtml(m.name)}</div><div class="gm-member-uid">${escapeHtml(m.displayUid)}</div></div>` +
                         (isMe ? '<span class="gm-member-tag">我</span>' : '') +
                         `</div>`;
                 });
@@ -1657,6 +1705,16 @@ document.addEventListener('DOMContentLoaded', () => {
                         '<div class="gm-members-list">' + membersHtml + '</div>' +
                     '</div>' +
                     btnsHtml;
+
+                // 成员项点击：打开该成员的用户空间
+                scroll.querySelectorAll('.gm-member-item[data-uid]').forEach(item => {
+                    item.addEventListener('click', () => {
+                        const uid = item.dataset.uid;
+                        if (uid && !isSelfUid(uid)) {
+                            openSpacePanel(uid);
+                        }
+                    });
+                });
 
                 window.gmShowInvite = function() {
                     openInvitePanel(groupId, members);
@@ -2343,7 +2401,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (msg.type === 'direct_message') {
             const d = msg.data || {};
             const fromUid = getFromUid(d);
-            if (uidEq(fromUid, myUid)) return;
+            if (isSelfUid(fromUid)) return;
             notifyNewMessage(lookupName(fromUid), messagePreview(d));
             const convKey = `direct:${fromUid}`;
             // 只在当前会话匹配时才显示消息
@@ -2371,7 +2429,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const d = msg.data || {};
             const groupId = d.group_id || '';
             const fromUid = getFromUid(d);
-            if (uidEq(fromUid, myUid)) return;
+            if (isSelfUid(fromUid)) return;
             const _grp = contacts.groups.find(g => g.id === groupId);
             notifyNewMessage(((_grp && _grp.name) || groupId) + ' · ' + lookupName(fromUid), messagePreview(d));
             const convKey = `group:${groupId}`;
@@ -2459,7 +2517,7 @@ document.addEventListener('DOMContentLoaded', () => {
             sep.textContent = '私聊';
             contactList.appendChild(sep);
             contacts.friends.forEach(f => {
-                const div = createContactItem(f.uid, f.name, 'direct', f.avatar);
+                const div = createContactItem(f.uid, f.name, 'direct', f.avatar, f.displayUid);
                 contactList.appendChild(div);
             });
         }
@@ -2491,7 +2549,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // 好友
         friendList.innerHTML = '';
         contacts.friends.forEach(f => {
-            const div = createContactItem(f.uid, f.name, 'direct', f.avatar);
+            const div = createContactItem(f.uid, f.name, 'direct', f.avatar, f.displayUid);
             div.addEventListener('click', (e) => {
                 e.stopPropagation();
                 showContactDetail('direct', f.uid, f.name, f.avatar, mainContent);
@@ -2626,32 +2684,116 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) { alert('操作失败'); }
     }
 
-    // 添加好友按钮
+    // 添加好友/加入群聊 弹窗
     const addFriendBtn = document.getElementById('addFriendBtn');
     if (addFriendBtn) {
-        addFriendBtn.addEventListener('click', () => {
-            const uid = prompt('请输入对方 UID：');
-            if (!uid || !uid.trim()) return;
-            apiFetch('/v1/friends/request', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(toUidParam(uid.trim()))
-            }).then(r => r.json()).then(d => {
-                if (d.error) { alert(d.error); return; }
-                alert('好友请求已发送');
-            }).catch(() => alert('请求失败'));
+        addFriendBtn.addEventListener('click', () => openAddPanel());
+    }
+
+    function openAddPanel() {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:10000;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;font-family:inherit;';
+        overlay.innerHTML = `
+            <div style="background:var(--panel-bg);color:var(--text);width:340px;max-width:90vw;border-radius:12px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,0.25);">
+                <div style="background:var(--header-bg);color:#fff;padding:13px 16px;display:flex;align-items:center;font-size:15px;font-weight:500;position:relative;">
+                    <span style="width:100%;text-align:center;">添加</span>
+                    <button id="ap-close" style="position:absolute;right:10px;background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:4px 8px;border-radius:8px;"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                <div style="padding:16px;">
+                    <div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--border-color);">
+                        <button class="ap-tab active" data-tab="friend" style="flex:1;padding:10px;background:none;border:none;color:var(--text);font-size:14px;cursor:pointer;border-bottom:2px solid var(--header-bg);font-family:inherit;">添加好友</button>
+                        <button class="ap-tab" data-tab="group" style="flex:1;padding:10px;background:none;border:none;color:var(--secondary-text);font-size:14px;cursor:pointer;border-bottom:2px solid transparent;font-family:inherit;">加入群聊</button>
+                    </div>
+                    <div id="ap-friend" class="ap-panel">
+                        <input id="ap-friend-input" type="text" placeholder="请输入对方 UID 或 NCUID" style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:14px;font-family:inherit;outline:none;margin-bottom:12px;">
+                        <button id="ap-friend-btn" style="width:100%;padding:10px;border-radius:8px;border:none;background:var(--header-bg);color:#fff;font-size:14px;cursor:pointer;font-family:inherit;">发送好友请求</button>
+                    </div>
+                    <div id="ap-group" class="ap-panel" style="display:none;">
+                        <input id="ap-group-input" type="text" placeholder="请输入群聊 ID" style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:14px;font-family:inherit;outline:none;margin-bottom:12px;">
+                        <button id="ap-group-btn" style="width:100%;padding:10px;border-radius:8px;border:none;background:var(--header-bg);color:#fff;font-size:14px;cursor:pointer;font-family:inherit;">加入群聊</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        const closeBtn = overlay.querySelector('#ap-close');
+        function close() { overlay.remove(); }
+        closeBtn.addEventListener('click', close);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+        // Tab 切换
+        overlay.querySelectorAll('.ap-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                overlay.querySelectorAll('.ap-tab').forEach(t => {
+                    t.classList.remove('active');
+                    t.style.color = 'var(--secondary-text)';
+                    t.style.borderBottom = '2px solid transparent';
+                });
+                tab.classList.add('active');
+                tab.style.color = 'var(--text)';
+                tab.style.borderBottom = '2px solid var(--header-bg)';
+                const which = tab.dataset.tab;
+                overlay.querySelector('#ap-friend').style.display = which === 'friend' ? 'block' : 'none';
+                overlay.querySelector('#ap-group').style.display = which === 'group' ? 'block' : 'none';
+            });
+        });
+
+        // 添加好友
+        const friendBtn = overlay.querySelector('#ap-friend-btn');
+        friendBtn.addEventListener('click', async () => {
+            const val = overlay.querySelector('#ap-friend-input').value.trim();
+            if (!val) { alert('请输入对方 UID 或 NCUID'); return; }
+            friendBtn.disabled = true;
+            friendBtn.textContent = '发送中...';
+            try {
+                const r = await apiFetch('/v1/friends/request', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(toUidParam(val))
+                });
+                const d = await r.json();
+                if (d.error) { alert(d.error); }
+                else { alert('好友请求已发送'); close(); }
+            } catch (e) { alert('请求失败'); }
+            friendBtn.disabled = false;
+            friendBtn.textContent = '发送好友请求';
+        });
+
+        // 加入群聊
+        const groupBtn = overlay.querySelector('#ap-group-btn');
+        groupBtn.addEventListener('click', async () => {
+            const val = overlay.querySelector('#ap-group-input').value.trim();
+            if (!val) { alert('请输入群聊 ID'); return; }
+            groupBtn.disabled = true;
+            groupBtn.textContent = '加入中...';
+            try {
+                const r = await apiFetch('/v1/groups/join', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ group_id: val })
+                });
+                const d = await r.json();
+                if (d.error || d.code) { alert(d.error || '加入失败'); }
+                else { alert('已加入群聊'); close(); loadContacts(); }
+            } catch (e) { alert('请求失败'); }
+            groupBtn.disabled = false;
+            groupBtn.textContent = '加入群聊';
         });
     }
 
-    function createContactItem(id, name, type, avatar) {
+    function createContactItem(id, name, type, avatar, displayId) {
         const div = document.createElement('div');
         div.className = 'contact-item';
         div.dataset.convKey = type + ':' + id;
         div.dataset.type = type;
         div.dataset.id = id;
         div.dataset.name = name;
+        // 群聊显示 group_id，私聊显示给人看的 displayId（旧UID），未提供则不显示
+        const showId = type === 'group' ? id : (displayId || '');
+        const idLine = showId ? `<div class="uid">${escapeHtml(showId)}</div>` : '';
         const avatarUrl = avatar ? resolveMediaUrl(avatar) : 'assets/default-avatar.png';
-        div.innerHTML = `<img class="contact-avatar" src="${avatarUrl}" onerror="this.src='assets/default-avatar.png'"><div class="contact-info"><div class="name">${escapeHtml(name)}</div><div class="uid">${escapeHtml(id)}</div></div><span class="unread-badge" style="display:none;"></span>`;
+        div.innerHTML = `<img class="contact-avatar" src="${avatarUrl}" onerror="this.src='assets/default-avatar.png'"><div class="contact-info"><div class="name">${escapeHtml(name)}</div>${idLine}</div><span class="unread-badge" style="display:none;"></span>`;
         div.addEventListener('click', (e) => switchConversation(type, id, name, e));
         return div;
     }
@@ -2865,7 +3007,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return div;
         }
 
-        const isSelfByUid = fromUid && myUid && fromUid.toUpperCase() === myUid.toUpperCase();
+        const isSelfByUid = isSelfUid(fromUid);
         const isSelfByFlag = msg.is_me === true || msg.isSelf === true;
         const isSelf = isSelfByUid || isSelfByFlag;
 
@@ -4718,7 +4860,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <img src="${resolveMediaUrl(myAvatar || '')}" style="width:64px;height:64px;border-radius:50%;object-fit:cover;background:var(--border);" onerror="this.src='assets/default-avatar.png'">
                 <div>
                     <div style="font-size:18px;font-weight:600;color:var(--text);">${escapeHtml(myName || '未登录')}</div>
-                    <div style="font-size:13px;color:var(--secondary-text);">${escapeHtml(myUid || '')}</div>
+                    <div style="font-size:13px;color:var(--secondary-text);">${escapeHtml(myDisplayUid || '')}</div>
                 </div>
             </div>
             <div class="settings-group">
@@ -4780,19 +4922,41 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
             </div>
             ${IS_TAURI ? `
-            <h3 style="margin-top:20px;">服务器配置 (Tauri)</h3>
+            <h3 style="margin-top:20px;">服务器配置</h3>
             <div class="settings-group">
                 <div class="settings-input-row">
                     <label>Base URL</label>
-                    <input type="text" id="settingsBaseUrl" value="${BACKEND_ORIGIN}" placeholder="http://host:port">
+                    <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
+                        <div style="display:flex;gap:6px;">
+                            <select id="settingsBaseUrlSelect" style="flex:0 0 auto;max-width:55%;padding:8px 10px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;">
+                                <option value="">-- 候选地址 --</option>
+                                ${BACKEND_URL_CANDIDATES.map(u => `<option value="${escapeHtml(u)}">${escapeHtml(u)}</option>`).join('')}
+                                <option value="__custom__">自定义...</option>
+                            </select>
+                            <input type="text" id="settingsBaseUrl" value="${escapeHtml(BACKEND_ORIGIN)}" placeholder="http://host:port" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;">
+                        </div>
+                    </div>
                 </div>
                 <div class="settings-input-row">
                     <label>Media URL</label>
-                    <input type="text" id="settingsMediaUrl" value="${resolveMediaUrl('').replace(/\/$/, '')}" placeholder="http://host:port">
+                    <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
+                        <div style="display:flex;gap:6px;">
+                            <select id="settingsMediaUrlSelect" style="flex:0 0 auto;max-width:55%;padding:8px 10px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;">
+                                <option value="">-- 候选地址 --</option>
+                                ${MEDIA_URL_CANDIDATES.map(u => `<option value="${escapeHtml(u)}">${escapeHtml(u)}</option>`).join('')}
+                                <option value="__custom__">自定义...</option>
+                            </select>
+                            <input type="text" id="settingsMediaUrl" value="${escapeHtml(MEDIA_ORIGIN)}" placeholder="http://host:port" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;">
+                        </div>
+                        ${MEDIA_ORIGIN === DEFAULT_MEDIA_ORIGIN && BACKEND_ORIGIN !== DEFAULT_MEDIA_ORIGIN ? '<div style="font-size:12px;color:var(--secondary-text);">媒体资源当前使用默认直连地址</div>' : ''}
+                    </div>
                 </div>
                 <div class="settings-input-row">
                     <label></label>
-                    <button id="settingsSaveUrls">保存并重载</button>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <button id="settingsSaveUrls">保存并重载</button>
+                        <button id="settingsResetUrls" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border-color);background:transparent;color:var(--text);font-size:13px;cursor:pointer;font-family:inherit;">恢复默认</button>
+                    </div>
                 </div>
             </div>` : ''}
         `;
@@ -4803,11 +4967,40 @@ document.addEventListener('DOMContentLoaded', () => {
             renderSettingsAppearance();
         });
         if (IS_TAURI) {
+            // Base URL 候选下拉
+            const baseSel = document.getElementById('settingsBaseUrlSelect');
+            const baseInput = document.getElementById('settingsBaseUrl');
+            baseSel?.addEventListener('change', () => {
+                const v = baseSel.value;
+                if (!v) return;
+                if (v === '__custom__') { /* 保留当前输入 */ return; }
+                baseInput.value = v;
+            });
+            // Media URL 候选下拉
+            const mediaSel = document.getElementById('settingsMediaUrlSelect');
+            const mediaInput = document.getElementById('settingsMediaUrl');
+            mediaSel?.addEventListener('change', () => {
+                const v = mediaSel.value;
+                if (!v) return;
+                if (v === '__custom__') return;
+                mediaInput.value = v;
+            });
+            // 保存
             document.getElementById('settingsSaveUrls')?.addEventListener('click', () => {
-                const base = document.getElementById('settingsBaseUrl')?.value?.trim();
-                const media = document.getElementById('settingsMediaUrl')?.value?.trim();
+                const base = baseInput?.value?.trim();
+                const media = mediaInput?.value?.trim();
                 if (base) localStorage.setItem('oc_custom_base_url', base);
+                else localStorage.removeItem('oc_custom_base_url');
                 if (media) localStorage.setItem('oc_custom_media_url', media);
+                else localStorage.removeItem('oc_custom_media_url');
+                refreshEndpoints();
+                window.location.reload();
+            });
+            // 恢复默认
+            document.getElementById('settingsResetUrls')?.addEventListener('click', () => {
+                localStorage.removeItem('oc_custom_base_url');
+                localStorage.removeItem('oc_custom_media_url');
+                refreshEndpoints();
                 window.location.reload();
             });
         }

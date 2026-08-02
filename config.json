@@ -1,5 +1,5 @@
 {
   "port": 5520,
-  "upstream": "http://60.205.94.101:8080",
+  "upstream": "http://oc.mcl0.dpdns.org",
   "static_dir": "./src"
 }
