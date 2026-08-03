@@ -608,7 +608,7 @@ Authorization: Bearer <access_token>
 2. 旧客户端忽略新字段后仍能工作；
 3. 新客户端在新字段缺失时回退到旧逻辑；
 4. 复合游标与 OFFSET 同时保留一段兼容期；
-5. `uid`/`ncuid` 同时兼容；
+5. `uid`/`ncuid` 同时兼容（注意：`?uid=` 查询参数不接受 ncuid，需用 `?ncuid=` 参数单独传 ncuid）；
 6. 不静默修改时间单位、状态码或 `msg_type`；
 7. 删除字段、路由或旧行为前必须完成版本覆盖评估。
 

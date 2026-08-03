@@ -20,7 +20,10 @@
 	--scrollbar-thumb: rgba(0,0,0,0.2);
 	--scrollbar-thumb-hover: rgba(0,0,0,0.4);
 	--rp-grad-start: #f44336;
-	--rp-grad-end: #e53935
+	--rp-grad-end: #e53935;
+	--panel-bg: #ffffff;
+	--border-color: #e1e1e1;
+	--input-bg: #ffffff
 }
 
 [data-theme="dark"] {
@@ -43,6 +46,9 @@
 	--link-self: #a0b0c0;
 	--scrollbar-thumb: rgba(255,255,255,0.2);
 	--scrollbar-thumb-hover: rgba(255,255,255,0.4);
+	--panel-bg: #16213e;
+	--border-color: #2a2a4a;
+	--input-bg: #1a1a2e
 }
 
 body, .sidebar, .chat-area, .messages, .input-area, .contact-list, .chat-header, .sidebar-header, .message-bubble, .message-time, .contact-item, .more-menu, .custom-context-menu, .emoticon-picker {
@@ -2294,14 +2300,20 @@ body::-webkit-scrollbar {
 
 /* ===== Tauri 桌面端环境适配 ===== */
 /* 窗口圆角 + 阴影（依赖 transparent:true） */
+/* 修复 Windows 10 下窗口圆角外侧白色直角：html 和 body 都需透明 */
+.tauri-env html,
 .tauri-env body {
     background: transparent;
+    margin: 0;
+    padding: 0;
 }
 
 .tauri-env .app-container {
     border-radius: 8px;
     overflow: hidden;
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12), 0 8px 32px rgba(0, 0, 0, 0.22);
+    position: relative;
+    z-index: 1;
 }
 
 /* 最大化时直角，避免边缘被裁切 */

@@ -898,19 +898,40 @@ if (!localStorage.getItem('oc_access_token')) {
     window.location.href = 'login.html';
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     // 从 localStorage 读取用户信息（登录页写入）
     const storedUser = JSON.parse(localStorage.getItem('oc_user') || '{}');
-    const myUid = storedUser.ncuid || storedUser.uid || '';  // API用
-    const myDisplayUid = storedUser.uid || storedUser.ncuid || '';  // 给人看
-    const myName = storedUser.display_name || storedUser.username || '';
-    const myAvatar = storedUser.avatar_url || '';
+    let myUid = storedUser.ncuid || storedUser.uid || '';  // API用
+    let myDisplayUid = storedUser.uid || storedUser.ncuid || '';  // 给人看
+    let myName = storedUser.display_name || storedUser.username || '';
+    let myAvatar = storedUser.avatar_url || '';
+
+    // 登录后立即调用 /v1/me 刷新用户信息（修复登录后只显示 NCUID 不显示昵称头像）
+    try {
+        const meRes = await apiFetch('/v1/me');
+        if (meRes && meRes.ok) {
+            const meData = await meRes.json();
+            if (meData && !meData.error) {
+                // 更新 localStorage
+                localStorage.setItem('oc_user', JSON.stringify(meData));
+                // 更新内存中的用户信息
+                myUid = meData.ncuid || meData.uid || myUid;
+                myDisplayUid = meData.uid || meData.ncuid || myDisplayUid;
+                myName = meData.display_name || meData.username || myName;
+                myAvatar = meData.avatar_url || myAvatar;
+            }
+        }
+    } catch (e) {
+        console.error('Failed to refresh user info after login', e);
+    }
 
     // ===== NCUID 兼容层 =====
     // ncuid 给机器看（API调用），uid 给人看（界面显示）
     // 注意：ncuid 不一定以 nc_ 开头（官方文档示例值为 USR-ABCD1234）
-    // 服务端在 ?uid=/with_uid/to_uid 参数中同时接受 uid 和 ncuid 值，
-    // 因此不再需要前缀判断，统一使用 _uid 系列参数即可。
+    // 实际发现：?uid= 参数不接受 ncuid 值（会返回 invalid uid），
+    // 因此对 ?uid= 传旧 uid，?ncuid= 传 ncuid。
+    // 但 with_uid/to_uid 参数同时接受 uid 和 ncuid。
+    // 不再需要前缀判断，但需根据参数名选择正确的标识符。
     function getUid(obj) {
         if (!obj) return '';
         return obj.ncuid || obj.uid || '';
@@ -949,7 +970,8 @@ document.addEventListener('DOMContentLoaded', () => {
     function withUidParam(id) {
         return { with_uid: id };
     }
-    // 构建用户资料查询参数：服务端 ?uid= 同时接受 uid/ncuid
+    // 构建用户资料查询参数：?uid= 不接受 ncuid，只传旧 uid
+    // 如需要 ncuid 查询，用 ?ncuid= 参数
     function profileQuery(id) {
         return '/v1/users/profile?uid=' + encodeURIComponent(id);
     }
@@ -1480,6 +1502,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function openSpacePanel(uid) {
+        // uid 基本校验：非空且非纯空白
+        if (!uid || !uid.trim()) {
+            alert('无效的用户 ID');
+            return;
+        }
         const overlay = document.createElement('div');
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;background:var(--bg);display:flex;flex-direction:column;font-family:inherit;opacity:0;transition:opacity 0.2s;';
         const btnBase = 'padding:6px 20px;border-radius:20px;border:none;font-size:14px;font-family:inherit;cursor:pointer;font-weight:500;';
@@ -1506,7 +1533,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 ]);
                 const u = await profRes.json();
                 const momentsData = await momentsRes.json();
-                if (u.error) { scroll.innerHTML = '<div style="text-align:center;padding:40px;color:#999;">' + u.error + '</div>'; return; }
+                if (u.error) {
+                    // 记录无效 UID，避免重复请求
+                    if (/invalid|not found|不存在/i.test(u.error)) {
+                        invalidUidCache.add(uid.toUpperCase());
+                    }
+                    scroll.innerHTML = '<div style="text-align:center;padding:40px;color:#999;">' + u.error + '</div>';
+                    return;
+                }
                 // 刷新缓存
                 u._ts = Date.now();
                 userProfileCache.set(uid.toUpperCase(), u);
@@ -2776,36 +2810,88 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 用户信息缓存（4小时过期）
     const userProfileCache = new Map();
+    // 记录已知无效的 UID（服务器返回 invalid uid 等），避免重复请求
+    const invalidUidCache = new Set();
     const CACHE_TTL = 4 * 60 * 60 * 1000;
 
-    async function fetchUserProfile(uid, forceRefresh) {
-        if (!uid || uid.toUpperCase() === myUid.toUpperCase()) return null;
-        const key = uid.toUpperCase();
+    async function fetchUserProfile(uid, ncuid, forceRefresh) {
+        // uid: 旧格式 uid，用于 ?uid= 参数
+        // ncuid: 新格式 ncuid，用于 ?ncuid= 参数
+        // 实际发现：?uid= 参数不接受 ncuid 值，会返回 invalid uid
+        // 因此必须用正确的参数查询
+        if (!uid && !ncuid) return null;
+        const idForCache = ncuid || uid;
+        if (!idForCache || idForCache.toUpperCase() === myUid.toUpperCase()) return null;
+        const key = idForCache.toUpperCase();
+        // 跳过已知无效的 UID（除非强制刷新，用于重试）
+        if (!forceRefresh && invalidUidCache.has(key)) return null;
         if (!forceRefresh && userProfileCache.has(key)) {
             const cached = userProfileCache.get(key);
             if (Date.now() - cached._ts < CACHE_TTL) return cached;
         }
         try {
-            const res = await apiFetch(profileQuery(uid));
-            const data = await res.json();
-            if (!data.error) {
-                data._ts = Date.now();
-                userProfileCache.set(key, data);
-                return data;
+            let data = null;
+            // 优先使用 ncuid 参数（?ncuid= 路径）
+            if (ncuid) {
+                const res = await apiFetch('/v1/users/profile?ncuid=' + encodeURIComponent(ncuid));
+                if (res.ok) {
+                    data = await res.json();
+                }
             }
+            // ncuid 查询失败，尝试用 uid 查询（?uid= 路径）
+            if (!data && uid) {
+                const res = await apiFetch('/v1/users/profile?uid=' + encodeURIComponent(uid));
+                if (res.ok) {
+                    data = await res.json();
+                }
+            }
+            // 两种都失败（网络错误等情况），不标记无效，允许后续重试
+            if (!data) return null;
+            // 服务器返回错误信息
+            if (data.error && /invalid|not found|不存在/i.test(data.error)) {
+                invalidUidCache.add(key);
+                return null;
+            }
+            // 成功
+            data._ts = Date.now();
+            userProfileCache.set(key, data);
+            invalidUidCache.delete(key);
+            return data;
         } catch (e) {}
         return null;
     }
 
+    // 3秒后重试加载用户资料（用于聊天界面显示 NCUID/默认头像时自动重试）
+    // isAvatar=true 时更新头像 img 元素，否则更新昵称文本
+    function scheduleProfileRetry(uid, ncuid, element, isAvatar) {
+        if (!uid && !ncuid) return;
+        if (!element || !element.isConnected) return;
+
+        setTimeout(async () => {
+            if (!element.isConnected) return;
+            const profile = await fetchUserProfile(uid, ncuid, true);
+            if (!profile) return;
+            if (isAvatar) {
+                const newAvatar = profile.avatar_url ? resolveMediaUrl(profile.avatar_url) : 'assets/default-avatar.png';
+                if (element.src !== newAvatar) element.src = newAvatar;
+            } else {
+                const newName = profile.display_name || profile.username || (ncuid || uid || '');
+                if (element.textContent !== newName) element.textContent = newName;
+            }
+        }, 3000);
+    }
+
     // 根据 uid 查找联系人显示名
+    // 支持按 x.uid（ncuid）和 x.displayUid（旧 uid）两种格式查找
     function lookupName(uid) {
         if (!uid) return '';
         if (uid.toUpperCase() === myUid.toUpperCase()) return myName;
-        const f = contacts.friends.find(x => x.uid.toUpperCase() === uid.toUpperCase());
+        const upper = uid.toUpperCase();
+        const f = contacts.friends.find(x => x.uid.toUpperCase() === upper || (x.displayUid && x.displayUid.toUpperCase() === upper));
         if (f) return f.name;
-        const m = groupMembers.find(x => x.uid.toUpperCase() === uid.toUpperCase());
+        const m = groupMembers.find(x => x.uid.toUpperCase() === upper || (x.displayUid && x.displayUid.toUpperCase() === upper));
         if (m) return m.name;
-        const cached = userProfileCache.get(uid.toUpperCase());
+        const cached = userProfileCache.get(upper);
         if (cached) return cached.display_name || cached.username || uid;
         return uid;
     }
@@ -2813,13 +2899,14 @@ document.addEventListener('DOMContentLoaded', () => {
     function lookupAvatar(uid) {
         if (!uid) return '';
         if (uid.toUpperCase() === myUid.toUpperCase()) return myAvatar;
-        const f = contacts.friends.find(x => x.uid.toUpperCase() === uid.toUpperCase());
+        const upper = uid.toUpperCase();
+        const f = contacts.friends.find(x => x.uid.toUpperCase() === upper || (x.displayUid && x.displayUid.toUpperCase() === upper));
         if (f && f.avatar) return f.avatar;
         const g = contacts.groups.find(x => x.id === uid);
         if (g && g.avatar) return g.avatar;
-        const m = groupMembers.find(x => x.uid.toUpperCase() === uid.toUpperCase());
+        const m = groupMembers.find(x => x.uid.toUpperCase() === upper || (x.displayUid && x.displayUid.toUpperCase() === upper));
         if (m && m.avatar) return m.avatar;
-        const cached = userProfileCache.get(uid.toUpperCase());
+        const cached = userProfileCache.get(upper);
         if (cached && cached.avatar_url) return cached.avatar_url;
         return '';
     }
@@ -2838,8 +2925,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const msgType = d.msg_type || 'text';
         if (msgType === 'image') return '[图片]';
         if (msgType === 'video') return '[视频]';
-        if (msgType === 'voice') return '[语音]';
-        if (msgType === 'resource') return '[文件]';
+        if (msgType === 'voice' || msgType === 'audio') return '[语音]';
+        if (msgType === 'resource' || msgType === 'file') return '[文件]';
         return d.body || '';
     }
 
@@ -3431,6 +3518,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!msg || !msg.id) return null;
 
         const fromUid = getFromUid(msg) || msg.from_uid || msg.sender_uid || '';
+        // 旧 uid（用于 ?uid= API 参数和联系人查找）
+        const profileUid = msg.from_uid || msg.sender_uid || '';
+        // ncuid（用于 ?ncuid= API 参数，?uid= 不接受 ncuid）
+        const profileNcuid = msg.from_ncuid || msg.sender_ncuid || '';
+        // 显示用 uid：优先用 from_uid（旧 uid），为兼容性也可用于联系人查找
+        const displayUid = profileUid || fromUid;
+        // API 查询用：ncuid 走 ?ncuid=，旧 uid 走 ?uid=
+        const apiUid = profileUid || '';
+        const apiNcuid = profileNcuid || '';
         const msgType = msg.msg_type || 'text';
 
         if (msgType === 'system') {
@@ -3458,7 +3554,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const isSelfByFlag = msg.is_me === true || msg.isSelf === true;
         const isSelf = isSelfByUid || isSelfByFlag;
 
-        const sender = isSelf ? (myName || '我') : (msg.from_name || msg.sender_name || msg.display_name || lookupName(fromUid) || fromUid || '未知用户');
+        const sender = isSelf ? (myName || '我') : (msg.from_name || msg.sender_name || msg.display_name || lookupName(displayUid) || displayUid || '未知用户');
         const time = new Date(msg.created_at * 1000).toLocaleTimeString('zh-CN', { hour12: false });
         let content = '';
 
@@ -3481,15 +3577,18 @@ document.addEventListener('DOMContentLoaded', () => {
             // 头像处理：自己显示自己的头像，对方显示对方的头像
             const avatarUrl = isSelf
                 ? myAvatar
-                : (msg.from_avatar || msg.sender_avatar || msg.avatar_url || lookupAvatar(fromUid));
+                : (msg.from_avatar || msg.sender_avatar || msg.avatar_url || lookupAvatar(displayUid));
             const avatarImg = document.createElement('img');
             avatarImg.src = avatarUrl ? resolveMediaUrl(avatarUrl) : 'assets/default-avatar.png';
             avatarImg.className = 'msg-avatar';
             avatarImg.onerror = () => { avatarImg.src = 'assets/default-avatar.png'; };
-            if (!isSelf && !avatarUrl && fromUid) {
-                fetchUserProfile(fromUid).then(profile => {
+            if (!isSelf && !avatarUrl && (apiUid || apiNcuid)) {
+                fetchUserProfile(apiUid, apiNcuid).then(profile => {
                     if (profile && profile.avatar_url && avatarImg.isConnected) {
                         avatarImg.src = resolveMediaUrl(profile.avatar_url);
+                    } else if (!profile) {
+                        // 资料未加载成功，3s 后重试
+                        scheduleProfileRetry(apiUid, apiNcuid, avatarImg, true);
                     }
                 });
             }
@@ -3504,10 +3603,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 const senderDiv = document.createElement('div');
                 senderDiv.className = 'message-sender';
                 senderDiv.textContent = sender;
-                if (!isSelf && sender === fromUid && fromUid) {
-                    fetchUserProfile(fromUid).then(profile => {
+                if (!isSelf && sender === displayUid && (apiUid || apiNcuid)) {
+                    fetchUserProfile(apiUid, apiNcuid).then(profile => {
                         if (profile && senderDiv.isConnected) {
                             senderDiv.textContent = profile.display_name || profile.username || sender;
+                        } else if (!profile) {
+                            // 昵称未加载成功（显示为 UID），3s 后重试
+                            scheduleProfileRetry(apiUid, apiNcuid, senderDiv, false);
                         }
                     });
                 }
@@ -3529,10 +3631,13 @@ document.addEventListener('DOMContentLoaded', () => {
             content = `<video controls style="max-width:200px;"><source src="${resolveMediaUrl(msg.media_url || '')}"></video>`;
         } else if (msgType === 'audio') {
             content = `<audio controls style="max-width:200px;" src="${resolveMediaUrl(msg.media_url || '')}"></audio>`;
-        } else if (msgType === 'resource') {
-            // 支持嵌套 v2 JSON body（如音乐分享等）
+        } else if (msgType === 'resource' || msgType === 'file') {
+            // 支持嵌套 v2 JSON body（如音乐分享等）+ 音频文件检测
             let fileName = '';
             let displayText = '';
+            let fileUrl = msg.media_url || '';
+            const audioRegex = /\.(mp3|m4a|aac|amr|wav|wave|ogg|opus|flac)$/i;
+
             if (msg.body && msg.body.trim().startsWith('{')) {
                 try {
                     const obj = JSON.parse(msg.body);
@@ -3554,6 +3659,15 @@ document.addEventListener('DOMContentLoaded', () => {
                             });
                         }
                         displayText = displayText.replace(/\n/g, '<br>');
+                        // 检查 v2 JSON 中的嵌套文件
+                        if (obj.file) {
+                            fileName = obj.file.name || obj.file.fileName || '';
+                            fileUrl = obj.file.url || obj.file.media_url || fileUrl;
+                        }
+                    } else if (obj.fileName || obj.file_name || obj.name || obj.url) {
+                        // 文件元数据 JSON（FileUploadUiTextUtil.buildBody 格式）
+                        fileName = obj.fileName || obj.file_name || obj.name || '';
+                        fileUrl = obj.url || obj.media_url || obj.download_url || fileUrl;
                     } else {
                         fileName = msg.body;
                     }
@@ -3563,19 +3677,43 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 fileName = msg.body || '';
             }
-            if (!fileName && msg.media_url) {
-                const urlParts = msg.media_url.split('/');
+            if (!fileName && fileUrl) {
+                const urlParts = fileUrl.split('?')[0].split('/');
                 fileName = decodeURIComponent(urlParts.pop()) || '文件';
             }
-            const fileCardHtml = `<div class="file-card">
-                <div class="file-info">
-                    <div class="file-name">${escapeHtml(fileName)}</div>
-                </div>
-                <a href="${resolveMediaUrl(msg.media_url)}" target="_blank" class="file-download-btn">⬇</a>
-            </div>`;
-            content = displayText
-                ? `<div style="margin-bottom:6px;">${displayText}</div>${fileCardHtml}`
-                : fileCardHtml;
+
+            // 检测是否为音频文件（按文件名或 URL 扩展名）
+            const isAudio = audioRegex.test(fileName) || (fileUrl && audioRegex.test(fileUrl));
+
+            if (isAudio && fileUrl) {
+                // 音频文件：渲染为嵌套音频播放器
+                const voiceHtml = `
+                    <div class="voice-message" data-url="${fileUrl}">
+                        <div class="voice-top-row">
+                            <button class="voice-play-btn">▶</button>
+                            <div class="voice-wave" data-url="${fileUrl}">
+                                <div class="voice-wave-bg" style="width:0%"></div>
+                                <div class="voice-wave-bars">${'<span></span>'.repeat(20)}</div>
+                            </div>
+                            <span class="voice-duration">0:00</span>
+                        </div>
+                        <audio preload="metadata" src="${resolveMediaUrl(fileUrl)}"></audio>
+                    </div>`;
+                content = displayText
+                    ? `<div style="margin-bottom:6px;white-space:pre-wrap;word-break:break-word;">${displayText}</div>${voiceHtml}`
+                    : voiceHtml;
+            } else {
+                // 非音频：渲染为文件卡片
+                const fileCardHtml = `<div class="file-card">
+                    <div class="file-info">
+                        <div class="file-name">${escapeHtml(fileName)}</div>
+                    </div>
+                    <a href="${resolveMediaUrl(fileUrl)}" target="_blank" class="file-download-btn">⬇</a>
+                </div>`;
+                content = displayText
+                    ? `<div style="margin-bottom:6px;">${displayText}</div>${fileCardHtml}`
+                    : fileCardHtml;
+            }
         } else if (msgType === 'voice') {
             if (msg.media_url) {
                 content = `
@@ -3597,7 +3735,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const durStr = dur ? mins + ':' + (secs < 10 ? '0' : '') + secs : '0:00';
                 content = `[语音 ${durStr}]`;
             }
-        } else if (msgType === 'file' || (msg.media_url && msgType !== 'text')) {
+        } else if (msg.media_url && msgType !== 'text') {
+            // 未知消息类型但有 media_url：回退为文件下载链接
             const fileUrl = msg.media_url || '';
             const fileName = msg.body || fileUrl.split('/').pop();
             content = `<a href="${fileUrl}" target="_blank" class="file-download-btn" style="color:var(--link-other);">📎 ${escapeHtml(fileName)}</a>`;
@@ -3627,7 +3766,35 @@ document.addEventListener('DOMContentLoaded', () => {
                             });
                         }
                         textBody = textBody.replace(/\n/g, '<br>');
-                        content = quoteHtml + (textBody ? `<div style="white-space: pre-wrap; word-break: break-word;">${textBody}</div>` : '');
+                        // 检查 v2 JSON 中的嵌套文件（如音频文件）
+                        let nestedFileHtml = '';
+                        if (obj.file) {
+                            const nFileName = obj.file.name || obj.file.fileName || '';
+                            const nFileUrl = obj.file.url || obj.file.media_url || '';
+                            const audioRe = /\.(mp3|m4a|aac|amr|wav|wave|ogg|opus|flac)$/i;
+                            if (nFileUrl && (audioRe.test(nFileName) || audioRe.test(nFileUrl))) {
+                                // 嵌套音频文件：渲染为音频播放器
+                                nestedFileHtml = `
+                                    <div class="voice-message" data-url="${nFileUrl}" style="margin-top:6px;">
+                                        <div class="voice-top-row">
+                                            <button class="voice-play-btn">▶</button>
+                                            <div class="voice-wave" data-url="${nFileUrl}">
+                                                <div class="voice-wave-bg" style="width:0%"></div>
+                                                <div class="voice-wave-bars">${'<span></span>'.repeat(20)}</div>
+                                            </div>
+                                            <span class="voice-duration">0:00</span>
+                                        </div>
+                                        <audio preload="metadata" src="${resolveMediaUrl(nFileUrl)}"></audio>
+                                    </div>`;
+                            } else if (nFileUrl) {
+                                // 嵌套非音频文件：渲染为文件卡片
+                                nestedFileHtml = `<div class="file-card" style="margin-top:6px;">
+                                    <div class="file-info"><div class="file-name">${escapeHtml(nFileName || '文件')}</div></div>
+                                    <a href="${resolveMediaUrl(nFileUrl)}" target="_blank" class="file-download-btn">⬇</a>
+                                </div>`;
+                            }
+                        }
+                        content = quoteHtml + (textBody ? `<div style="white-space: pre-wrap; word-break: break-word;">${textBody}</div>` : '') + nestedFileHtml;
                     } else {
                         body = escapeHtml(body);
                         body = body.replace(/\n/g, '<br>');
@@ -3680,15 +3847,18 @@ document.addEventListener('DOMContentLoaded', () => {
         // 头像处理：自己显示自己的头像，对方显示对方的头像
         const avatarUrl = isSelf
             ? myAvatar
-            : (msg.from_avatar || msg.sender_avatar || msg.avatar_url || lookupAvatar(fromUid));
+            : (msg.from_avatar || msg.sender_avatar || msg.avatar_url || lookupAvatar(displayUid));
         const avatarImg = document.createElement('img');
         avatarImg.src = avatarUrl ? resolveMediaUrl(avatarUrl) : 'assets/default-avatar.png';
         avatarImg.className = 'msg-avatar';
         avatarImg.onerror = () => { avatarImg.src = 'assets/default-avatar.png'; };
-        if (!isSelf && !avatarUrl && fromUid) {
-            fetchUserProfile(fromUid).then(profile => {
+        if (!isSelf && !avatarUrl && (apiUid || apiNcuid)) {
+            fetchUserProfile(apiUid, apiNcuid).then(profile => {
                 if (profile && profile.avatar_url && avatarImg.isConnected) {
                     avatarImg.src = resolveMediaUrl(profile.avatar_url);
+                } else if (!profile) {
+                    // 资料未加载成功，3s 后重试
+                    scheduleProfileRetry(apiUid, apiNcuid, avatarImg, true);
                 }
             });
         }
@@ -3705,11 +3875,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const senderDiv = document.createElement('div');
             senderDiv.className = 'message-sender';
             senderDiv.textContent = sender;
-            if (!isSelf && sender === fromUid && fromUid) {
-                fetchUserProfile(fromUid).then(profile => {
+            if (!isSelf && sender === displayUid && (apiUid || apiNcuid)) {
+                fetchUserProfile(apiUid, apiNcuid).then(profile => {
                     if (profile && senderDiv.isConnected) {
                         senderDiv.textContent = profile.display_name || profile.username || sender;
                         msgDiv.dataset.fromName = profile.display_name || profile.username || sender;
+                    } else if (!profile) {
+                        // 昵称未加载成功（显示为 UID），3s 后重试
+                        scheduleProfileRetry(apiUid, apiNcuid, senderDiv, false);
                     }
                 });
             }
@@ -4832,7 +5005,27 @@ document.addEventListener('DOMContentLoaded', () => {
             menu.addEventListener('click', (event) => {
                 const action = event.target.dataset.action;
                 if (action === 'copy') {
-                    const textToCopy = selectedText || msgDiv.querySelector('.message-bubble')?.innerText || '';
+                    // 根据消息类型获取复制内容
+                    let textToCopy = selectedText || '';
+                    if (!textToCopy) {
+                        const msgType = msgDiv.dataset.msgType;
+                        const rawMsg = JSON.parse(msgDiv.dataset.rawBody || '{}');
+                        if (msgType === 'image') {
+                            // 图片消息：复制 media_url
+                            textToCopy = rawMsg.media_url || '[图片]';
+                        } else if (msgType === 'voice' || msgType === 'audio') {
+                            // 语音消息：复制 media_url
+                            textToCopy = rawMsg.media_url || '[语音]';
+                        } else if (msgType === 'video') {
+                            textToCopy = rawMsg.media_url || '[视频]';
+                        } else if (msgType === 'resource' || msgType === 'file') {
+                            // 文件消息：复制下载链接
+                            textToCopy = rawMsg.media_url || rawMsg.body || '[文件]';
+                        } else {
+                            // 文本消息：复制气泡内文本
+                            textToCopy = msgDiv.querySelector('.message-bubble')?.innerText || '';
+                        }
+                    }
                     if (navigator.clipboard && navigator.clipboard.writeText) {
                         navigator.clipboard.writeText(textToCopy).catch(() => fallbackCopyText(textToCopy));
                     } else {
@@ -5094,6 +5287,9 @@ document.addEventListener('DOMContentLoaded', () => {
     urlInputSend.addEventListener('click', () => {
         const url = urlImageInput.value.trim();
         if (!url) { alert('请输入链接'); return; }
+        // URL 格式校验
+        if (!/^https?:\/\//i.test(url)) { alert('请输入有效的 http(s) 链接'); return; }
+        // 按 MCL0 官方文档：voice 消息使用 msg_type=voice + media_url，body 为空
         const msgType = urlInputMode === 'image' ? 'image' : 'voice';
         sendMessage('', msgType, url);
         urlInputOverlay.style.display = 'none';
