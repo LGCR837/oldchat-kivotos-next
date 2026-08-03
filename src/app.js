@@ -1002,6 +1002,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const quotePreview = document.getElementById('quotePreview');
     const quotePreviewText = quotePreview.querySelector('.quote-preview-text');
     const cancelQuoteBtn = document.getElementById('cancelQuoteBtn');
+    const syncIndicator = document.getElementById('syncIndicator');
 
     const emojiPlazaBtn = document.getElementById('emojiPlazaBtn');
 
@@ -1501,12 +1502,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    function openSpacePanel(uid) {
+    function openSpacePanel(uid, ncuid) {
         // uid 基本校验：非空且非纯空白
-        if (!uid || !uid.trim()) {
+        if (!uid && !ncuid) {
             alert('无效的用户 ID');
             return;
         }
+        // 如果只有一个参数传入，同时作为 uid 和 ncuid 尝试
+        if (!ncuid) ncuid = uid;
+        if (!uid) uid = ncuid;
         const overlay = document.createElement('div');
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;background:var(--bg);display:flex;flex-direction:column;font-family:inherit;opacity:0;transition:opacity 0.2s;';
         const btnBase = 'padding:6px 20px;border-radius:20px;border:none;font-size:14px;font-family:inherit;cursor:pointer;font-weight:500;';
@@ -1525,37 +1529,77 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         function closePanel() { overlay.remove(); }
 
+        // 尝试获取用户资料：优先用 ncuid，失败则用 uid
+        async function fetchProfileForPanel() {
+            let data = null;
+            // 优先 ncuid 路径
+            if (ncuid) {
+                try {
+                    const res = await apiFetch('/v1/users/profile?ncuid=' + encodeURIComponent(ncuid));
+                    if (res.ok) data = await res.json();
+                } catch (e) {}
+            }
+            // 失败则 uid 路径
+            if (!data && uid) {
+                try {
+                    const res = await apiFetch(profileQuery(uid));
+                    if (res.ok) data = await res.json();
+                } catch (e) {}
+            }
+            return data;
+        }
+
+        // 尝试获取动态：优先用 ncuid，失败则用 uid
+        async function fetchMomentsForPanel() {
+            let data = null;
+            if (ncuid) {
+                try {
+                    const res = await apiFetch('/v1/moments/user?uid=' + encodeURIComponent(ncuid) + '&limit=50');
+                    if (res.ok) data = await res.json();
+                } catch (e) {}
+            }
+            if (!data && uid) {
+                try {
+                    const res = await apiFetch('/v1/moments/user?uid=' + encodeURIComponent(uid) + '&limit=50');
+                    if (res.ok) data = await res.json();
+                } catch (e) {}
+            }
+            return data;
+        }
+
         async function load() {
             try {
-                const [profRes, momentsRes] = await Promise.all([
-                    apiFetch(profileQuery(uid)),
-                    apiFetch('/v1/moments/user?uid=' + encodeURIComponent(uid) + '&limit=50')
+                const [u, momentsData] = await Promise.all([
+                    fetchProfileForPanel(),
+                    fetchMomentsForPanel()
                 ]);
-                const u = await profRes.json();
-                const momentsData = await momentsRes.json();
-                if (u.error) {
-                    // 记录无效 UID，避免重复请求
-                    if (/invalid|not found|不存在/i.test(u.error)) {
-                        invalidUidCache.add(uid.toUpperCase());
+                if (!u || u.error) {
+                    const errMsg = (u && u.error) || '无效的用户 ID';
+                    if (u && /invalid|not found|不存在/i.test(u.error)) {
+                        if (ncuid) invalidUidCache.add(ncuid.toUpperCase());
+                        if (uid) invalidUidCache.add(uid.toUpperCase());
                     }
-                    scroll.innerHTML = '<div style="text-align:center;padding:40px;color:#999;">' + u.error + '</div>';
+                    scroll.innerHTML = '<div style="text-align:center;padding:40px;color:#999;">' + errMsg + '</div>';
                     return;
                 }
                 // 刷新缓存
                 u._ts = Date.now();
-                userProfileCache.set(uid.toUpperCase(), u);
+                const cacheKey = (ncuid || uid || '').toUpperCase();
+                userProfileCache.set(cacheKey, u);
+                invalidUidCache.delete(cacheKey);
                 // 计算关系：self / friend / pending_received / none
                 let relation = 'none';
-                if (uid.toUpperCase() === myUid.toUpperCase()) {
+                const profileUid = u.uid || u.user_id || uid || '';
+                if (profileUid.toUpperCase() === myUid.toUpperCase() || (ncuid && ncuid.toUpperCase() === myUid.toUpperCase())) {
                     relation = 'self';
-                } else if (contacts.friends.some(f => f.uid.toUpperCase() === uid.toUpperCase())) {
+                } else if (contacts.friends.some(f => f.uid.toUpperCase() === (profileUid || '').toUpperCase() || (f.displayUid && f.displayUid.toUpperCase() === (profileUid || '').toUpperCase()))) {
                     relation = 'friend';
                 } else {
                     // 检查是否有来自该用户的好友申请
                     try {
                         const reqRes = await apiFetch('/v1/friends/requests');
                         const reqData = await reqRes.json();
-                        const incoming = (reqData.requests || []).some(r => uidEq(getUid(r) || r.from_ncuid || r.from_uid, uid));
+                        const incoming = (reqData.requests || []).some(r => uidEq(getUid(r) || r.from_ncuid || r.from_uid, profileUid || ncuid || uid));
                         if (incoming) relation = 'pending_received';
                     } catch (e) {}
                 }
@@ -2491,6 +2535,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 滚动加载历史消息状态
     const convOffset = {};        // convKey → 当前已加载的消息偏移量
     const convHasMore = {};       // convKey → boolean
+    // 会话消息 DOM 缓存（切换会话时保留旧消息 DOM）
+    const convCache = {};         // convKey → { fragment, scrollTop, seenMsgIds, offset, hasMore, lastTs }
     let isLoadingMore = false;
     let isLoadingMoreReqId = 0;
 
@@ -3332,7 +3378,240 @@ document.addEventListener('DOMContentLoaded', async () => {
         return div;
     }
 
+    // ===== 会话消息缓存 =====
+
+    // 缓存当前会话的 DOM 和状态
+    function cacheCurrentConversation() {
+        const key = currentConv?.key;
+        if (!key) return;
+        // 将当前所有 DOM 节点移入 DocumentFragment（保持事件监听器）
+        const fragment = document.createDocumentFragment();
+        while (messagesContainer.firstChild) {
+            fragment.appendChild(messagesContainer.firstChild);
+        }
+        convCache[key] = {
+            fragment,
+            scrollTop: messagesContainer.scrollTop,
+            seenMsgIds: seenMsgIds[key] ? new Set(seenMsgIds[key]) : new Set(),
+            offset: convOffset[key] || 0,
+            hasMore: convHasMore[key] !== false,
+            lastTs: lastRenderedTs || 0
+        };
+        // 移除滚动监听
+        if (messagesContainer._scrollHandler) {
+            messagesContainer.removeEventListener('scroll', messagesContainer._scrollHandler);
+            messagesContainer._scrollHandler = null;
+        }
+    }
+
+    // 从缓存恢复会话
+    function restoreConversation(key) {
+        const cached = convCache[key];
+        if (!cached) return false;
+        // 检查缓存 fragment 是否为空（可能因竞态条件导致空缓存）
+        if (!cached.fragment || cached.fragment.childNodes.length === 0) {
+            delete convCache[key];
+            return false;
+        }
+        // 恢复缓存的 DOM
+        messagesContainer.appendChild(cached.fragment);
+        // 恢复滚动位置（同步设置，不依赖 rAF，避免与 switchConversation 中的 scrollToBottom 冲突）
+        messagesContainer.scrollTop = cached.scrollTop;
+        // 恢复状态
+        seenMsgIds[key] = cached.seenMsgIds;
+        convOffset[key] = cached.offset;
+        convHasMore[key] = cached.hasMore;
+        lastRenderedTs = cached.lastTs;
+        // 重建 lastRenderedMsg（用于连续消息检测）
+        const lastMsgEl = messagesContainer.querySelector('.message:last-child');
+        lastRenderedMsg = lastMsgEl ? {
+            convKey: key,
+            from_uid: lastMsgEl.dataset.fromUid || '',
+            element: lastMsgEl
+        } : null;
+        return true;
+    }
+
+    // 后台拉取最新消息（带请求 ID 防竞态）
+    // 同步完成后丢弃旧缓存，用最新消息重建 DOM，只缓存最新一页
+    let fetchLatestReqId = 0;
+    async function fetchLatestMessages(type, id, convKey) {
+        const PAGE_SIZE = 100;
+        const reqId = ++fetchLatestReqId;
+        // 显示同步中指示器
+        if (syncIndicator) syncIndicator.style.display = '';
+        try {
+            const historyUrl = type === 'group'
+                ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`
+                : `/v1/direct/messages/v2?with_uid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
+            const res = await apiFetch(historyUrl);
+            const data = await res.json();
+            if (data.error) return;
+            // 检查是否已切换会话或该请求已过期
+            if (reqId !== fetchLatestReqId || currentConv?.key !== convKey) return;
+
+            // ASC 顺序
+            const msgs = (data.messages || []).slice().reverse();
+
+            // 重建期间隐藏容器，避免清空容器导致 scrollTop 跳转到顶部
+            messagesContainer.style.visibility = 'hidden';
+            // 清空容器
+            messagesContainer.innerHTML = '';
+            // 重置渲染状态
+            lastRenderedMsg = null;
+            lastRenderedTs = 0;
+            // 重置该会话的已见集合
+            if (seenMsgIds[convKey]) {
+                delete seenMsgIds[convKey];
+            }
+            if (!seenMsgIds[convKey]) {
+                seenMsgIds[convKey] = new Set();
+            }
+            const currentSeen = seenMsgIds[convKey];
+
+            // 重新渲染所有消息（时间分隔符会基于消息时间戳重新计算，不会错位）
+            msgs.forEach(msg => {
+                if (reqId !== fetchLatestReqId || currentConv?.key !== convKey) return;
+                appendMessage(msg, convKey, currentSeen);
+            });
+
+            // 再次检查
+            if (reqId !== fetchLatestReqId || currentConv?.key !== convKey) return;
+
+            // 更新状态
+            convOffset[convKey] = msgs.length;
+            convHasMore[convKey] = msgs.length >= PAGE_SIZE;
+
+            // 先滚动到底部，再缓存（确保缓存中的 scrollTop 是底部位置）
+            scrollToBottom(true);
+
+            // 丢弃旧缓存，缓存最新渲染的 DOM（只缓存最新一页）
+            // 注意：不能调用 cacheCurrentConversation()，它会清空容器
+            delete convCache[convKey];
+            if (currentConv?.key) {
+                const frag = document.createDocumentFragment();
+                Array.from(messagesContainer.children).forEach(el => frag.appendChild(el.cloneNode(true)));
+                convCache[currentConv.key] = {
+                    fragment: frag,
+                    scrollTop: messagesContainer.scrollTop,
+                    seenMsgIds: seenMsgIds[currentConv.key] ? new Set(seenMsgIds[currentConv.key]) : new Set(),
+                    offset: convOffset[currentConv.key] || 0,
+                    hasMore: convHasMore[currentConv.key] !== false,
+                    lastTs: lastRenderedTs || 0
+                };
+            }
+
+            // 触发淡入动画，同时恢复可见性（动画从 opacity: 0 开始，不会闪）
+            messagesContainer.classList.remove('fade-in');
+            void messagesContainer.offsetWidth;
+            messagesContainer.classList.add('fade-in');
+            messagesContainer.style.visibility = '';
+
+            // 重新附加滚动加载监听器
+            attachScrollListener(type, id, convKey, PAGE_SIZE);
+
+            // 标记已读
+            if (type === 'group') {
+                await apiFetch('/v1/groups/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ group_id: id }) });
+            } else {
+                await apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(withUidParam(id)) });
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            // 仅当此请求仍是最新的时才隐藏同步指示器
+            if (reqId === fetchLatestReqId && syncIndicator) {
+                syncIndicator.style.display = 'none';
+            }
+        }
+    }
+
+    // 附加滚动加载历史消息监听器（提取为独立函数，缓存/无缓存路径共用）
+    function attachScrollListener(type, id, convKey, PAGE_SIZE) {
+        // 移除旧的滚动监听
+        if (messagesContainer._scrollHandler) {
+            messagesContainer.removeEventListener('scroll', messagesContainer._scrollHandler);
+        }
+        messagesContainer._scrollHandler = async () => {
+            if (!convHasMore[convKey] || isLoadingMore) return;
+            if (messagesContainer.scrollTop > 5) return;
+
+            console.log('[LOAD_MORE] triggering, offset=', convOffset[convKey]);
+            isLoadingMore = true;
+            const loadReqId = ++isLoadingMoreReqId;
+            const currentHeight = messagesContainer.scrollHeight;
+            try {
+                const offset = convOffset[convKey] || 0;
+                const olderUrl = type === 'group'
+                    ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=${offset}`
+                    : `/v1/direct/messages/v2?with_uid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=${offset}`;
+                const res = await apiFetch(olderUrl);
+                const data = await res.json();
+                console.log('[LOAD_MORE] response:', olderUrl, 'msgs:', (data.messages||[]).length);
+                if (loadReqId !== isLoadingMoreReqId) return;
+                if (data.error) return;
+
+                // Go 返回 DESC（新→旧），反转为 ASC（旧→新）
+                const olderMsgs = (data.messages || []).slice().reverse();
+                if (olderMsgs.length === 0) {
+                    convHasMore[convKey] = false;
+                    return;
+                }
+                // 更新偏移量
+                convOffset[convKey] += olderMsgs.length;
+                convHasMore[convKey] = olderMsgs.length >= PAGE_SIZE;
+
+                // 过滤已加载的消息
+                const currentSeen = seenMsgIds[convKey] || new Set();
+                const newMsgs = olderMsgs.filter(msg => msg.id && !currentSeen.has(msg.id));
+                console.log('[LOAD_MORE] filtered:', olderMsgs.length, '→', newMsgs.length, 'seen:', currentSeen.size);
+                if (newMsgs.length === 0) {
+                    convHasMore[convKey] = false;
+                    return;
+                }
+
+                // 记录展开时的滚动位置
+                const scrollBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop;
+
+                // 创建一个 fragment 批量插入
+                const frag = document.createDocumentFragment();
+                let prevTs = 0;
+                newMsgs.forEach((msg) => {
+                    const msgTs = msg.created_at || 0;
+                    if (prevTs && msgTs && (msgTs - prevTs) > 300) {
+                        frag.appendChild(createTimeSeparator(msgTs));
+                    }
+                    const el = createMessageElement(msg, convKey, seenMsgIds[convKey]);
+                    if (el) frag.appendChild(el);
+                    prevTs = msgTs;
+                });
+                messagesContainer.insertBefore(frag, messagesContainer.firstChild);
+
+                // 调整滚动位置，保持可视区域不变
+                messagesContainer.scrollTop = messagesContainer.scrollHeight - scrollBottom;
+            } catch (e) {
+                console.error(e);
+            } finally {
+                isLoadingMore = false;
+            }
+        };
+        messagesContainer.addEventListener('scroll', messagesContainer._scrollHandler);
+    }
+
+    let _switchingConv = false;
     async function switchConversation(type, id, name, event) {
+        // 防止快速双击导致并发切换
+        if (_switchingConv) return;
+        _switchingConv = true;
+        try {
+        // 淡出动画
+        messagesContainer.classList.remove('fade-in');
+        messagesContainer.classList.add('fade-out');
+        await new Promise(r => setTimeout(r, 100));
+
+        // 缓存当前会话（此时容器已不可见，但 DOM 仍完整）
+        cacheCurrentConversation();
+
         document.querySelectorAll('.contact-item').forEach(el => el.classList.remove('active'));
         if (event && event.currentTarget) {
             event.currentTarget.classList.add('active');
@@ -3370,144 +3649,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     
         chatHeader.querySelector('.chat-title').textContent = name;
         headerMenuBtn.style.display = type === 'group' ? 'inline-flex' : 'none';
-        messagesContainer.innerHTML = '';
-        lastRenderedMsg = null;
-        lastRenderedTs = 0;
-
-        // 重置滚动加载状态
-        convOffset[convKey] = 0;
-        convHasMore[convKey] = true;
-
-        // 清除该会话的已见消息记录，确保历史消息重新显示
-        if (seenMsgIds[convKey]) {
-            delete seenMsgIds[convKey];
-        }
-
-        // 移除旧的滚动监听
-        messagesContainer._scrollHandler && messagesContainer.removeEventListener('scroll', messagesContainer._scrollHandler);
 
         pendingQuote = null;
         quotePreview.style.display = 'none';
 
-        const PAGE_SIZE = 100;
-        const reqId = ++switchRequestId;
+        // 移除淡出类
+        messagesContainer.classList.remove('fade-out');
 
-        try {
-            // Go 后端: direct 用 with_uid, group 用 group_id；返回 DESC（新→旧），需反转为 ASC（旧→新）
-            // V2 接口用 offset 分页
-            // 服务端 with_uid 同时接受 uid/ncuid，无需区分
-            const historyUrl = type === 'group'
-                ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`
-                : `/v1/direct/messages/v2?with_uid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
-            const res = await apiFetch(historyUrl);
-            const data = await res.json();
-
-            if (reqId !== switchRequestId) return;
-
-            if (data.error) {
-                console.error(data.error);
-                messagesContainer.innerHTML = '<div class="system-msg">加载消息失败，请刷新重试</div>';
-                return;
-            }
-
-            // Go 返回 DESC 顺序（新→旧），反转为 ASC（旧→新）以便渲染
-            const msgs = (data.messages || []).slice().reverse();
-
-            // 记录已加载数量
-            convOffset[convKey] = msgs.length;
-            convHasMore[convKey] = msgs.length >= PAGE_SIZE;
-            console.log('[INIT] msgs loaded:', msgs.length, 'hasMore:', convHasMore[convKey], 'offset:', convOffset[convKey]);
-
-            // 重新创建该会话的已见集合
-            if (!seenMsgIds[convKey]) {
-                seenMsgIds[convKey] = new Set();
-            }
-            const currentSeen = seenMsgIds[convKey];
-
-            msgs.forEach(msg => {
-                appendMessage(msg, convKey, currentSeen);
-            });
-            messagesContainer.classList.remove('fade-in');
-            void messagesContainer.offsetWidth;
-            messagesContainer.classList.add('fade-in');
+        // 尝试从缓存恢复（快速展示，随后 fetchLatestMessages 会重建 DOM 替换缓存）
+        if (convCache[convKey]) {
+            restoreConversation(convKey);
+            // 立即滚动到底部，避免用户看到缓存 DOM 在顶部（restoreConversation 用 rAF 恢复 scrollTop，不够及时）
             scrollToBottom(true);
-            // 标记已读
-            if (type === 'group') {
-                await apiFetch('/v1/groups/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ group_id: id }) });
-            } else {
-                await apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(withUidParam(id)) });
-            }
+            // 后台拉取最新消息（会重建 DOM、替换缓存、淡入动画、滚动到底部）
+            fetchLatestMessages(type, id, convKey);
+            return;
+        }
 
-            // 设置滚动到顶部加载更多
-            messagesContainer._scrollHandler = async () => {
-                if (!convHasMore[convKey] || isLoadingMore) return;
-                if (messagesContainer.scrollTop > 5) return;
-
-                console.log('[LOAD_MORE] triggering, offset=', convOffset[convKey]);
-                isLoadingMore = true;
-                const loadReqId = ++isLoadingMoreReqId;
-                const currentHeight = messagesContainer.scrollHeight;
-                try {
-                    const offset = convOffset[convKey] || 0;
-                    const olderUrl = type === 'group'
-                        ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=${offset}`
-                        : `/v1/direct/messages/v2?${withParam}=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=${offset}`;
-                    const res = await apiFetch(olderUrl);
-                    const data = await res.json();
-                    console.log('[LOAD_MORE] response:', olderUrl, 'msgs:', (data.messages||[]).length);
-                    if (loadReqId !== isLoadingMoreReqId) return;
-                    if (data.error) return;
-
-                    // Go 返回 DESC（新→旧），反转为 ASC（旧→新）
-                    const olderMsgs = (data.messages || []).slice().reverse();
-                    if (olderMsgs.length === 0) {
-                        convHasMore[convKey] = false;
-                        return;
-                    }
-                    // 更新偏移量
-                    convOffset[convKey] += olderMsgs.length;
-                    convHasMore[convKey] = olderMsgs.length >= PAGE_SIZE;
-
-                    // 过滤已加载的消息
-                    const currentSeen = seenMsgIds[convKey] || new Set();
-                    const newMsgs = olderMsgs.filter(msg => msg.id && !currentSeen.has(msg.id));
-                    console.log('[LOAD_MORE] filtered:', olderMsgs.length, '→', newMsgs.length, 'seen:', currentSeen.size);
-                    if (newMsgs.length === 0) {
-                        convHasMore[convKey] = false;
-                        return;
-                    }
-
-                    // 记录展开时的滚动位置
-                    const scrollBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop;
-
-                    // 创建一个 fragment 批量插入
-                    const frag = document.createDocumentFragment();
-                    let prevTs = 0;
-                    newMsgs.forEach((msg) => {
-                        const msgTs = msg.created_at || 0;
-                        if (prevTs && msgTs && (msgTs - prevTs) > 300) {
-                            frag.appendChild(createTimeSeparator(msgTs));
-                        }
-                        const el = createMessageElement(msg, convKey, seenMsgIds[convKey]);
-                        if (el) frag.appendChild(el);
-                        prevTs = msgTs;
-                    });
-                    messagesContainer.insertBefore(frag, messagesContainer.firstChild);
-
-                    // 调整滚动位置，保持可视区域不变
-                    messagesContainer.scrollTop = messagesContainer.scrollHeight - scrollBottom;
-                } catch (e) {
-                    console.error(e);
-                } finally {
-                    isLoadingMore = false;
-                }
-            };
-            messagesContainer.addEventListener('scroll', messagesContainer._scrollHandler);
-        } catch (e) {
-            console.error(e);
-            if (reqId === switchRequestId) {
-                messagesContainer.innerHTML = '<div class="system-msg">网络错误，无法加载消息</div>';
-            }
+        // 无缓存：重置状态，直接调用 fetchLatestMessages（会显示同步中并加载）
+        messagesContainer.innerHTML = '';
+        lastRenderedMsg = null;
+        lastRenderedTs = 0;
+        convOffset[convKey] = 0;
+        convHasMore[convKey] = true;
+        if (seenMsgIds[convKey]) {
+            delete seenMsgIds[convKey];
+        }
+        messagesContainer._scrollHandler && messagesContainer.removeEventListener('scroll', messagesContainer._scrollHandler);
+        fetchLatestMessages(type, id, convKey);
+        } finally {
+            _switchingConv = false;
         }
     }
 
@@ -3595,7 +3766,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             avatarImg.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const uid = isSelf ? myUid : fromUid;
-                if (uid) openSpacePanel(uid);
+                const ncuid = isSelf ? '' : profileNcuid;
+                if (uid || ncuid) openSpacePanel(uid, ncuid);
             });
             msgDiv.appendChild(avatarImg);
 
@@ -3865,8 +4037,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         avatarImg.addEventListener('click', (e) => {
             e.stopPropagation();
             const uid = isSelf ? myUid : fromUid;
-            if (uid) {
-                openSpacePanel(uid);
+            const ncuid = isSelf ? '' : profileNcuid;
+            if (uid || ncuid) {
+                openSpacePanel(uid, ncuid);
             }
         });
         msgDiv.appendChild(avatarImg);
@@ -3941,6 +4114,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!msg || !msg.id) return;
         if (!convKey) convKey = currentConv?.key;
         if (!convKey) return;
+        // 安全检查：如果当前会话已切换，不追加消息（防止竞态条件导致消息显示在错误会话中）
+        if (currentConv?.key !== convKey) return;
     
         if (!currentSeen) {
             if (!seenMsgIds[convKey]) seenMsgIds[convKey] = new Set();

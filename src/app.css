@@ -490,8 +490,16 @@ body::-webkit-scrollbar {
 	from { opacity: 0; }
 	to { opacity: 1; }
 }
+@keyframes msgFadeOut {
+	from { opacity: 1; }
+	to { opacity: 0; }
+}
 .messages.fade-in {
-	animation: msgFadeIn 0.6s ease;
+	animation: msgFadeIn 0.12s ease;
+}
+.messages.fade-out {
+	animation: msgFadeOut 0.1s ease;
+	opacity: 0;
 }
 
 .messages::-webkit-scrollbar {
@@ -1829,6 +1837,22 @@ body::-webkit-scrollbar {
 
 .input-area {
 	position: relative;
+}
+
+.sync-indicator {
+	position: absolute;
+	bottom: 10px;
+	left: 12px;
+	font-size: 14px;
+	color: var(--text-secondary, #888);
+	opacity: 0.8;
+	pointer-events: none;
+	animation: syncPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes syncPulse {
+	0%, 100% { opacity: 0.8; }
+	50% { opacity: 0.4; }
 }
 
 .btn:active,.contact-item:active,.context-menu-item:active,.emoticon-item:active,.file-download-btn:active,.icon-btn:active,.more-menu button:active,.quote-preview .icon-btn:active,.red-packet-card:active {
