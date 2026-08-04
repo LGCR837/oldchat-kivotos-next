@@ -196,7 +196,7 @@ const IS_TAURI = _detectIsTauri();
 
 // 默认值（硬编码回退）
 const DEFAULT_BACKEND_ORIGIN = 'http://oc.mcl0.dpdns.org';
-const DEFAULT_MEDIA_ORIGIN   = 'http://60.205.94.101:8080';
+const DEFAULT_MEDIA_ORIGIN   = 'http://files.mcl0.dpdns.org';
 
 // 候选服务器列表（参考服务器发布的 client.md 约定）
 const BACKEND_URL_CANDIDATES = [
@@ -249,7 +249,19 @@ function refreshEndpoints() {
 
 function resolveMediaUrl(url) {
     if (!url) return url;
+    // files.mcl0.dpdns.org 无 CORS 头 + 60 速度快，统一改走 60
+    if (/^https?:\/\/files\.mcl0\.dpdns\.org\//i.test(url)) {
+        return 'http://60.205.94.101:8080' + url.replace(/^https?:\/\/files\.mcl0\.dpdns\.org/i, '/v1/uploads');
+    }
     if (/^(https?:|data:|blob:)/.test(url)) return url;
+    // 头像从 60 服务器拉取（更快）
+    if (url.startsWith('/v1/uploads/avatars/')) {
+        return 'http://60.205.94.101:8080' + url;
+    }
+    // 其他 /v1/uploads/{type}/{file} → files.mcl0.dpdns.org/{type}/{file}
+    if (url.startsWith('/v1/uploads/')) {
+        return 'http://files.mcl0.dpdns.org' + url.replace('/v1/uploads', '');
+    }
     if (MEDIA_BASE && url.startsWith('/')) return MEDIA_BASE + url;
     return url;
 }
@@ -390,8 +402,10 @@ function escapeRegExp(string) {
                 // 标记正在处理中，防止重复触发
                 if (el.getAttribute('data-mc-' + attr + '-loading') === '1') return;
                 el.setAttribute('data-mc-' + attr + '-loading', '1');
-                getCachedUrlOrPass(val, (newUrl) => {
-                    if (newUrl !== val) {
+                // 先经过 resolveMediaUrl 转换（files. → 60），避免 CORS
+                const cacheUrl = resolveMediaUrl(val);
+                getCachedUrlOrPass(cacheUrl, (newUrl) => {
+                    if (newUrl !== cacheUrl) {
                         try { el.setAttribute(attr, newUrl); } catch (e) {}
                     }
                     el.removeAttribute('data-mc-' + attr + '-loading');
@@ -476,6 +490,27 @@ function escapeRegExp(string) {
                 const tx = db.transaction(STORE_NAME, 'readwrite');
                 tx.objectStore(STORE_NAME).clear();
                 tx.oncomplete = () => r();
+            }));
+        }, getSize: () => {
+            return getDb().then(db => new Promise((resolve, reject) => {
+                try {
+                    const tx = db.transaction(STORE_NAME, 'readonly');
+                    const st = tx.objectStore(STORE_NAME).openCursor();
+                    let count = 0;
+                    let totalBytes = 0;
+                    st.onsuccess = (e) => {
+                        const cursor = e.target.result;
+                        if (cursor) {
+                            count++;
+                            const rec = cursor.value;
+                            if (rec && rec.blob && rec.blob.size) totalBytes += rec.blob.size;
+                            cursor.continue();
+                        } else {
+                            resolve({ count, totalBytes });
+                        }
+                    };
+                    st.onerror = (e) => reject(e.target.error);
+                } catch (e) { reject(e); }
             }));
         }
     };
@@ -997,7 +1032,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     const pinSidebarBtn = document.getElementById('pinSidebarBtn');
     const mobileMenuBtn = document.getElementById('mobileMenuBtn');
     const themeToggleBtn = document.getElementById('themeToggleBtn');
-    const headerMenuBtn = document.getElementById('headerMenuBtn');
+
+    // 聊天界面自绘滚动条
+    let chatScrollbar = null;
+    if (window['dumogu-scrollbar'] && window['dumogu-scrollbar'].DumoguScrollbar) {
+        chatScrollbar = new window['dumogu-scrollbar'].DumoguScrollbar({ keepShow: true });
+        chatScrollbar.bind(messagesContainer);
+        const chatArea = document.querySelector('.chat-area');
+        chatScrollbar.mount(chatArea);
+    }
 
     const quotePreview = document.getElementById('quotePreview');
     const quotePreviewText = quotePreview.querySelector('.quote-preview-text');
@@ -1516,10 +1559,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const btnBase = 'padding:6px 20px;border-radius:20px;border:none;font-size:14px;font-family:inherit;cursor:pointer;font-weight:500;';
         overlay.innerHTML = `
             <div style="background:var(--header-bg);color:#fff;padding:13px 12px;display:flex;align-items:center;font-size:15px;font-weight:500;flex-shrink:0;position:relative;">
-                <button onclick="this.closest('div[style*=fixed]').remove()" style="position:absolute;left:12px;background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:4px 8px;border-radius:8px;"><i class="fa-solid fa-chevron-left"></i></button>
+                <button id="sp-close-btn" style="position:absolute;left:12px;background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:4px 8px;border-radius:8px;"><i class="fa-solid fa-chevron-left"></i></button>
                 <span style="width:100%;text-align:center;">用户空间</span>
             </div>
-            <div id="sp-scroll" style="flex:1;overflow-y:auto;scrollbar-color:rgba(0,0,0,0.2) transparent;"></div>
+            <div id="sp-scroll" style="flex:1;overflow-y:auto;position:relative;"></div>
         `;
         document.body.appendChild(overlay);
         requestAnimationFrame(() => overlay.style.opacity = '1');
@@ -1527,7 +1570,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         const scroll = overlay.querySelector('#sp-scroll');
         scroll.innerHTML = '<div style="text-align:center;padding:40px;color:#999;">加载中...</div>';
 
-        function closePanel() { overlay.remove(); }
+        // 初始化自绘滚动条
+        let spScrollbar = null;
+        if (window['dumogu-scrollbar'] && window['dumogu-scrollbar'].DumoguScrollbar) {
+            spScrollbar = new window['dumogu-scrollbar'].DumoguScrollbar({ keepShow: true });
+            spScrollbar.bind(scroll);
+            spScrollbar.mount(overlay);
+        }
+
+        function closePanel() {
+            if (spScrollbar) { spScrollbar.destroy(); spScrollbar = null; }
+            overlay.remove();
+        }
+        overlay.querySelector('#sp-close-btn').addEventListener('click', closePanel);
 
         // 尝试获取用户资料：优先用 ncuid，失败则用 uid
         async function fetchProfileForPanel() {
@@ -1536,14 +1591,20 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (ncuid) {
                 try {
                     const res = await apiFetch('/v1/users/profile?ncuid=' + encodeURIComponent(ncuid));
-                    if (res.ok) data = await res.json();
+                    if (res.ok) {
+                        const d = await res.json();
+                        if (d && !d.error) data = d;
+                    }
                 } catch (e) {}
             }
-            // 失败则 uid 路径
+            // 失败则 uid 路径（注意：ncuid 不能传入 ?uid=，会 400，所以 uid 路径只在 ncuid 路径无结果时尝试）
             if (!data && uid) {
                 try {
                     const res = await apiFetch(profileQuery(uid));
-                    if (res.ok) data = await res.json();
+                    if (res.ok) {
+                        const d = await res.json();
+                        if (d && !d.error) data = d;
+                    }
                 } catch (e) {}
             }
             return data;
@@ -1552,16 +1613,24 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 尝试获取动态：优先用 ncuid，失败则用 uid
         async function fetchMomentsForPanel() {
             let data = null;
+            // 优先 ncuid 路径（注意：ncuid 不能传入 ?uid=，会 400）
             if (ncuid) {
                 try {
-                    const res = await apiFetch('/v1/moments/user?uid=' + encodeURIComponent(ncuid) + '&limit=50');
-                    if (res.ok) data = await res.json();
+                    const res = await apiFetch('/v1/moments/user?ncuid=' + encodeURIComponent(ncuid) + '&limit=50');
+                    if (res.ok) {
+                        const d = await res.json();
+                        if (d && !d.error) data = d;
+                    }
                 } catch (e) {}
             }
+            // 失败则 uid 路径
             if (!data && uid) {
                 try {
                     const res = await apiFetch('/v1/moments/user?uid=' + encodeURIComponent(uid) + '&limit=50');
-                    if (res.ok) data = await res.json();
+                    if (res.ok) {
+                        const d = await res.json();
+                        if (d && !d.error) data = d;
+                    }
                 } catch (e) {}
             }
             return data;
@@ -1629,7 +1698,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 let momentsHtml = '<div style="text-align:center;padding:40px;color:#999;">暂无动态</div>';
                 const mom = momentsData.moments || [];
                 if (mom.length > 0) {
-                    momentsHtml = '<div style="padding:0 16px 20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;max-width:960px;margin:0 auto;align-items:start;">';
+                    momentsHtml = '<div style="padding:0 16px 20px;column-count:3;column-gap:10px;max-width:960px;margin:0 auto;">';
                     mom.forEach(m => {
                         // image_url 可能是单个 URL 或 JSON 字符串数组
                         let mediaUrls = [];
@@ -1651,13 +1720,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                             });
                             media += '</div>';
                         }
-                        momentsHtml += '<div style="background:var(--chat-bg);border-radius:12px;padding:14px 16px;" data-moment-id="' + (m.id || '') + '">' +
+                        momentsHtml += '<div style="background:var(--panel-bg);border-radius:12px;padding:14px 16px;border:1px solid var(--border-color);break-inside:avoid;margin-bottom:10px;" data-moment-id="' + (m.id || '') + '">' +
                             '<div style="font-size:11px;color:var(--secondary-text);margin-bottom:6px;">' + fmtTs(m.created_at) + '</div>' +
                             '<div style="font-size:14px;color:var(--text);line-height:1.6;white-space:pre-wrap;word-break:break-word;">' + (m.body || '') + '</div>' +
                             media +
                             '<div style="display:flex;gap:16px;margin-top:10px;align-items:center;">' +
                                 '<button class="sp-like-btn" data-moment-id="' + (m.id || '') + '" data-liked="' + (m.liked ? '1' : '0') + '" style="background:none;border:none;color:' + (m.liked ? '#ff4757' : 'var(--secondary-text)') + ';font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px;"><i class="' + (m.liked ? 'fa-solid' : 'fa-regular') + ' fa-heart"></i> ' + (m.likes || 0) + '</button>' +
-                                '<button class="sp-comment-btn" data-moment-id="' + (m.id || '') + '" style="background:none;border:none;color:var(--secondary-text);font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px;"><i class="fa-solid fa-comment"></i> ' + (m.comments_count || 0) + '</button>' +
+                                '<button class="sp-comment-btn" data-moment-id="' + (m.id || '') + '" style="background:none;border:none;color:var(--secondary-text);font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px;"><i class="fa-solid fa-comment"></i> ' + (m.comment_count || m.comments_count || m.total_comments || m.reply_count || (m.comments && m.comments.length) || 0) + '</button>' +
                             '</div>' +
                             '</div>';
                     });
@@ -1681,7 +1750,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
                 const coverUrl = u.cover_url ? resolveMediaUrl(u.cover_url) : '';
                 const coverHtml = coverUrl
-                    ? '<div style="position:relative;height:160px;background-image:url(\'' + coverUrl.replace(/'/g, "\\'") + '\');background-size:cover;background-position:center;"></div>'
+                    ? '<div style="position:relative;height:320px;background-image:url(\'' + coverUrl.replace(/'/g, "\\'") + '\');background-size:cover;background-position:center;"></div>'
                     : '';
                 scroll.innerHTML =
                     coverHtml +
@@ -1697,6 +1766,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     '<div style="font-size:14px;font-weight:600;padding:14px 16px 8px;">' + (relation === 'self' ? '我的动态' : 'TA 的动态') + '</div>' +
                     momentsHtml +
                     '</div>';
+
+                // 内容渲染后更新自绘滚动条
+                if (spScrollbar) requestAnimationFrame(() => spScrollbar.update());
 
                 // 点赞和评论事件
                 scroll.querySelectorAll('.sp-like-btn').forEach(btn => {
@@ -2297,7 +2369,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         async function load() {
             try {
                 const [profRes, friendsRes] = await Promise.all([
-                    apiFetch(profileQuery(myUid)),
+                    apiFetch('/v1/users/profile?ncuid=' + encodeURIComponent(myUid)),
                     apiFetch('/v1/friends')
                 ]);
                 const prof = await profRes.json();
@@ -2881,19 +2953,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (ncuid) {
                 const res = await apiFetch('/v1/users/profile?ncuid=' + encodeURIComponent(ncuid));
                 if (res.ok) {
-                    data = await res.json();
+                    const d = await res.json();
+                    if (d && !d.error) data = d;
                 }
             }
-            // ncuid 查询失败，尝试用 uid 查询（?uid= 路径）
+            // ncuid 查询失败，尝试用 uid 查询（?uid= 路径，注意 ncuid 不能传入 ?uid=）
             if (!data && uid) {
                 const res = await apiFetch('/v1/users/profile?uid=' + encodeURIComponent(uid));
                 if (res.ok) {
-                    data = await res.json();
+                    const d = await res.json();
+                    if (d && !d.error) data = d;
                 }
             }
             // 两种都失败（网络错误等情况），不标记无效，允许后续重试
             if (!data) return null;
-            // 服务器返回错误信息
+            // 服务器返回错误信息（理论上上面已过滤，但保留防御性检查）
             if (data.error && /invalid|not found|不存在/i.test(data.error)) {
                 invalidUidCache.add(key);
                 return null;
@@ -2909,14 +2983,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 3秒后重试加载用户资料（用于聊天界面显示 NCUID/默认头像时自动重试）
     // isAvatar=true 时更新头像 img 元素，否则更新昵称文本
-    function scheduleProfileRetry(uid, ncuid, element, isAvatar) {
+    // 失败后递增间隔重试最多3次（3s/6s/12s），避免新用户一直卡在 NCUID+默认头像
+    function scheduleProfileRetry(uid, ncuid, element, isAvatar, retry) {
         if (!uid && !ncuid) return;
         if (!element || !element.isConnected) return;
+        const attempt = retry || 0;
+        const maxRetry = 3;
+        const delay = 3000 * Math.pow(2, attempt);
 
         setTimeout(async () => {
             if (!element.isConnected) return;
             const profile = await fetchUserProfile(uid, ncuid, true);
-            if (!profile) return;
+            if (!profile) {
+                if (attempt < maxRetry) scheduleProfileRetry(uid, ncuid, element, isAvatar, attempt + 1);
+                return;
+            }
             if (isAvatar) {
                 const newAvatar = profile.avatar_url ? resolveMediaUrl(profile.avatar_url) : 'assets/default-avatar.png';
                 if (element.src !== newAvatar) element.src = newAvatar;
@@ -2924,7 +3005,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const newName = profile.display_name || profile.username || (ncuid || uid || '');
                 if (element.textContent !== newName) element.textContent = newName;
             }
-        }, 3000);
+        }, delay);
     }
 
     // 根据 uid 查找联系人显示名
@@ -2977,6 +3058,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function handleWsMessage(msg) {
+        if (!msg) return;
+        // 兼容服务器裸消息格式（无 type 包装，直接推送消息对象）
+        // 新格式: {id, from_uid, from_ncuid, body, msg_type, created_at, group_id?, sort_seq?, group_seq?}
+        if (!msg.type && msg.id && (msg.from_uid || msg.from_ncuid) && msg.msg_type) {
+            msg = msg.group_id
+                ? { type: 'group_message', data: msg }
+                : { type: 'direct_message', data: msg };
+        }
         if (!msg || !msg.type) return;
         if (msg.type === 'direct_message') {
             const d = msg.data || {};
@@ -3648,7 +3737,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (e) {}
     
         chatHeader.querySelector('.chat-title').textContent = name;
-        headerMenuBtn.style.display = type === 'group' ? 'inline-flex' : 'none';
 
         pendingQuote = null;
         quotePreview.style.display = 'none';
@@ -4198,6 +4286,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (force) {
             // 强制滚动到底部（切换会话/发送消息后使用）
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            if (chatScrollbar) requestAnimationFrame(() => chatScrollbar.update());
             return;
         }
         // 只在用户已近底部时才自动滚动，避免强制拉到最下方
@@ -4205,6 +4294,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const atBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < threshold;
         if (atBottom) {
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            if (chatScrollbar) requestAnimationFrame(() => chatScrollbar.update());
         }
     }
 
@@ -4486,7 +4576,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const name = match[1];
                 const member = mentionMembers.find(m => m.name === name);
                 if (member) {
-                    mentions.push({ ncuid: member.uid, name: member.name });
+                    mentions.push({ uid: member.uid || member.ncuid || '', ncuid: member.ncuid || member.uid || '', name: member.name });
                 }
             }
         }
@@ -4709,7 +4799,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             const data = await res.json();
             // Go 返回 {members: [{uid, username, display_name, avatar_url, role, joined_at}]}
             groupMembers = (data.members || []).map(m => ({
-                uid: getUid(m),
+                uid: m.uid || '',           // 旧 uid
+                ncuid: m.ncuid || getUid(m), // ncuid（getUid 优先取 ncuid）
                 name: m.display_name || m.username || getUid(m),
                 avatar: m.avatar_url || ''
             }));
@@ -5419,11 +5510,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         sidebar.classList.remove('collapsed');
     });
 
-    headerMenuBtn.addEventListener('click', () => {
+    // 点击群聊标题进入群聊管理
+    chatHeader.querySelector('.chat-title').addEventListener('click', () => {
         if (currentConv && currentConv.type === 'group') {
             openGroupManagePanel(currentConv.id, currentConv.name);
         }
     });
+    chatHeader.querySelector('.chat-title').style.cursor = 'pointer';
 
     // 直链图片/音频发送
     let urlInputMode = 'image'; // 'image' | 'voice'
@@ -5462,8 +5555,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     urlInputSend.addEventListener('click', () => {
         const url = urlImageInput.value.trim();
         if (!url) { alert('请输入链接'); return; }
-        // URL 格式校验
-        if (!/^https?:\/\//i.test(url)) { alert('请输入有效的 http(s) 链接'); return; }
+        // URL 格式校验：允许 http(s) 开头或 / 开头的相对路径
+        if (!/^https?:\/\//i.test(url) && !/^\//.test(url)) { alert('请输入有效的 http(s) 链接或相对路径'); return; }
         // 按 MCL0 官方文档：voice 消息使用 msg_type=voice + media_url，body 为空
         const msgType = urlInputMode === 'image' ? 'image' : 'voice';
         sendMessage('', msgType, url);
@@ -5745,58 +5838,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     function renderSettingsAppearance() {
         const currentTheme = localStorage.getItem('theme') || 'light';
         settingsContent.innerHTML = `
-            <h3>界面</h3>
+            <h3>通用</h3>
             <div class="settings-group">
                 <div class="settings-item" id="settingsThemeToggle">
                     <span class="label">深色模式</span>
                     <span class="value">${currentTheme === 'dark' ? '已开启' : '已关闭'} <i class="fa-solid fa-chevron-right"></i></span>
                 </div>
             </div>
-            ${IS_TAURI ? `
-            <h3 style="margin-top:20px;">服务器配置</h3>
-            <div class="settings-group">
-                <div class="settings-input-row">
-                    <label>Base URL</label>
-                    <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
-                        <div style="display:flex;gap:6px;">
-                            <select id="settingsBaseUrlSelect" style="flex:0 0 auto;max-width:55%;padding:8px 10px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;">
-                                <option value="">-- 候选地址 --</option>
-                                ${BACKEND_URL_CANDIDATES.map(u => `<option value="${escapeHtml(u)}">${escapeHtml(u)}</option>`).join('')}
-                                <option value="__custom__">自定义...</option>
-                            </select>
-                            <input type="text" id="settingsBaseUrl" value="${escapeHtml(BACKEND_ORIGIN)}" placeholder="http://host:port" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;">
-                        </div>
-                    </div>
-                </div>
-                <div class="settings-input-row">
-                    <label>Media URL</label>
-                    <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
-                        <div style="display:flex;gap:6px;">
-                            <select id="settingsMediaUrlSelect" style="flex:0 0 auto;max-width:55%;padding:8px 10px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;">
-                                <option value="">-- 候选地址 --</option>
-                                ${MEDIA_URL_CANDIDATES.map(u => `<option value="${escapeHtml(u)}">${escapeHtml(u)}</option>`).join('')}
-                                <option value="__custom__">自定义...</option>
-                            </select>
-                            <input type="text" id="settingsMediaUrl" value="${escapeHtml(MEDIA_ORIGIN)}" placeholder="http://host:port" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;">
-                        </div>
-                        ${MEDIA_ORIGIN === DEFAULT_MEDIA_ORIGIN && BACKEND_ORIGIN !== DEFAULT_MEDIA_ORIGIN ? '<div style="font-size:12px;color:var(--secondary-text);">媒体资源当前使用默认直连地址</div>' : ''}
-                    </div>
-                </div>
-                <div class="settings-input-row">
-                    <label></label>
-                    <div style="display:flex;gap:8px;align-items:center;">
-                        <button id="settingsSaveUrls">保存并重载</button>
-                        <button id="settingsResetUrls" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border-color);background:transparent;color:var(--text);font-size:13px;cursor:pointer;font-family:inherit;">恢复默认</button>
-                    </div>
-                </div>
-            </div>` : ''}
             <h3 style="margin-top:20px;">缓存管理</h3>
             <div class="settings-group">
                 <div class="settings-item" id="settingsClearMediaCache" style="color:#ff6b6b;">
                     <span class="label">清除媒体缓存（图片/音频/头像）</span>
                     <span class="value"><i class="fa-solid fa-trash-can"></i></span>
                 </div>
-                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">媒体文件永久缓存到本地，清除后下次访问重新下载</div>
+                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
+                    <span id="settingsCacheSize">计算中...</span>
+                </div>
             </div>
         `;
         document.getElementById('settingsThemeToggle')?.addEventListener('click', () => {
@@ -5805,44 +5862,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             applyTheme(newTheme);
             renderSettingsAppearance();
         });
-        if (IS_TAURI) {
-            // Base URL 候选下拉
-            const baseSel = document.getElementById('settingsBaseUrlSelect');
-            const baseInput = document.getElementById('settingsBaseUrl');
-            baseSel?.addEventListener('change', () => {
-                const v = baseSel.value;
-                if (!v) return;
-                if (v === '__custom__') { /* 保留当前输入 */ return; }
-                baseInput.value = v;
-            });
-            // Media URL 候选下拉
-            const mediaSel = document.getElementById('settingsMediaUrlSelect');
-            const mediaInput = document.getElementById('settingsMediaUrl');
-            mediaSel?.addEventListener('change', () => {
-                const v = mediaSel.value;
-                if (!v) return;
-                if (v === '__custom__') return;
-                mediaInput.value = v;
-            });
-            // 保存
-            document.getElementById('settingsSaveUrls')?.addEventListener('click', () => {
-                const base = baseInput?.value?.trim();
-                const media = mediaInput?.value?.trim();
-                if (base) localStorage.setItem('oc_custom_base_url', base);
-                else localStorage.removeItem('oc_custom_base_url');
-                if (media) localStorage.setItem('oc_custom_media_url', media);
-                else localStorage.removeItem('oc_custom_media_url');
-                refreshEndpoints();
-                window.location.reload();
-            });
-            // 恢复默认
-            document.getElementById('settingsResetUrls')?.addEventListener('click', () => {
-                localStorage.removeItem('oc_custom_base_url');
-                localStorage.removeItem('oc_custom_media_url');
-                refreshEndpoints();
-                window.location.reload();
-            });
-        }
         // 清除媒体缓存
         document.getElementById('settingsClearMediaCache')?.addEventListener('click', async () => {
             if (!confirm('确定清除所有媒体缓存吗？下次访问图片/音频/头像会重新下载。')) return;
@@ -5858,10 +5877,31 @@ document.addEventListener('DOMContentLoaded', async () => {
                     } catch (e) {}
                 }
                 alert('媒体缓存已清除');
+                // 清除后刷新缓存大小
+                loadCacheSize();
             } catch (e) {
                 alert('清除失败: ' + (e.message || e));
             }
         });
+        // 加载缓存大小
+        loadCacheSize();
+    }
+
+    async function loadCacheSize() {
+        const el = document.getElementById('settingsCacheSize');
+        if (!el) return;
+        try {
+            if (window.__MediaCache && typeof window.__MediaCache.getSize === 'function') {
+                const size = await window.__MediaCache.getSize();
+                const count = size.count;
+                const totalMB = (size.totalBytes / (1024 * 1024)).toFixed(1);
+                el.textContent = '共 ' + count + ' 个文件，约 ' + totalMB + ' MB';
+            } else {
+                el.textContent = '媒体文件永久缓存到本地，清除后下次访问重新下载';
+            }
+        } catch (e) {
+            el.textContent = '媒体文件永久缓存到本地，清除后下次访问重新下载';
+        }
     }
 
     async function renderSettingsCheckin() {

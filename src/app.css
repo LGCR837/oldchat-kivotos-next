@@ -502,23 +502,8 @@ body::-webkit-scrollbar {
 	opacity: 0;
 }
 
-.messages::-webkit-scrollbar {
-	width: 6px
-}
-
-.messages::-webkit-scrollbar-track {
-	background: #f0f0f0;
-	border-radius: 3px
-}
-
-.messages::-webkit-scrollbar-thumb {
-	background: rgba(0,0,0,0.2);
-	border-radius: 3px
-}
-
-.messages::-webkit-scrollbar-thumb:hover {
-	background: rgba(0,0,0,0.4)
-}
+.messages::-webkit-scrollbar{display:none}
+.messages{-ms-overflow-style:none;scrollbar-width:none}
 
 .message {
 	display: flex;
@@ -1648,6 +1633,30 @@ body::-webkit-scrollbar {
 .emoticon-picker::-webkit-scrollbar {
 	display: none
 }
+
+/* dumogu-scrollbar 自绘滚动条 */
+.dumogu-scrollbar{position:absolute;width:100%;height:100%;top:0;left:0;overflow:hidden;pointer-events:none;z-index:999}
+.dumogu-scrollbar.dumogu-scrollbar-mounted_to_body{width:100vw;height:100vh;position:fixed}
+.dumogu-scrollbar-target{position:absolute;width:0;height:0}
+.dumogu-scrollbar-target .dumogu-scrollbar-rail{position:absolute}
+.dumogu-scrollbar-target .dumogu-scrollbar-rail.dumogu-scrollbar-rail_x{bottom:0;left:0}
+.dumogu-scrollbar-target .dumogu-scrollbar-rail.dumogu-scrollbar-rail_y{right:0;top:0}
+.dumogu-scrollbar-rail{opacity:0;-webkit-transition:opacity .2s;-moz-transition:opacity .2s;transition:opacity .2s;pointer-events:initial}
+.dumogu-scrollbar-rail.dumogu-scrollbar-rail_x{height:8px;width:100%}
+.dumogu-scrollbar-rail.dumogu-scrollbar-rail_y{height:100%;width:8px}
+.dumogu-scrollbar-rail.dumogu-scrollbar-rail_hidden{display:none}
+.dumogu-scrollbar-rail.dumogu-scrollbar-rail_hover{opacity:1}
+.dumogu-scrollbar-rail.dumogu-scrollbar-rail_target_hover{opacity:1}
+.dumogu-scrollbar-rail.dumogu-scrollbar-rail_keep_show{opacity:1}
+.dumogu-scrollbar-rail.dumogu-scrollbar-rail_dragging{opacity:1}
+.dumogu-scrollbar-rail_container{position:relative;width:100%;height:100%}
+.dumogu-scrollbar-rail_thumb{position:absolute;background-color:rgba(175,175,175,0.5);-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;user-select:none;-webkit-border-radius:4px;border-radius:4px;-webkit-box-sizing:border-box;-moz-box-sizing:border-box;box-sizing:border-box}
+.dumogu-scrollbar-rail_thumb.dumogu-scrollbar-rail_thumb_x{height:100%}
+.dumogu-scrollbar-rail_thumb.dumogu-scrollbar-rail_thumb_y{width:100%}
+
+/* 用户空间滚动容器：隐藏原生滚动条，由 dumogu-scrollbar 接管 */
+#sp-scroll::-webkit-scrollbar{display:none}
+#sp-scroll{-ms-overflow-style:none;scrollbar-width:none}
 
 .emoticon-grid {
 	display: flex;
