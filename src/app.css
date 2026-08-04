@@ -903,6 +903,7 @@ body::-webkit-scrollbar {
 	background-size: cover;
 	background-position: center center;
 	background-repeat: no-repeat;
+	background-color: var(--panel-bg);
 	filter: blur(36px) brightness(0.55) saturate(1.2);
 	transform: scale(1.15);
 	z-index: 0;

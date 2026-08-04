@@ -196,7 +196,7 @@ const IS_TAURI = _detectIsTauri();
 
 // 默认值（硬编码回退）
 const DEFAULT_BACKEND_ORIGIN = 'http://oc.mcl0.dpdns.org';
-const DEFAULT_MEDIA_ORIGIN   = 'http://files.mcl0.dpdns.org';
+const DEFAULT_MEDIA_ORIGIN   = 'http://60.205.94.101:8080';
 
 // 候选服务器列表（参考服务器发布的 client.md 约定）
 const BACKEND_URL_CANDIDATES = [
@@ -249,19 +249,7 @@ function refreshEndpoints() {
 
 function resolveMediaUrl(url) {
     if (!url) return url;
-    // files.mcl0.dpdns.org 无 CORS 头 + 60 速度快，统一改走 60
-    if (/^https?:\/\/files\.mcl0\.dpdns\.org\//i.test(url)) {
-        return 'http://60.205.94.101:8080' + url.replace(/^https?:\/\/files\.mcl0\.dpdns\.org/i, '/v1/uploads');
-    }
     if (/^(https?:|data:|blob:)/.test(url)) return url;
-    // 头像从 60 服务器拉取（更快）
-    if (url.startsWith('/v1/uploads/avatars/')) {
-        return 'http://60.205.94.101:8080' + url;
-    }
-    // 其他 /v1/uploads/{type}/{file} → files.mcl0.dpdns.org/{type}/{file}
-    if (url.startsWith('/v1/uploads/')) {
-        return 'http://files.mcl0.dpdns.org' + url.replace('/v1/uploads', '');
-    }
     if (MEDIA_BASE && url.startsWith('/')) return MEDIA_BASE + url;
     return url;
 }
@@ -402,10 +390,8 @@ function escapeRegExp(string) {
                 // 标记正在处理中，防止重复触发
                 if (el.getAttribute('data-mc-' + attr + '-loading') === '1') return;
                 el.setAttribute('data-mc-' + attr + '-loading', '1');
-                // 先经过 resolveMediaUrl 转换（files. → 60），避免 CORS
-                const cacheUrl = resolveMediaUrl(val);
-                getCachedUrlOrPass(cacheUrl, (newUrl) => {
-                    if (newUrl !== cacheUrl) {
+                getCachedUrlOrPass(val, (newUrl) => {
+                    if (newUrl !== val) {
                         try { el.setAttribute(attr, newUrl); } catch (e) {}
                     }
                     el.removeAttribute('data-mc-' + attr + '-loading');
@@ -1197,11 +1183,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     let musicLrcObj = null;            // 解析后的歌词数组
     let musicLrcIndex = -1;            // 当前高亮歌词索引
     let musicIsPlaying = false;
-    let musicCurrentItem = null;       // 当前播放的音乐对象
+    let musicCurrentItem = null;       // 当前播放的音乐对象（调试用：window.musicCurrentItem）
     let musicManualScroll = false;
     let musicManualScrollTimer = null;
     let musicScrollAnim = null;
     let musicLoop = true;              // 默认单曲循环
+
+    // 暴露调试变量到全局
+    window.musicCurrentItem = null;
+    window.musicAudio = null;
 
     function ensureMusicAudio() {
         if (musicAudio) return;
@@ -1450,6 +1440,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!url) { console.warn('[music] no url'); return; }
         const fullUrl = resolveMediaUrl(url);
         musicCurrentItem = m;
+        window.musicCurrentItem = m;
         // 紧凑模式下折叠侧边栏，显示音乐工作区
         if (isMobile()) {
             sidebar.classList.add('collapsed');
@@ -2983,21 +2974,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 3秒后重试加载用户资料（用于聊天界面显示 NCUID/默认头像时自动重试）
     // isAvatar=true 时更新头像 img 元素，否则更新昵称文本
-    // 失败后递增间隔重试最多3次（3s/6s/12s），避免新用户一直卡在 NCUID+默认头像
-    function scheduleProfileRetry(uid, ncuid, element, isAvatar, retry) {
+    function scheduleProfileRetry(uid, ncuid, element, isAvatar) {
         if (!uid && !ncuid) return;
         if (!element || !element.isConnected) return;
-        const attempt = retry || 0;
-        const maxRetry = 3;
-        const delay = 3000 * Math.pow(2, attempt);
 
         setTimeout(async () => {
             if (!element.isConnected) return;
             const profile = await fetchUserProfile(uid, ncuid, true);
-            if (!profile) {
-                if (attempt < maxRetry) scheduleProfileRetry(uid, ncuid, element, isAvatar, attempt + 1);
-                return;
-            }
+            if (!profile) return;
             if (isAvatar) {
                 const newAvatar = profile.avatar_url ? resolveMediaUrl(profile.avatar_url) : 'assets/default-avatar.png';
                 if (element.src !== newAvatar) element.src = newAvatar;
@@ -3005,7 +2989,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const newName = profile.display_name || profile.username || (ncuid || uid || '');
                 if (element.textContent !== newName) element.textContent = newName;
             }
-        }, delay);
+        }, 3000);
     }
 
     // 根据 uid 查找联系人显示名
@@ -5511,12 +5495,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // 点击群聊标题进入群聊管理
-    chatHeader.querySelector('.chat-title').addEventListener('click', () => {
+    const chatTitleEl = chatHeader.querySelector('.chat-title');
+    chatTitleEl.addEventListener('click', () => {
         if (currentConv && currentConv.type === 'group') {
             openGroupManagePanel(currentConv.id, currentConv.name);
         }
     });
-    chatHeader.querySelector('.chat-title').style.cursor = 'pointer';
+    chatTitleEl.style.cssText = 'cursor:pointer;-webkit-app-region:no-drag;';
 
     // 直链图片/音频发送
     let urlInputMode = 'image'; // 'image' | 'voice'
@@ -5845,6 +5830,25 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <span class="value">${currentTheme === 'dark' ? '已开启' : '已关闭'} <i class="fa-solid fa-chevron-right"></i></span>
                 </div>
             </div>
+            ${IS_TAURI ? `
+            <h3 style="margin-top:20px;">服务器配置</h3>
+            <div class="settings-group">
+                <div class="settings-input-row">
+                    <label>Base URL</label>
+                    <input type="text" id="settingsBaseUrl" value="${escapeHtml(BACKEND_ORIGIN)}" placeholder="http://host1 http://host2 ..." style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;">
+                </div>
+                <div class="settings-input-row">
+                    <label>Media URL</label>
+                    <input type="text" id="settingsMediaUrl" value="${escapeHtml(MEDIA_ORIGIN)}" placeholder="http://host1 http://host2 ..." style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;">
+                </div>
+                <div class="settings-input-row">
+                    <label></label>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <button id="settingsSaveUrls">保存并重载</button>
+                        <button id="settingsResetUrls" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border-color);background:transparent;color:var(--text);font-size:13px;cursor:pointer;font-family:inherit;">恢复默认</button>
+                    </div>
+                </div>
+            </div>` : ''}
             <h3 style="margin-top:20px;">缓存管理</h3>
             <div class="settings-group">
                 <div class="settings-item" id="settingsClearMediaCache" style="color:#ff6b6b;">
@@ -5862,6 +5866,28 @@ document.addEventListener('DOMContentLoaded', async () => {
             applyTheme(newTheme);
             renderSettingsAppearance();
         });
+        if (IS_TAURI) {
+            const baseInput = document.getElementById('settingsBaseUrl');
+            const mediaInput = document.getElementById('settingsMediaUrl');
+            // 保存：取空格分割的第一个 URL 作为主地址
+            document.getElementById('settingsSaveUrls')?.addEventListener('click', () => {
+                const base = baseInput?.value?.trim().split(/\s+/)[0] || '';
+                const media = mediaInput?.value?.trim().split(/\s+/)[0] || '';
+                if (base) localStorage.setItem('oc_custom_base_url', base);
+                else localStorage.removeItem('oc_custom_base_url');
+                if (media) localStorage.setItem('oc_custom_media_url', media);
+                else localStorage.removeItem('oc_custom_media_url');
+                refreshEndpoints();
+                window.location.reload();
+            });
+            // 恢复默认
+            document.getElementById('settingsResetUrls')?.addEventListener('click', () => {
+                localStorage.removeItem('oc_custom_base_url');
+                localStorage.removeItem('oc_custom_media_url');
+                refreshEndpoints();
+                window.location.reload();
+            });
+        }
         // 清除媒体缓存
         document.getElementById('settingsClearMediaCache')?.addEventListener('click', async () => {
             if (!confirm('确定清除所有媒体缓存吗？下次访问图片/音频/头像会重新下载。')) return;
