@@ -13,10 +13,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: ubuntu-22.04
-            args: ""
           - platform: windows-latest
-            args: ""
+            target: x86_64-pc-windows-msvc
+            asset_suffix: windows-amd64.exe
+          - platform: windows-latest
+            target: i686-pc-windows-msvc
+            asset_suffix: windows-i386.exe
+          - platform: windows-latest
+            target: aarch64-pc-windows-msvc
+            asset_suffix: windows-arm64.exe
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            asset_suffix: linux-amd64
+          - platform: ubuntu-22.04
+            target: i686-unknown-linux-gnu
+            asset_suffix: linux-i386
+          - platform: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            asset_suffix: linux-arm64
 
     runs-on: ${{ matrix.platform }}
 
@@ -32,25 +46,59 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
+          sudo dpkg --add-architecture i386
+          sudo dpkg --add-architecture arm64
           sudo apt-get update
           sudo apt-get install -y \
+            gcc-multilib \
+            g++-multilib \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
             libwebkit2gtk-4.1-dev \
+            libwebkit2gtk-4.1-dev:i386 \
+            libwebkit2gtk-4.1-dev:arm64 \
             libappindicator3-dev \
+            libappindicator3-dev:i386 \
+            libappindicator3-dev:arm64 \
             librsvg2-dev \
+            librsvg2-dev:i386 \
+            librsvg2-dev:arm64 \
             patchelf \
             xdg-utils
+
+      - name: Configure Linux cross-compilation
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          case "${{ matrix.target }}" in
+            i686-unknown-linux-gnu)
+              echo 'CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=i686-linux-gnu-gcc' >> "$GITHUB_ENV"
+              echo 'PKG_CONFIG_ALLOW_CROSS=1' >> "$GITHUB_ENV"
+              echo 'PKG_CONFIG_SYSROOT_DIR=/' >> "$GITHUB_ENV"
+              echo 'PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig:/usr/share/pkgconfig' >> "$GITHUB_ENV"
+              ;;
+            aarch64-unknown-linux-gnu)
+              echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc' >> "$GITHUB_ENV"
+              echo 'PKG_CONFIG_ALLOW_CROSS=1' >> "$GITHUB_ENV"
+              echo 'PKG_CONFIG_SYSROOT_DIR=/' >> "$GITHUB_ENV"
+              echo 'PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig' >> "$GITHUB_ENV"
+              ;;
+          esac
 
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build and upload Tauri app
+      - name: Build and upload Tauri binary
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           releaseId: ${{ github.event.release.id }}
-          args: ${{ matrix.args }}
+          args: --no-bundle --target ${{ matrix.target }}
+          uploadPlainBinary: true
+          releaseAssetNamePattern: oldchat-kivotos-next-app-${{ github.event.release.tag_name }}-${{ matrix.asset_suffix }}
