@@ -134,7 +134,7 @@ const IS_TAURI = _detectIsTauri();
             const icon = winMaxBtn.querySelector('i');
             if (!icon) return;
             if (isMax) {
-                icon.className = 'fa-solid fa-clone';
+                icon.className = 'fa-regular fa-clone';
                 winMaxBtn.title = '还原';
                 document.body.classList.add('is-maximized');
             } else {
@@ -1024,8 +1024,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (window['dumogu-scrollbar'] && window['dumogu-scrollbar'].DumoguScrollbar) {
         chatScrollbar = new window['dumogu-scrollbar'].DumoguScrollbar({ keepShow: true });
         chatScrollbar.bind(messagesContainer);
-        const chatArea = document.querySelector('.chat-area');
-        chatScrollbar.mount(chatArea);
+        const chatPanel = document.querySelector('.main-panel[data-panel="chat"]');
+        if (chatPanel) chatScrollbar.mount(chatPanel);
     }
 
     const quotePreview = document.getElementById('quotePreview');
@@ -1219,7 +1219,74 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    // LRC 解析（参考 crmusic.html）
+    // 统一歌词解析入口（自动检测 LRC 或 TTML 格式）
+    function parseLyrics(text) {
+        if (!text) return [];
+        // 检测是否为 TTML 格式
+        if (/<p\s+begin=/i.test(text)) {
+            return parseTTML(text);
+        }
+        // 默认按 LRC 解析
+        return parseLRC(text);
+    }
+
+    // TTML 时间解析：支持 HH:MM:SS.mmm / MM:SS.mmm / SS.mmm / SSs
+    function parseTTMLTime(timeStr) {
+        if (!timeStr) return -1;
+        timeStr = timeStr.trim();
+        if (timeStr.endsWith('s')) timeStr = timeStr.slice(0, -1);
+        const parts = timeStr.split(/[:.]/);
+        let time = 0;
+        if (parts.length === 4) {
+            time = +parts[0] * 3600 + +parts[1] * 60 + +parts[2] + +parts[3] / 1000;
+        } else if (parts.length === 3) {
+            time = +parts[0] * 60 + +parts[1] + +parts[2] / 1000;
+        } else if (parts.length === 2) {
+            time = +parts[0] + +parts[1] / 1000;
+        } else if (parts.length === 1) {
+            time = +parts[0];
+        } else {
+            return -1;
+        }
+        return isNaN(time) ? -1 : time;
+    }
+
+    // TTML 解析（使用 DOMParser，支持翻译）
+    function parseTTML(ttml) {
+        const result = [];
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(ttml, 'text/xml');
+        const ps = doc.getElementsByTagName('p');
+        for (let i = 0; i < ps.length; i++) {
+            const p = ps[i];
+            const beginStr = p.getAttribute('begin');
+            if (!beginStr) continue;
+            const time = parseTTMLTime(beginStr);
+            if (time < 0) continue;
+
+            // 提取翻译 span
+            let translation = '';
+            const spans = p.getElementsByTagName('span');
+            for (let j = 0; j < spans.length; j++) {
+                if (spans[j].getAttribute('ttm:role') === 'x-translation') {
+                    translation = spans[j].textContent;
+                    break;
+                }
+            }
+
+            // 主文本：克隆节点，移除所有 span，取 textContent
+            const clone = p.cloneNode(true);
+            const cloneSpans = clone.getElementsByTagName('span');
+            while (cloneSpans.length > 0) {
+                cloneSpans[0].parentNode.removeChild(cloneSpans[0]);
+            }
+            const text = clone.textContent.trim();
+            if (text) result.push({ time, text, translation: translation || '' });
+        }
+        return result.sort((a, b) => a.time - b.time);
+    }
+
+    // LRC 解析：[mm:ss.xx]text 或 [mm:ss.xx]text
     function parseLRC(lrc) {
         const result = [];
         (lrc || '').split("\n").forEach(line => {
@@ -1258,10 +1325,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const startTop = container.scrollTop;
         const dist = targetTop - startTop;
         if (Math.abs(dist) < 1) { container.scrollTop = targetTop; return; }
-        const startTime = null;
+        let startTime = null;
         const step = (ts) => {
-            const start = startTime || (startTime = ts);
-            const progress = Math.min((ts - start) / duration, 1);
+            if (!startTime) startTime = ts;
+            const progress = Math.min((ts - startTime) / duration, 1);
             const ease = 1 - Math.pow(1 - progress, 3);
             container.scrollTop = startTop + dist * ease;
             if (progress < 1) musicScrollAnim = requestAnimationFrame(step);
@@ -1396,21 +1463,27 @@ document.addEventListener('DOMContentLoaded', async () => {
         }, 3000);
     }
 
-    async function loadMusicLyrics(musicId) {
+    async function loadMusicLyrics(lyricsUrl) {
         if (!musicWorkspace) return;
         const lrcContainer = musicWorkspace.querySelector('.music-lyrics-container');
         const ul = lrcContainer?.querySelector('ul');
         if (!ul || !lrcContainer) return;
+        
+        // 如果没有歌词URL，直接显示暂无歌词
+        if (!lyricsUrl) {
+            lrcContainer.style.display = 'none';
+            musicLrcObj = null;
+            return;
+        }
+        
         try {
-            const res = await apiFetch('/v1/music/plaza/lyrics', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ music_id: musicId })
-            });
-            const data = await res.json();
-            // 接口可能返回字符串、{lyric: "..."}、{lyrics: "..."}、{content: "..."} 等
-            const lrcText = typeof data === 'string' ? data : (data.lyric || data.lyrics || data.content || data.data || data.lrc || '');
-            musicLrcObj = parseLRC(lrcText);
+            // 使用 resolveMediaUrl 转换URL（与音频、封面相同的逻辑）
+            const fullUrl = resolveMediaUrl(lyricsUrl);
+            const res = await fetch(fullUrl);
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const lrcText = await res.text();
+            
+            musicLrcObj = parseLyrics(lrcText);
             musicLrcIndex = -1;
             ul.innerHTML = '';
             if (musicLrcObj.length === 0) {
@@ -1421,7 +1494,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const frag = document.createDocumentFragment();
                 musicLrcObj.forEach(item => {
                     const li = document.createElement('li');
-                    li.textContent = item.text;
+                    const main = document.createElement('div');
+                    main.className = 'lrc-main';
+                    main.textContent = item.text;
+                    li.appendChild(main);
+                    if (item.translation) {
+                        const tr = document.createElement('div');
+                        tr.className = 'lrc-translation';
+                        tr.textContent = item.translation;
+                        li.appendChild(tr);
+                    }
                     li.dataset.time = item.time;
                     frag.appendChild(li);
                 });
@@ -1441,6 +1523,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const fullUrl = resolveMediaUrl(url);
         musicCurrentItem = m;
         window.musicCurrentItem = m;
+        console.log('[music] 播放音乐对象:', m);
         // 紧凑模式下折叠侧边栏，显示音乐工作区
         if (isMobile()) {
             sidebar.classList.add('collapsed');
@@ -1456,9 +1539,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (e) {
             console.warn('[music] play failed:', e);
         }
-        // 加载歌词
-        if (m.id) {
-            loadMusicLyrics(m.id);
+        // 加载歌词（使用数据中自带的 lyrics_url）
+        if (m.lyrics_url) {
+            loadMusicLyrics(m.lyrics_url);
         } else {
             const lrcContainer = musicWorkspace?.querySelector('.music-lyrics-container');
             if (lrcContainer) lrcContainer.style.display = 'none';
@@ -2972,16 +3055,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         return null;
     }
 
-    // 3秒后重试加载用户资料（用于聊天界面显示 NCUID/默认头像时自动重试）
+    // 重试加载用户资料（递增间隔 3s → 6s → 12s，共3次）
     // isAvatar=true 时更新头像 img 元素，否则更新昵称文本
-    function scheduleProfileRetry(uid, ncuid, element, isAvatar) {
+    function scheduleProfileRetry(uid, ncuid, element, isAvatar, retryCount) {
         if (!uid && !ncuid) return;
         if (!element || !element.isConnected) return;
+        retryCount = retryCount || 0;
+        if (retryCount >= 3) return;
 
+        const intervals = [3000, 6000, 12000];
         setTimeout(async () => {
             if (!element.isConnected) return;
             const profile = await fetchUserProfile(uid, ncuid, true);
-            if (!profile) return;
+            if (!profile) {
+                scheduleProfileRetry(uid, ncuid, element, isAvatar, retryCount + 1);
+                return;
+            }
             if (isAvatar) {
                 const newAvatar = profile.avatar_url ? resolveMediaUrl(profile.avatar_url) : 'assets/default-avatar.png';
                 if (element.src !== newAvatar) element.src = newAvatar;
@@ -2989,7 +3078,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const newName = profile.display_name || profile.username || (ncuid || uid || '');
                 if (element.textContent !== newName) element.textContent = newName;
             }
-        }, 3000);
+        }, intervals[retryCount]);
     }
 
     // 根据 uid 查找联系人显示名
@@ -3039,6 +3128,31 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (msgType === 'voice' || msgType === 'audio') return '[语音]';
         if (msgType === 'resource' || msgType === 'file') return '[文件]';
         return d.body || '';
+    }
+
+    // 撤回消息后打断连消息链：前后消息重新重组
+    function breakRecallChain(target, sep) {
+        const prevSibling = sep.previousElementSibling;
+        const nextSibling = sep.nextElementSibling;
+
+        // 前序消息：标记为连消息链末尾
+        if (prevSibling && prevSibling.classList.contains('message')) {
+            prevSibling.classList.remove('consecutive-first');
+            if (prevSibling.classList.contains('consecutive')) {
+                prevSibling.classList.add('consecutive-last');
+            }
+        }
+
+        // 后续消息：变为新连消息链首条（显示头像和昵称）
+        if (nextSibling && nextSibling.classList.contains('message')) {
+            if (nextSibling.classList.contains('consecutive')) {
+                nextSibling.classList.remove('consecutive', 'consecutive-last');
+                nextSibling.classList.add('consecutive-first');
+            }
+        }
+
+        lastRenderedMsg = null;
+        lastRenderedTs = 0;
     }
 
     function handleWsMessage(msg) {
@@ -3121,6 +3235,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     sep.className = 'time-separator';
                     sep.textContent = recallName + ' 撤回了一条消息';
                     target.replaceWith(sep);
+                    breakRecallChain(target, sep);
                 }
             }
             if (seenMsgIds[convKey]) {
@@ -3140,6 +3255,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     sep.className = 'time-separator';
                     sep.textContent = recallName + ' 撤回了一条消息';
                     target.replaceWith(sep);
+                    breakRecallChain(target, sep);
                 }
             }
             if (seenMsgIds[convKey]) {
@@ -3547,6 +3663,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (reqId !== fetchLatestReqId || currentConv?.key !== convKey) return;
                 appendMessage(msg, convKey, currentSeen);
             });
+
+            // 渲染完成后，标记最后一条连消息为末尾
+            if (lastRenderedMsg && lastRenderedMsg.element) {
+                const el = lastRenderedMsg.element;
+                if (el.classList.contains('consecutive') || el.classList.contains('consecutive-first')) {
+                    el.classList.add('consecutive-last');
+                }
+            }
 
             // 再次检查
             if (reqId !== fetchLatestReqId || currentConv?.key !== convKey) return;
@@ -4245,20 +4369,37 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 添加连续消息标记
         if (isConsecutive) {
             msgDiv.classList.add('consecutive');
-            // 标记上一条消息为连续组的首条
+            // 标记上一条消息为连续组的首条，移除其末尾标记
             if (lastRenderedMsg && lastRenderedMsg.element) {
                 lastRenderedMsg.element.classList.add('consecutive-first');
+                lastRenderedMsg.element.classList.remove('consecutive-last');
             }
         } else {
-            // 非连续消息，移除首条标记
+            // 非连续消息，标记上一条消息（如果存在）为连续组末尾
             if (lastRenderedMsg && lastRenderedMsg.element) {
                 lastRenderedMsg.element.classList.remove('consecutive-first');
+                if (lastRenderedMsg.element.classList.contains('consecutive')) {
+                    lastRenderedMsg.element.classList.add('consecutive-last');
+                }
             }
         }
     
         messagesContainer.appendChild(msgDiv);
     
         currentSeen.add(msg.id);
+        // 系统/撤回消息打断连消息链
+        if (msgDiv.classList.contains('time-separator')) {
+            // 标记上一条消息为连消息末尾
+            if (lastRenderedMsg && lastRenderedMsg.element) {
+                lastRenderedMsg.element.classList.remove('consecutive-first');
+                if (lastRenderedMsg.element.classList.contains('consecutive')) {
+                    lastRenderedMsg.element.classList.add('consecutive-last');
+                }
+            }
+            lastRenderedMsg = null;
+            lastRenderedTs = 0;
+            return;
+        }
         // 临时消息（temp_开头）不更新 lastRenderedMsg，避免影响连消息判断
         if (!String(msg.id).startsWith('temp_')) {
             lastRenderedMsg = { convKey, from_uid: fromUid, element: msgDiv };
@@ -5478,14 +5619,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         clearTimeout(leaveTimer);
     });
 
+    let wasMobile = isMobile();
     window.addEventListener('resize', () => {
-        if (!isMobile()) {
-            // 从手机切换到PC，恢复侧边栏
+        const nowMobile = isMobile();
+        if (!nowMobile && wasMobile) {
+            // 从手机视图切换到PC，恢复侧边栏
             sidebar.classList.remove('collapsed');
             sidebarPinned = true;
             pinSidebarBtn.innerHTML = '<i class="fa-solid fa-thumbtack"></i>';
             pinSidebarBtn.title = '取消固定';
         }
+        wasMobile = nowMobile;
         expandChat();
     });
 

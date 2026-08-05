@@ -105,6 +105,18 @@ body::-webkit-scrollbar {
 	z-index: 10
 }
 
+.sidebar::after {
+	content: '';
+	position: absolute;
+	top: var(--header-height);
+	right: -8px;
+	width: 8px;
+	height: calc(100% - var(--header-height));
+	background: linear-gradient(to right, rgba(0,0,0,0.015), transparent);
+	pointer-events: none;
+	z-index: 15
+}
+
 .sidebar.collapsed {
 	transform: translateX(-100%)
 }
@@ -637,12 +649,16 @@ body::-webkit-scrollbar {
 
 /* 连消息样式 */
 .message.consecutive {
-	margin-top: 0;
+	margin-top: -1px;
 	margin-bottom: 0;
 }
 
 .message.consecutive-first {
 	margin-bottom: 0;
+}
+
+.message.consecutive-last {
+	margin-bottom: 4px;
 }
 
 .message.consecutive .msg-avatar,
@@ -666,6 +682,16 @@ body::-webkit-scrollbar {
 	display: none;
 }
 
+/* 首条连消息：隐藏sender避免撑宽容器导致时间偏移 */
+.message.self.consecutive-first .message-sender {
+	display: none;
+}
+
+/* 首条连消息：sender被隐藏后，头像从容器顶部开始对齐 */
+.message.self.consecutive-first .msg-avatar {
+	top: 0;
+}
+
 .message.self.consecutive .message-bubble::before {
 	display: none;
 }
@@ -684,7 +710,8 @@ body::-webkit-scrollbar {
 
 .message.self.consecutive .message-time {
 	left: auto;
-	right: -46px;
+	right: 100%;
+	margin-right: 8px;
 }
 
 .message.consecutive-first .message-time {
@@ -702,7 +729,8 @@ body::-webkit-scrollbar {
 
 .message.self.consecutive-first .message-time {
 	left: auto;
-	right: -46px;
+	right: 100%;
+	margin-right: 8px;
 }
 
 .message.consecutive-first:hover .message-time,
@@ -982,6 +1010,17 @@ body::-webkit-scrollbar {
 
 .music-lyrics-container li:hover {
 	color: rgba(255, 255, 255, 0.8);
+}
+
+.music-lyrics-container .lrc-translation {
+	font-size: 0.8em;
+	opacity: 0.6;
+	margin-top: 4px;
+	font-weight: 400;
+}
+
+.music-lyrics-container li.active .lrc-translation {
+	opacity: 0.85;
 }
 
 .music-lyrics-container li.active {
