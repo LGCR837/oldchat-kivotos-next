@@ -1357,13 +1357,108 @@ body::-webkit-scrollbar {
 	color: white;
 	cursor: pointer;
 	word-break: break-all;
-	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
 }
 
 .quote-block .quote-sender {
 	font-weight: 500;
 	color: white;
 	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
+}
+
+/* 图片消息的引用块：浅灰背景、黑色文字、彩色边线、小圆角 */
+.quote-block-image {
+	border-left: 3px solid var(--accent);
+	padding: 4px 8px;
+	margin: 5px 0;
+	background: #f0f0f0;
+	font-size: 13px;
+	color: var(--accent);
+	cursor: pointer;
+	word-break: break-all;
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
+	border-radius: 4px;
+}
+
+.quote-block-image .quote-sender {
+	font-weight: 500;
+	color: var(--accent);
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
+}
+
+/* 对方图片消息：引用块在图片上方，头像和昵称保持原位 */
+.message.other.bare-image {
+	grid-template-rows: auto auto auto auto;
+}
+
+.message.other.bare-image .msg-avatar {
+	grid-row: 1 / span 2;
+	grid-column: 1;
+	margin-top: 2px;
+}
+
+.message.other.bare-image .message-sender {
+	grid-row: 1;
+	grid-column: 2;
+}
+
+.message.other.bare-image .quote-block-image {
+	grid-column: 2;
+	grid-row: 2;
+	margin: 2px 0;
+}
+
+.message.other.bare-image img:not(.msg-avatar) {
+	grid-column: 2;
+	grid-row: 3;
+	display: block;
+}
+
+.message.other.bare-image .message-time {
+	grid-row: 4;
+	grid-column: 2;
+}
+
+/* 自己消息：引用块用蓝色 */
+.message.self .quote-block-image {
+	border-left-color: var(--bubble-self);
+	color: var(--bubble-self);
+}
+
+.message.self .quote-block-image .quote-sender {
+	color: var(--bubble-self);
+}
+
+/* 对方 bare-image 消息：保持头像和昵称位置，引用块和图片在内容列 */
+.message.other.bare-image {
+	grid-template-rows: auto auto auto auto;
+}
+
+.message.other.bare-image .msg-avatar {
+	grid-row: 2;
+	grid-column: 1;
+}
+
+.message.other.bare-image .message-sender {
+	grid-row: 1;
+	grid-column: 2;
+}
+
+.message.other.bare-image .quote-block-image {
+	grid-column: 2;
+	grid-row: 2;
+	margin: 0;
+}
+
+.message.other.bare-image img:not(.msg-avatar) {
+	grid-column: 2;
+	grid-row: 3;
+	display: block;
+}
+
+.message.other.bare-image .message-time {
+	grid-row: 4;
+	grid-column: 2;
 }
 
 .quote-preview {

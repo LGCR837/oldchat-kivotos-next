@@ -815,7 +815,9 @@ function openImageViewer(src) {
 	} else {
 		img = document.getElementById('imageOverlayImg')
 	}
-	img.src = src;
+	// 支持传入 img 元素（直接使用已加载的 src）或 URL 字符串
+	const imgSrc = (typeof src === 'object' && src && src.src) ? src.src : src;
+	img.src = imgSrc;
 	img._scale = 1;
 	img._translateX = 0;
 	img._translateY = 0;
@@ -2863,8 +2865,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }))
             };
             renderContacts();
-            // 加载未读计数
-            loadUnreadCounts();
+            // 加载未读计数（同步等待，避免后续 switchConversation 清红点后被覆盖）
+            await loadUnreadCounts();
         } catch (e) { console.error(e); }
     }
 
@@ -3931,7 +3933,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             imgEl.src = resolveMediaUrl(mediaUrl);
             imgEl.style.cssText = 'max-width:200px;max-height:200px;border-radius:8px;cursor:pointer;';
             imgEl.className = 'chat-image';
-            imgEl.onclick = () => openImageViewer(resolveMediaUrl(mediaUrl));
+            imgEl.onclick = () => openImageViewer(imgEl);
             imgEl.onerror = function() { this.style.display='none'; };
 
             const msgDiv = document.createElement('div');
@@ -3982,6 +3984,24 @@ document.addEventListener('DOMContentLoaded', async () => {
                     });
                 }
                 msgDiv.appendChild(senderDiv);
+            }
+
+            // 解析 body 中的引用，在图片上方显示 quote-block
+            let bodyData = null;
+            try { bodyData = JSON.parse(msg.body || '{}'); } catch(e) {}
+            if (bodyData && bodyData.quote) {
+                const quote = bodyData.quote;
+                const qb = document.createElement('div');
+                qb.className = 'quote-block-image';
+                qb.dataset.quotedId = quote.id || '';
+                const qs = document.createElement('div');
+                qs.className = 'quote-sender';
+                qs.textContent = quote.from_name || '';
+                const qt = document.createElement('div');
+                qt.textContent = quote.text || '';
+                qb.appendChild(qs);
+                qb.appendChild(qt);
+                msgDiv.appendChild(qb);
             }
 
             msgDiv.appendChild(imgEl);
@@ -4425,7 +4445,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 点击引用块跳转到被引用的消息
     messagesContainer.addEventListener('click', function(e) {
-        const quoteBlock = e.target.closest('.quote-block');
+        const quoteBlock = e.target.closest('.quote-block, .quote-block-image');
         if (!quoteBlock) return;
         const quotedId = quoteBlock.dataset.quotedId;
         if (!quotedId) return;
@@ -4713,15 +4733,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             body = JSON.stringify(v2Obj);
         }
     
-        if (pendingQuote && msgType === 'text' && body.trim()) {
+        if (pendingQuote && (msgType === 'text' ? body.trim() : mediaUrl)) {
             const quotePayload = {
                 v: 2,
-                text: body,
+                text: msgType === 'text' ? body : '',
                 quote: pendingQuote
             };
             if (mentions.length > 0) quotePayload.mentions = mentions;
             body = JSON.stringify(quotePayload);
-            msgType = 'text';
         }
     
         const payload = currentConv.type === 'group'
@@ -5142,7 +5161,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         sendRedPacketBtn.addEventListener('click', () => {
             if (!currentConv) { alert('请先选择会话'); return; }
             rpAmountInput.value = '';
-            rpCountInput.value = '1';
+            rpCountInput.value = '2';
             rpTitleInput.value = '恭喜发财';
             rpDialogOverlay.style.display = 'flex';
             rpAmountInput.focus();
@@ -5247,9 +5266,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             else if (/\.(mp4|3gp)$/.test(fileName)) msgType = 'video';
             else if (/\.(mp3|m4a|aac|amr|wav|wave)$/.test(fileName)) msgType = 'voice';
 
-            const sendPayload = currentConv.type === 'group'
+            let sendPayload = currentConv.type === 'group'
                 ? { group_id: currentConv.id, body: '', msg_type: msgType, media_url: upData.url, thumb_url: upData.thumb_url || '' }
                 : Object.assign({ body: '', msg_type: msgType, media_url: upData.url, thumb_url: upData.thumb_url || '' }, toUidParam(currentConv.id));
+            // 如果编辑框有引用，自动附加到图片/文件消息
+            if (pendingQuote) {
+                sendPayload.body = JSON.stringify({ v: 2, text: '', quote: pendingQuote });
+            }
             const sendEndpoint = currentConv.type === 'group' ? '/v1/groups/message/send' : '/v1/direct/send';
             const res = await apiFetch(sendEndpoint, {
                 method: 'POST',
@@ -5286,6 +5309,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                     lastRenderedMsg = { convKey: currentConv.key, from_uid: msg.from_uid || '', element: newEl };
                     lastRenderedTs = msgTs;
                 }
+            }
+            // 发送成功后清除引用
+            if (pendingQuote) {
+                pendingQuote = null;
+                quotePreview.style.display = 'none';
             }
             scrollToBottom(true);
         } catch (error) {
@@ -5402,8 +5430,35 @@ document.addEventListener('DOMContentLoaded', async () => {
                         const msgType = msgDiv.dataset.msgType;
                         const rawMsg = JSON.parse(msgDiv.dataset.rawBody || '{}');
                         if (msgType === 'image') {
-                            // 图片消息：复制 media_url
-                            textToCopy = rawMsg.media_url || '[图片]';
+                            // 图片消息：先关闭菜单，再从DOM中复制图像
+                            hideContextMenu();
+                            const chatImg = msgDiv.querySelector('.chat-image');
+                            if (chatImg && chatImg.complete && chatImg.naturalWidth > 0) {
+                                try {
+                                    const canvas = document.createElement('canvas');
+                                    canvas.width = chatImg.naturalWidth;
+                                    canvas.height = chatImg.naturalHeight;
+                                    canvas.getContext('2d').drawImage(chatImg, 0, 0);
+                                    canvas.toBlob(blob => {
+                                        if (blob) {
+                                            navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]).catch(() => {
+                                                const url = rawMsg.media_url || '[图片]';
+                                                navigator.clipboard.writeText(url).catch(() => fallbackCopyText(url));
+                                            });
+                                        } else {
+                                            const url = rawMsg.media_url || '[图片]';
+                                            navigator.clipboard.writeText(url).catch(() => fallbackCopyText(url));
+                                        }
+                                    });
+                                } catch(e) {
+                                    const url = rawMsg.media_url || '[图片]';
+                                    navigator.clipboard.writeText(url).catch(() => fallbackCopyText(url));
+                                }
+                            } else {
+                                const url = rawMsg.media_url || '[图片]';
+                                navigator.clipboard.writeText(url).catch(() => fallbackCopyText(url));
+                            }
+                            return;
                         } else if (msgType === 'voice' || msgType === 'audio') {
                             // 语音消息：复制 media_url
                             textToCopy = rawMsg.media_url || '[语音]';
