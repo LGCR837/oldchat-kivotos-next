@@ -124,7 +124,7 @@ jobs:
           deb [arch=amd64,i386] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
           deb [arch=amd64,i386] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
           deb [arch=amd64,i386] http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse'
-              packages='gcc g++ gcc-i686-linux-gnu g++-i686-linux-gnu libwebkit2gtk-4.1-dev:i386 libappindicator3-dev:i386 librsvg2-dev:i386 patchelf xdg-utils'
+              packages='gcc g++ gcc-i686-linux-gnu g++-i686-linux-gnu libwebkit2gtk-4.1-dev:i386 librsvg2-dev:i386 patchelf xdg-utils'
               ;;
             aarch64-unknown-linux-gnu)
               sudo dpkg --add-architecture arm64
