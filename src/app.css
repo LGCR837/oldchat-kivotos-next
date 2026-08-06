@@ -23,7 +23,9 @@
 	--rp-grad-end: #e53935;
 	--panel-bg: #ffffff;
 	--border-color: #e1e1e1;
-	--input-bg: #ffffff
+	--input-bg: #ffffff;
+	--title-bg: #e8e8e8;
+	--title-text: #333
 }
 
 [data-theme="dark"] {
@@ -48,7 +50,9 @@
 	--scrollbar-thumb-hover: rgba(255,255,255,0.4);
 	--panel-bg: #16213e;
 	--border-color: #2a2a4a;
-	--input-bg: #1a1a2e
+	--input-bg: #1a1a2e;
+	--title-bg: #3a3a5a;
+	--title-text: #ccc
 }
 
 body, .sidebar, .chat-area, .messages, .input-area, .contact-list, .chat-header, .sidebar-header, .message-bubble, .message-time, .contact-item, .more-menu, .custom-context-menu, .emoticon-picker {
@@ -267,6 +271,22 @@ body::-webkit-scrollbar {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+/* 联系人列表称号标签 */
+.contact-title {
+	display: inline-block;
+	font-size: 10px;
+	color: var(--title-text);
+	background: var(--title-bg);
+	padding: 0 6px;
+	border-radius: 4px;
+	line-height: 16px;
+	font-weight: 400;
+	flex-shrink: 0;
 }
 
 .unread-badge {
@@ -828,7 +848,23 @@ body::-webkit-scrollbar {
 	color: var(--secondary-text);
 	margin-bottom: 3px;
 	margin-left: 8px;
-	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+/* 称号标签 */
+.sender-title {
+	display: inline-block;
+	font-size: 10px;
+	color: var(--title-text);
+	background: var(--title-bg);
+	padding: 0 6px;
+	border-radius: 4px;
+	line-height: 16px;
+	font-weight: 400;
+	flex-shrink: 0;
 }
 
 .message-time {
@@ -2066,6 +2102,51 @@ body::-webkit-scrollbar {
 	animation: syncPulse 1.5s ease-in-out infinite;
 }
 
+.typing-indicator {
+	position: absolute;
+	bottom: 10px;
+	left: 12px;
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 12px;
+	color: var(--text-secondary, #888);
+	pointer-events: none;
+}
+
+.typing-indicator .typing-avatar {
+	width: 20px;
+	height: 20px;
+	border-radius: 50%;
+	object-fit: cover;
+	background: var(--panel-bg);
+	border: 1px solid var(--border-color, #e0e0e0);
+	flex-shrink: 0;
+}
+
+.typing-indicator .typing-dots {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	margin-left: 2px;
+}
+
+.typing-indicator .typing-dots span {
+	width: 4px;
+	height: 4px;
+	border-radius: 50%;
+	background: var(--text-secondary, #888);
+	animation: typingDot 1.4s ease-in-out infinite;
+}
+
+.typing-indicator .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+.typing-indicator .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typingDot {
+	0%, 60%, 100% { opacity: 0.3; }
+	30% { opacity: 1; }
+}
+
 @keyframes syncPulse {
 	0%, 100% { opacity: 0.8; }
 	50% { opacity: 0.4; }
@@ -2549,17 +2630,8 @@ body::-webkit-scrollbar {
 }
 
 .tauri-env .app-container {
-    border-radius: 8px;
-    overflow: hidden;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12), 0 8px 32px rgba(0, 0, 0, 0.22);
     position: relative;
     z-index: 1;
-}
-
-/* 最大化时直角，避免边缘被裁切 */
-.tauri-env.is-maximized .app-container {
-    border-radius: 0;
-    box-shadow: none;
 }
 
 /* Tauri 环境下显示三大金刚键 */
@@ -2591,6 +2663,14 @@ body::-webkit-scrollbar {
 }
 
 /* ===== 联系人页面样式 ===== */
+.sidebar-panel[data-panel="contacts"] {
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: none;
+}
+.sidebar-panel[data-panel="contacts"]::-webkit-scrollbar {
+    display: none;
+}
 .contacts-section {
     margin-bottom: 4px;
 }
@@ -2907,10 +2987,14 @@ body::-webkit-scrollbar {
     background: var(--border);
 }
 .contacts-detail-header .detail-name {
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--text);
-    margin-bottom: 4px;
+	font-size: 18px;
+	font-weight: 600;
+	color: var(--text);
+	margin-bottom: 4px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
 }
 .contacts-detail-header .detail-uid {
     font-size: 12px;

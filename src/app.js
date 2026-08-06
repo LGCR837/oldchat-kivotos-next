@@ -1048,6 +1048,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 myDisplayUid = meData.uid || meData.ncuid || myDisplayUid;
                 myName = meData.display_name || meData.username || myName;
                 myAvatar = meData.avatar_url || myAvatar;
+                // 缓存到 userProfileCache，供 lookupTitle 查询称号
+                meData._ts = Date.now();
+                userProfileCache.set(myUid.toUpperCase(), meData);
             }
         }
     } catch (e) {
@@ -1961,7 +1964,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     coverHtml +
                     '<div style="background:var(--chat-bg);padding:28px 20px 20px;display:flex;flex-direction:column;align-items:center;' + (coverUrl ? 'margin-top:-40px;position:relative;z-index:1;' : '') + '">' +
                         '<img src="' + resolveMediaUrl(avatar) + '" style="width:80px;height:80px;border-radius:50%;object-fit:cover;margin-bottom:12px;background:var(--border);border:3px solid var(--chat-bg);" onerror="this.src=\'' + defaultAvatar + '\'">' +
-                        '<div style="font-size:20px;font-weight:600;color:var(--text);margin-bottom:4px;">' + (u.display_name || u.username) + '</div>' +
+                        '<div style="font-size:20px;font-weight:600;color:var(--text);margin-bottom:4px;display:flex;align-items:center;justify-content:center;gap:8px;">' + (u.display_name || u.username) + (u.user_title ? '<span style="font-size:11px;color:#333;background:#e8e8e8;padding:1px 7px;border-radius:4px;line-height:18px;font-weight:400;">' + escapeHtml(u.user_title) + '</span>' : '') + '</div>' +
                         '<div style="font-size:12px;color:var(--secondary-text);margin-bottom:4px;">' + getDisplayUid(u) + '</div>' +
                         (u.signature ? '<div style="font-size:13px;color:var(--secondary-text);margin-bottom:12px;text-align:center;max-width:300px;">' + escapeHtml(u.signature) + '</div>' : '') +
                         (btnHtml ? '<div style="display:flex;gap:10px;">' + btnHtml + '</div>' : '') +
@@ -2611,7 +2614,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             `<div class="mp-avatar-mask">更换头像</div>` +
                         `</div>` +
                         `<input type="file" id="mpAvatarInput" accept="image/*" style="display:none">` +
-                        `<div class="mp-field" id="mpNameField"><div class="mp-field-name" id="mpNameText">${escapeHtml(currentProfile.display_name || currentProfile.username)}</div></div>` +
+                        `<div class="mp-field" id="mpNameField"><div class="mp-field-name" id="mpNameText" style="display:flex;align-items:center;gap:8px;"><span>${escapeHtml(currentProfile.display_name || currentProfile.username)}</span>${currentProfile.user_title ? `<span style="font-size:10px;color:#333;background:#e8e8e8;padding:0 6px;border-radius:4px;line-height:16px;font-weight:400;">${escapeHtml(currentProfile.user_title)}</span>` : ''}</div></div>` +
                         `<div class="mp-field" id="mpUidField"><div class="mp-field-uid" id="mpUidText">${escapeHtml(myDisplayUid)}</div></div>` +
                         `<div class="mp-field" id="mpBioField"><div class="mp-field-bio" id="mpBioText">${currentProfile.signature ? escapeHtml(currentProfile.signature) : '点击添加签名'}</div></div>` +
                         `<button class="mp-space-btn" id="mpSpaceBtn">查看我的空间</button>` +
@@ -2991,7 +2994,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     username: f.username,
                     display_name: f.display_name,
                     avatar: f.avatar_url || '',
-                    remark_name: f.remark_name || ''
+                    remark_name: f.remark_name || '',
+                    user_title: f.user_title || ''
                 })),
                 groups: (grData.groups || []).map(g => ({
                     id: g.group_id,
@@ -3002,6 +3006,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }))
             };
             renderContacts();
+            // 后台预加载联系人资料（填充称号到缓存）
+            contacts.friends.forEach(f => {
+                const cacheKey = f.uid.toUpperCase();
+                if (!userProfileCache.has(cacheKey)) {
+                    fetchUserProfile(f.displayUid, f.uid).catch(() => {});
+                }
+            });
             // 加载未读计数（同步等待，避免后续 switchConversation 清红点后被覆盖）
             await loadUnreadCounts();
         } catch (e) { console.error(e); }
@@ -3056,6 +3067,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     let wsSessionId = null;
     let wsEncKey = null;
     let wsMacKey = null;
+
+    // Typing 状态
+    const typingUsers = new Map(); // convKey -> { uid, name, avatar, timer }
+    let typingSendTimer = null;
+    let lastTypingSent = 0;
+    const TYPING_THROTTLE = 3000; // 每 3 秒最多发送一次
 
     // ECDH P-256 握手，派生 encKey/macKey
     async function ensureWsSession() {
@@ -3126,6 +3143,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 wsSessionId = null;
                 wsEncKey = null;
                 wsMacKey = null;
+                // 清除所有 typing 状态
+                typingUsers.forEach((entry) => clearTimeout(entry.timer));
+                typingUsers.clear();
+                if (typingIndicator) {
+                    typingIndicator.style.display = 'none';
+                    typingIndicator.innerHTML = '';
+                }
                 if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
                 wsReconnectTimer = setTimeout(initWebSocket, 3000);
             };
@@ -3136,6 +3160,37 @@ document.addEventListener('DOMContentLoaded', async () => {
             console.error('[WS] init failed:', e);
             if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
             wsReconnectTimer = setTimeout(initWebSocket, 5000);
+        }
+    }
+
+    // 加密发送 WebSocket 消息
+    async function encryptAndSendWs(payload) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (!wsEncKey || !wsMacKey) return;
+        try {
+            const plainBytes = new TextEncoder().encode(JSON.stringify(payload));
+            // PKCS7 填充
+            const blockSize = 16;
+            const padLen = blockSize - (plainBytes.length % blockSize);
+            const padded = new Uint8Array(plainBytes.length + padLen);
+            padded.set(plainBytes);
+            padded.fill(padLen, plainBytes.length);
+            // 随机 IV
+            const iv = crypto.getRandomValues(new Uint8Array(16));
+            const key = await crypto.subtle.importKey('raw', wsEncKey, { name: 'AES-CBC' }, false, ['encrypt']);
+            const encrypted = await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, key, padded);
+            const ciphertext = new Uint8Array(encrypted.slice(0, encrypted.length - 16)); // remove padding from subtle output
+            // 实际上 Subtle 已经做了 PKCS7，我们直接用它的输出
+            const data = new Uint8Array(encrypted);
+            const mac = await Crypto.hmacSha256(wsMacKey, Crypto.concatBytes(iv, data));
+            const envelope = JSON.stringify({
+                iv: Crypto.bytesToBase64(iv),
+                data: Crypto.bytesToBase64(data),
+                mac: Crypto.bytesToBase64(mac)
+            });
+            ws.send(envelope);
+        } catch (e) {
+            console.error('[WS] encryptAndSend error:', e);
         }
     }
 
@@ -3178,7 +3233,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (d && !d.error) data = d;
                 }
             }
-            // 两种都失败（网络错误等情况），不标记无效，允许后续重试
+            // 补充：uid 查询也失败，但 uid 实际上可能是 ncuid（服务器把 ncuid 放进了 from_uid 字段）
+            // 尝试用 ?ncuid= 查询 uid 值
+            if (!data && uid && !ncuid) {
+                const res = await apiFetch('/v1/users/profile?ncuid=' + encodeURIComponent(uid));
+                if (res.ok) {
+                    const d = await res.json();
+                    if (d && !d.error) data = d;
+                }
+            }
+            // 三种都失败（网络错误等情况），不标记无效，允许后续重试
             if (!data) return null;
             // 服务器返回错误信息（理论上上面已过滤，但保留防御性检查）
             if (data.error && /invalid|not found|不存在/i.test(data.error)) {
@@ -3215,7 +3279,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (element.src !== newAvatar) element.src = newAvatar;
             } else {
                 const newName = profile.display_name || profile.username || (ncuid || uid || '');
-                if (element.textContent !== newName) element.textContent = newName;
+                // 保留称号标签，只更新名称文本
+                const nameText = element.childNodes[0];
+                if (nameText) nameText.textContent = newName;
+                // 更新称号
+                if (profile.user_title) {
+                    let titleSpan = element.querySelector('.sender-title');
+                    if (!titleSpan) {
+                        titleSpan = document.createElement('span');
+                        titleSpan.className = 'sender-title';
+                        element.appendChild(titleSpan);
+                    }
+                    titleSpan.textContent = profile.user_title;
+                }
             }
         }, intervals[retryCount]);
     }
@@ -3247,6 +3323,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (m && m.avatar) return m.avatar;
         const cached = userProfileCache.get(upper);
         if (cached && cached.avatar_url) return cached.avatar_url;
+        return '';
+    }
+
+    function lookupTitle(uid) {
+        if (!uid) return '';
+        const upper = uid.toUpperCase();
+        // 从缓存资料中查找 user_title 字段
+        const cached = userProfileCache.get(upper);
+        if (cached && cached.user_title) return cached.user_title;
         return '';
     }
 
@@ -3423,31 +3508,31 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else if (msg.type === 'direct_recall') {
             const d = msg.data || {};
             const messageId = d.message_id || '';
-            const fromUid = getFromUid(d);
-            const convKey = `direct:${fromUid}`;
-            if (currentConv && currentConv.key === convKey) {
+            const fromUid = getFromUid(d); // from_ncuid = 撤回者NCUID
+            const isMe = uidEq(fromUid, myUid);
+            // 在当前会话中查找被撤回的消息
+            if (currentConv && currentConv.type === 'direct') {
                 const target = document.querySelector(`.message[data-msg-id="${CSS.escape(messageId)}"]`);
                 if (target) {
-                    const isMe = uidEq(fromUid, myUid);
                     const recallName = isMe ? '你' : (lookupName(fromUid) || fromUid);
                     const sep = createRecallSeparator(recallName, isMe ? target : null);
                     target.replaceWith(sep);
                     breakRecallChain(target, sep);
                 }
-            }
-            if (seenMsgIds[convKey]) {
-                seenMsgIds[convKey].delete(messageId);
+                if (seenMsgIds[currentConv.key]) {
+                    seenMsgIds[currentConv.key].delete(messageId);
+                }
             }
         } else if (msg.type === 'group_recall') {
             const d = msg.data || {};
             const messageId = d.message_id || '';
             const groupId = d.group_id || '';
-            const fromUid = getFromUid(d);
+            const fromUid = getFromUid(d); // from_ncuid = 撤回者NCUID
+            const isMe = uidEq(fromUid, myUid);
             const convKey = `group:${groupId}`;
             if (currentConv && currentConv.key === convKey) {
                 const target = document.querySelector(`.message[data-msg-id="${CSS.escape(messageId)}"]`);
                 if (target) {
-                    const isMe = uidEq(fromUid, myUid);
                     const recallName = isMe ? '你' : (lookupName(fromUid) || fromUid);
                     const sep = createRecallSeparator(recallName, isMe ? target : null);
                     target.replaceWith(sep);
@@ -3460,7 +3545,89 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else if (msg.type === 'direct_read') {
             // 对方已读，可选更新已读回执（此处仅记录日志）
             // d: {thread_id, reader_uid, read_at}
+        } else if (msg.type === 'typing') {
+            const d = msg.data || {};
+            const fromUid = getFromUid(d);
+            if (isSelfUid(fromUid)) return;
+            const convKey = d.group_id
+                ? `group:${d.group_id}`
+                : `direct:${fromUid}`;
+            // 仅显示当前会话的 typing 指示器
+            if (!currentConv || currentConv.key !== convKey) return;
+            const fromName = getFromName(d) || lookupName(fromUid);
+            const fromAvatar = getFromAvatar(d);
+            // 显示 typing 指示器，5 秒后自动隐藏
+            showTypingIndicator(convKey, {
+                uid: fromUid,
+                name: fromName,
+                avatar: fromAvatar
+            }, 5000);
         }
+    }
+
+    // ===== Typing 指示器 =====
+    const typingIndicator = document.getElementById('typingIndicator');
+
+    function showTypingIndicator(convKey, user, timeoutMs) {
+        if (!typingIndicator) return;
+        // 更新或添加用户到 typingUsers
+        if (typingUsers.has(convKey)) {
+            const existing = typingUsers.get(convKey);
+            clearTimeout(existing.timer);
+        }
+        const timer = setTimeout(() => {
+            hideTypingIndicator(convKey);
+        }, timeoutMs || 5000);
+        typingUsers.set(convKey, { ...user, timer });
+        // 渲染：只显示小头像 + 动态点
+        typingIndicator.innerHTML = '';
+        const avatar = document.createElement('img');
+        avatar.className = 'typing-avatar';
+        const avatarUrl = user.avatar ? resolveMediaUrl(user.avatar) : 'assets/default-avatar.png';
+        avatar.src = avatarUrl;
+        avatar.alt = user.name || '';
+        typingIndicator.appendChild(avatar);
+        const dots = document.createElement('span');
+        dots.className = 'typing-dots';
+        for (let i = 0; i < 3; i++) {
+            const dot = document.createElement('span');
+            dots.appendChild(dot);
+        }
+        typingIndicator.appendChild(dots);
+        typingIndicator.style.display = 'flex';
+    }
+
+    function hideTypingIndicator(convKey) {
+        if (!typingIndicator) return;
+        if (convKey && typingUsers.has(convKey)) {
+            const entry = typingUsers.get(convKey);
+            clearTimeout(entry.timer);
+            typingUsers.delete(convKey);
+        }
+        // 如果当前会话没有其他 typing 用户，隐藏指示器
+        if (!currentConv || !typingUsers.has(currentConv.key)) {
+            typingIndicator.style.display = 'none';
+            typingIndicator.innerHTML = '';
+        } else {
+            // 还有其他用户，重新渲染
+            const entry = typingUsers.get(currentConv.key);
+            showTypingIndicator(currentConv.key, entry, 5000);
+        }
+    }
+
+    // 发送 Typing 状态到服务器（节流 3 秒）
+    async function sendTypingStatus() {
+        if (!currentConv || !ws || ws.readyState !== WebSocket.OPEN) return;
+        const now = Date.now();
+        if (now - lastTypingSent < TYPING_THROTTLE) return;
+        lastTypingSent = now;
+        const payload = { type: 'typing', data: {} };
+        if (currentConv.type === 'group') {
+            payload.data.group_id = currentConv.id;
+        } else {
+            payload.data.to_uid = currentConv.id;
+        }
+        await encryptAndSendWs(payload);
     }
 
     function renderContacts() {
@@ -3482,11 +3649,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             sep.textContent = '私聊';
             contactList.appendChild(sep);
             contacts.friends.forEach(f => {
-                const div = createContactItem(f.uid, f.name, 'direct', f.avatar, f.displayUid);
-                contactList.appendChild(div);
-            });
-        }
-        // 联系人页面
+                const div = createContactItem(f.uid, f.name, 'direct', f.avatar, f.displayUid, f.user_title);
+            contactList.appendChild(div);
+        });
+    }
+    // 联系人页面
         renderContactsPage();
     }
 
@@ -3514,7 +3681,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 好友
         friendList.innerHTML = '';
         contacts.friends.forEach(f => {
-            const div = createContactItem(f.uid, f.name, 'direct', f.avatar, f.displayUid);
+            const div = createContactItem(f.uid, f.name, 'direct', f.avatar, f.displayUid, f.user_title);
             div.addEventListener('click', (e) => {
                 e.stopPropagation();
                 showContactDetail('direct', f.uid, f.name, f.avatar, mainContent);
@@ -3566,11 +3733,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else {
             const friend = contacts.friends.find(f => f.uid === id);
             const displayId = friend ? friend.displayUid : id;
+            const titleText = (friend && friend.user_title) || lookupTitle(id);
+            const titleHtml = titleText ? `<span style="font-size:10px;color:#333;background:#e8e8e8;padding:0 6px;border-radius:4px;line-height:16px;font-weight:400;margin-left:6px;">${escapeHtml(titleText)}</span>` : '';
             container.innerHTML = `
                 <div class="contacts-detail-panel">
                     <div class="contacts-detail-header">
                         <img src="${avatarUrl}" onerror="this.src='assets/default-avatar.png'">
-                        <div class="detail-name">${escapeHtml(name)}</div>
+                        <div class="detail-name">${escapeHtml(name)}${titleHtml}</div>
                         <div class="detail-uid">${escapeHtml(displayId)}</div>
                         <div class="contacts-detail-actions">
                             <button class="btn primary" id="cdSendMessage">发消息</button>
@@ -3747,7 +3916,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    function createContactItem(id, name, type, avatar, displayId) {
+    function createContactItem(id, name, type, avatar, displayId, userTitle) {
         const div = document.createElement('div');
         div.className = 'contact-item';
         div.dataset.convKey = type + ':' + id;
@@ -3758,7 +3927,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const showId = type === 'group' ? id : (displayId || '');
         const idLine = showId ? `<div class="uid">${escapeHtml(showId)}</div>` : '';
         const avatarUrl = avatar ? resolveMediaUrl(avatar) : 'assets/default-avatar.png';
-        div.innerHTML = `<img class="contact-avatar" src="${avatarUrl}" onerror="this.src='assets/default-avatar.png'"><div class="contact-info"><div class="name">${escapeHtml(name)}</div>${idLine}</div><span class="unread-badge" style="display:none;"></span>`;
+        // 查找称号：优先使用传入的 userTitle，再从缓存查找
+        const titleText = userTitle || lookupTitle(id);
+        const titleHtml = titleText ? `<span class="contact-title">${escapeHtml(titleText)}</span>` : '';
+        div.innerHTML = `<img class="contact-avatar" src="${avatarUrl}" onerror="this.src='assets/default-avatar.png'"><div class="contact-info"><div class="name">${escapeHtml(name)}${titleHtml}</div>${idLine}</div><span class="unread-badge" style="display:none;"></span>`;
         div.addEventListener('click', (e) => switchConversation(type, id, name, e));
         return div;
     }
@@ -4090,6 +4262,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (_switchingConv) return;
         _switchingConv = true;
         try {
+        // 切换会话时隐藏 typing 指示器（不清除 Map，保留其他会话的状态）
+        if (typingIndicator) {
+            typingIndicator.style.display = 'none';
+            typingIndicator.innerHTML = '';
+        }
         // 淡出动画
         messagesContainer.classList.remove('fade-in');
         messagesContainer.classList.add('fade-out');
@@ -4260,10 +4437,28 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const senderDiv = document.createElement('div');
                 senderDiv.className = 'message-sender';
                 senderDiv.textContent = sender;
-                if (!isSelf && sender === displayUid && (apiUid || apiNcuid)) {
+                // 称号标签
+                const titleText = lookupTitle(fromUid) || lookupTitle(displayUid) || '';
+                if (titleText) {
+                    const titleSpan = document.createElement('span');
+                    titleSpan.className = 'sender-title';
+                    titleSpan.textContent = titleText;
+                    senderDiv.appendChild(titleSpan);
+                }
+                if (!isSelf && (sender === displayUid || sender === fromUid) && (apiUid || apiNcuid)) {
                     fetchUserProfile(apiUid, apiNcuid).then(profile => {
                         if (profile && senderDiv.isConnected) {
-                            senderDiv.textContent = profile.display_name || profile.username || sender;
+                            senderDiv.childNodes[0].textContent = profile.display_name || profile.username || sender;
+                            // 更新称号
+                            if (profile.user_title) {
+                                let titleSpan = senderDiv.querySelector('.sender-title');
+                                if (!titleSpan) {
+                                    titleSpan = document.createElement('span');
+                                    titleSpan.className = 'sender-title';
+                                    senderDiv.appendChild(titleSpan);
+                                }
+                                titleSpan.textContent = profile.user_title;
+                            }
                         } else if (!profile) {
                             // 昵称未加载成功（显示为 UID），3s 后重试
                             scheduleProfileRetry(apiUid, apiNcuid, senderDiv, false);
@@ -4552,11 +4747,29 @@ document.addEventListener('DOMContentLoaded', async () => {
             const senderDiv = document.createElement('div');
             senderDiv.className = 'message-sender';
             senderDiv.textContent = sender;
-            if (!isSelf && sender === displayUid && (apiUid || apiNcuid)) {
+            // 称号标签
+            const titleText = lookupTitle(fromUid) || lookupTitle(displayUid) || '';
+            if (titleText) {
+                const titleSpan = document.createElement('span');
+                titleSpan.className = 'sender-title';
+                titleSpan.textContent = titleText;
+                senderDiv.appendChild(titleSpan);
+            }
+            if (!isSelf && (sender === displayUid || sender === fromUid) && (apiUid || apiNcuid)) {
                 fetchUserProfile(apiUid, apiNcuid).then(profile => {
                     if (profile && senderDiv.isConnected) {
-                        senderDiv.textContent = profile.display_name || profile.username || sender;
+                        senderDiv.childNodes[0].textContent = profile.display_name || profile.username || sender;
                         msgDiv.dataset.fromName = profile.display_name || profile.username || sender;
+                        // 更新称号
+                        if (profile.user_title) {
+                            let titleSpan = senderDiv.querySelector('.sender-title');
+                            if (!titleSpan) {
+                                titleSpan = document.createElement('span');
+                                titleSpan.className = 'sender-title';
+                                senderDiv.appendChild(titleSpan);
+                            }
+                            titleSpan.textContent = profile.user_title;
+                        }
                     } else if (!profile) {
                         // 昵称未加载成功（显示为 UID），3s 后重试
                         scheduleProfileRetry(apiUid, apiNcuid, senderDiv, false);
@@ -5273,6 +5486,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (!mentionJustInserted) showMentionPopup(atMatch[1]);
         } else {
             hideMentionPopup();
+        }
+
+        // 文本不为空时发送 Typing 状态
+        if (val.trim() && currentConv) {
+            sendTypingStatus();
         }
     });
 
@@ -6429,6 +6647,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 </div>
             </div>
             <div class="settings-group">
+                <div class="settings-item" id="settingsRegister">
+                    <span class="label">注册账号</span>
+                    <span class="value"><i class="fa-solid fa-external-link-alt"></i></span>
+                </div>
                 <div class="settings-item" id="settingsLogout" style="color:#ff4757;">
                     <span class="label">退出登录</span>
                     <span class="value"><i class="fa-solid fa-right-from-bracket"></i></span>
@@ -6445,8 +6667,24 @@ document.addEventListener('DOMContentLoaded', async () => {
             switchTab('music');
             musicTab = 'mine';
             musicLoaded = false;
-            musicCurrentPage = 1;
             loadMusicList();
+        });
+        document.getElementById('settingsRegister')?.addEventListener('click', () => {
+            const registerUrl = 'https://oc.mcl0.dpdns.org/register';
+            if (IS_TAURI) {
+                const invoke = (window.__TAURI__ && window.__TAURI__.shell && window.__TAURI__.shell.open)
+                    ? window.__TAURI__.shell.open
+                    : (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);
+                if (invoke) {
+                    invoke('plugin:shell|open', {uri: registerUrl}).catch(() => {
+                        window.open(registerUrl, '_blank');
+                    });
+                } else {
+                    window.open(registerUrl, '_blank');
+                }
+            } else {
+                window.open(registerUrl, '_blank');
+            }
         });
         document.getElementById('settingsLogout')?.addEventListener('click', async () => {
             if (await showConfirm('确定退出登录？')) {
