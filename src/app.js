@@ -921,6 +921,112 @@ if (!localStorage.getItem('oc_access_token')) {
     window.location.href = 'login.html';
 }
 
+// ===== 自定义弹窗（替代原生 alert/confirm） =====
+const modalOverlay = document.getElementById('customModalOverlay');
+const modalTitle = document.getElementById('customModalTitle');
+const modalBody = document.getElementById('customModalBody');
+const modalConfirmBtn = document.getElementById('customModalConfirmBtn');
+const modalCancelBtn = document.getElementById('customModalCancelBtn');
+
+let _modalResolve = null;
+let _modalCloseHandler = null;
+
+function _closeModal() {
+    modalOverlay.style.display = 'none';
+    modalOverlay.removeEventListener('click', _modalCloseHandler);
+    document.removeEventListener('keydown', _modalKeyHandler);
+    _modalCloseHandler = null;
+}
+
+// 先取出 resolve 再关闭，避免 _closeModal 内部清空导致 resolve 丢失
+function _resolveModal(value) {
+    const r = _modalResolve;
+    _modalResolve = null;
+    _closeModal();
+    if (r) r(value);
+}
+
+function _modalKeyHandler(e) {
+    const visibleBtns = [];
+    if (modalConfirmBtn.style.display !== 'none') visibleBtns.push(modalConfirmBtn);
+    if (modalCancelBtn.style.display !== 'none') visibleBtns.push(modalCancelBtn);
+    if (visibleBtns.length === 0) return;
+
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        if (modalCancelBtn.style.display !== 'none') {
+            modalCancelBtn.click();
+        } else {
+            modalConfirmBtn.click();
+        }
+    } else if (e.key === 'Enter') {
+        e.preventDefault();
+        modalConfirmBtn.click();
+    } else if (e.key === 'Tab') {
+        e.preventDefault();
+        const focused = document.activeElement;
+        const idx = visibleBtns.indexOf(focused);
+        if (idx === -1 || idx === visibleBtns.length - 1) {
+            visibleBtns[0].focus();
+        } else {
+            visibleBtns[idx + 1].focus();
+        }
+    }
+}
+
+function showAlert(text, title = '提示') {
+    return new Promise(resolve => {
+        modalTitle.textContent = title;
+        modalBody.textContent = text;
+        modalConfirmBtn.style.display = '';
+        modalConfirmBtn.textContent = '确定';
+        modalCancelBtn.style.display = 'none';
+        modalOverlay.style.display = '';
+
+        _modalResolve = resolve;
+        _modalCloseHandler = () => {
+            _resolveModal();
+        };
+        modalOverlay.addEventListener('click', _modalCloseHandler);
+
+        modalConfirmBtn.onclick = () => {
+            _resolveModal();
+        };
+        modalCancelBtn.onclick = null;
+
+        document.addEventListener('keydown', _modalKeyHandler);
+        modalConfirmBtn.focus();
+    });
+}
+
+function showConfirm(text, title = '提示') {
+    return new Promise(resolve => {
+        modalTitle.textContent = title;
+        modalBody.textContent = text;
+        modalConfirmBtn.style.display = '';
+        modalConfirmBtn.textContent = '确定';
+        modalCancelBtn.style.display = '';
+        modalOverlay.style.display = '';
+
+        _modalResolve = resolve;
+        _modalCloseHandler = (e) => {
+            if (e && e.target !== modalOverlay) return;
+            _resolveModal(false);
+        };
+        modalOverlay.addEventListener('click', _modalCloseHandler);
+
+        modalConfirmBtn.onclick = () => {
+            _resolveModal(true);
+        };
+        modalCancelBtn.onclick = () => {
+            _resolveModal(false);
+        };
+
+        document.addEventListener('keydown', _modalKeyHandler);
+        modalConfirmBtn.focus();
+    });
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     // 从 localStorage 读取用户信息（登录页写入）
     const storedUser = JSON.parse(localStorage.getItem('oc_user') || '{}');
@@ -1629,7 +1735,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     function openSpacePanel(uid, ncuid) {
         // uid 基本校验：非空且非纯空白
         if (!uid && !ncuid) {
-            alert('无效的用户 ID');
+            showAlert('无效的用户 ID');
             return;
         }
         // 如果只有一个参数传入，同时作为 uid 和 ncuid 尝试
@@ -1866,7 +1972,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 body: JSON.stringify({ moment_id: momentId })
                             });
                             const data = await res.json();
-                            if (data.error) { alert(data.error); return; }
+                            if (data.error) { showAlert(data.error); return; }
                             // 更新按钮状态
                             const icon = btn.querySelector('i');
                             const newLiked = !isLiked;
@@ -1907,9 +2013,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     try {
                         const r = await apiFetch('/v1/friends/request', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(toUidParam(uid)) });
                         const d = await r.json();
-                        if (d.error) { alert(d.error); return; }
+                        if (d.error) { showAlert(d.error); return; }
                         load();
-                    } catch(e) { alert('请求失败'); }
+                    } catch(e) { showAlert('请求失败'); }
                 };
                 window.spRespond = async function(action) {
                     try {
@@ -1917,12 +2023,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                         const reqRes = await apiFetch('/v1/friends/requests');
                         const reqData = await reqRes.json();
                         const req = (reqData.requests || []).find(r => uidEq(getUid(r) || r.from_ncuid || r.from_uid, uid));
-                        if (!req) { alert('未找到好友申请'); return; }
+                        if (!req) { showAlert('未找到好友申请'); return; }
                         const r = await apiFetch('/v1/friends/respond', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({request_id: req.id, accept: action === 'accept'}) });
                         const d = await r.json();
-                        if (d.error) { alert(d.error); return; }
+                        if (d.error) { showAlert(d.error); return; }
                         load();
-                    } catch(e) { alert('请求失败'); }
+                    } catch(e) { showAlert('请求失败'); }
                 };
 
                 if (relation === 'self') {
@@ -1946,7 +2052,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             const input = document.getElementById('spMomentInput');
                             const text = (input?.value || '').trim();
                             const file = momentFile?.files[0];
-                            if (!text && !file) { alert('请输入内容或选择图片'); return; }
+                            if (!text && !file) { showAlert('请输入内容或选择图片'); return; }
                             momentBtn.disabled = true;
                             momentBtn.textContent = '发布中...';
                             try {
@@ -1956,14 +2062,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                                     upFd.append('file', file);
                                     const upRes = await apiFetch('/v1/media', { method: 'POST', body: upFd });
                                     const upData = await upRes.json();
-                                    if (upData.error) { alert(upData.error); momentBtn.disabled = false; momentBtn.textContent = '发布'; return; }
+                                    if (upData.error) { showAlert(upData.error); momentBtn.disabled = false; momentBtn.textContent = '发布'; return; }
                                     imageUrl = upData.url || '';
                                 }
                                 const r = await apiFetch('/v1/moments', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({body: text, image_url: imageUrl}) });
                                 const d = await r.json();
-                                if (d.error) { alert(d.error); momentBtn.disabled = false; momentBtn.textContent = '发布'; return; }
+                                if (d.error) { showAlert(d.error); momentBtn.disabled = false; momentBtn.textContent = '发布'; return; }
                                 load();
-                            } catch(e) { alert('发布失败'); momentBtn.disabled = false; momentBtn.textContent = '发布'; }
+                            } catch(e) { showAlert('发布失败'); momentBtn.disabled = false; momentBtn.textContent = '发布'; }
                         });
                     }
                 }
@@ -2073,7 +2179,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     body: JSON.stringify({ moment_id: momentId, body: text })
                 });
                 const data = await res.json();
-                if (data.error) { alert(data.error); return; }
+                if (data.error) { showAlert(data.error); return; }
                 inputEl.value = '';
                 // 更新按钮上的评论计数
                 if (triggerBtn) {
@@ -2082,7 +2188,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     countEl.textContent = ' ' + (count + 1);
                 }
                 loadComments();
-            } catch (e) { alert('评论失败'); }
+            } catch (e) { showAlert('评论失败'); }
             sendBtn.disabled = false;
             sendBtn.textContent = '发送';
         }
@@ -2192,7 +2298,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     body: JSON.stringify({ post_id: postId, body: text })
                 });
                 const data = await res.json();
-                if (data.error) { alert(data.error); return; }
+                if (data.error) { showAlert(data.error); return; }
                 inputEl.value = '';
                 if (triggerBtn) {
                     const countEl = triggerBtn.lastChild;
@@ -2200,7 +2306,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     countEl.textContent = ' ' + (count + 1);
                 }
                 loadComments();
-            } catch (e) { alert('评论失败'); }
+            } catch (e) { showAlert('评论失败'); }
             sendBtn.disabled = false;
             sendBtn.textContent = '发送';
         }
@@ -2294,7 +2400,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     openInvitePanel(groupId, members);
                 };
                 window.gmLeaveGroup = async function() {
-                    if (!confirm('确定要退出该群聊吗？')) return;
+                    if (!await showConfirm('确定要退出该群聊吗？')) return;
                     try {
                         const r = await apiFetch('/v1/groups/leave', {
                             method: 'POST',
@@ -2302,7 +2408,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             body: JSON.stringify({ group_id: groupId })
                         });
                         const d = await r.json();
-                        if (d.error) { alert(d.error); return; }
+                        if (d.error) { showAlert(d.error); return; }
                         overlay.remove();
                         contacts.groups = contacts.groups.filter(g => g.id !== groupId);
                         renderContacts();
@@ -2318,7 +2424,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 currentConv = null;
                             }
                         }
-                    } catch (e) { alert('请求失败'); }
+                    } catch (e) { showAlert('请求失败'); }
                 };
             } catch (e) {
                 scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">加载失败</div>';
@@ -2380,9 +2486,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                         body: JSON.stringify({ group_id: groupId, user_uid: uid })
                     });
                     const d = await r.json();
-                    if (d.error) { alert(d.error); return false; }
+                    if (d.error) { showAlert(d.error); return false; }
                     return true;
-                } catch (e) { alert('请求失败'); return false; }
+                } catch (e) { showAlert('请求失败'); return false; }
             }
 
             inviteOverlay.querySelectorAll('.gm-friend-invite-btn').forEach(btn => {
@@ -2406,13 +2512,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             inviteOverlay.querySelector('#gmUidInviteBtn').addEventListener('click', async () => {
                 const input = inviteOverlay.querySelector('#gmUidInput');
                 const uid = input.value.trim().toUpperCase();
-                if (!uid) { alert('请输入 UID'); return; }
+                if (!uid) { showAlert('请输入 UID'); return; }
                 const btn = inviteOverlay.querySelector('#gmUidInviteBtn');
                 btn.disabled = true;
                 btn.textContent = '邀请中...';
                 const ok = await doInvite(uid);
                 if (ok) {
-                    alert('邀请成功');
+                    showAlert('邀请成功');
                     input.value = '';
                 }
                 btn.disabled = false;
@@ -2524,16 +2630,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                     try {
                         const r = await apiFetch('/v1/me/avatar', { method: 'POST', body: formData });
                         const d = await r.json();
-                        if (d.error) { alert(d.error); return; }
+                        if (d.error) { showAlert(d.error); return; }
                         document.getElementById('mpAvatar').src = resolveMediaUrl(d.avatar_url);
                         currentProfile.avatar_url = d.avatar_url;
-                    } catch (err) { alert('上传失败'); }
+                    } catch (err) { showAlert('上传失败'); }
                 });
 
                 document.getElementById('mpAddFriendBtn').addEventListener('click', async () => {
                     const input = document.getElementById('mpAddFriendInput');
                     const val = input.value.trim();
-                    if (!val) { alert('请输入 UID 或昵称'); return; }
+                    if (!val) { showAlert('请输入 UID 或昵称'); return; }
                     const btn = document.getElementById('mpAddFriendBtn');
                     btn.disabled = true;
                     btn.textContent = '发送中...';
@@ -2544,8 +2650,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                             body: JSON.stringify(toUidParam(val.toUpperCase()))
                         });
                         const d = await r.json();
-                        if (d.error) { alert(d.error); } else { alert('已发送申请'); input.value = ''; }
-                    } catch(e) { alert('请求失败'); }
+                        if (d.error) { showAlert(d.error); } else { showAlert('已发送申请'); input.value = ''; }
+                    } catch(e) { showAlert('请求失败'); }
                     btn.disabled = false;
                     btn.textContent = '添加';
                 });
@@ -2553,7 +2659,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 document.getElementById('mpJoinGroupBtn').addEventListener('click', async () => {
                     const input = document.getElementById('mpJoinGroupInput');
                     const val = input.value.trim().toUpperCase();
-                    if (!val) { alert('请输入群聊 ID'); return; }
+                    if (!val) { showAlert('请输入群聊 ID'); return; }
                     const btn = document.getElementById('mpJoinGroupBtn');
                     btn.disabled = true;
                     btn.textContent = '加入中...';
@@ -2564,8 +2670,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                             body: JSON.stringify({ group_id: val })
                         });
                         const d = await r.json();
-                        if (d.error || d.code) { alert(d.error || '加入失败'); } else { alert('已加入群聊'); input.value = ''; loadContacts(); }
-                    } catch(e) { alert('请求失败'); }
+                        if (d.error || d.code) { showAlert(d.error || '加入失败'); } else { showAlert('已加入群聊'); input.value = ''; loadContacts(); }
+                    } catch(e) { showAlert('请求失败'); }
                     btn.disabled = false;
                     btn.textContent = '加入';
                 });
@@ -2590,11 +2696,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 body: JSON.stringify({ display_name: newVal })
                             });
                             const d = await r.json();
-                            if (d.error) { alert(d.error); return; }
+                            if (d.error) { showAlert(d.error); return; }
                             currentProfile.display_name = newVal;
                             field.innerHTML = `<div class="mp-field-name" id="mpNameText">${escapeHtml(newVal)}</div>`;
                             document.getElementById('sidebarUserName').textContent = newVal;
-                        } catch (err) { alert('保存失败'); }
+                        } catch (err) { showAlert('保存失败'); }
                     };
                     input.addEventListener('blur', save);
                     input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); } });
@@ -2620,10 +2726,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 body: JSON.stringify({ uid: newVal })
                             });
                             const d = await r.json();
-                            if (d.error) { alert(d.error); return; }
+                            if (d.error) { showAlert(d.error); return; }
                             currentProfile.ncuid = newVal;
                             field.innerHTML = `<div class="mp-field-uid" id="mpUidText">${escapeHtml(newVal)}</div>`;
-                        } catch (err) { alert('保存失败'); }
+                        } catch (err) { showAlert('保存失败'); }
                     };
                     input.addEventListener('blur', save);
                     input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); } });
@@ -2648,10 +2754,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 body: JSON.stringify({ signature: newVal })
                             });
                             const d = await r.json();
-                            if (d.error) { alert(d.error); return; }
+                            if (d.error) { showAlert(d.error); return; }
                             currentProfile.signature = newVal;
                             field.innerHTML = `<div class="mp-field-bio" id="mpBioText">${newVal ? escapeHtml(newVal) : '点击添加签名'}</div>`;
-                        } catch (err) { alert('保存失败'); }
+                        } catch (err) { showAlert('保存失败'); }
                     };
                     input.addEventListener('blur', save);
                     input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); } });
@@ -2850,7 +2956,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             ]);
             const frData = await frRes.json();
             const grData = await grRes.json();
-            if (frData.error) { alert(frData.error); return; }
+            if (frData.error) { showAlert(frData.error); return; }
             contacts = {
                 friends: (frData.friends || []).map(f => ({
                     uid: getUid(f),
@@ -3454,10 +3560,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 body: JSON.stringify({ request_id: requestId, accept })
             });
             const data = await res.json();
-            if (data.error) { alert(data.error); return; }
+            if (data.error) { showAlert(data.error); return; }
             // 刷新
             loadContacts();
-        } catch (e) { alert('操作失败'); }
+        } catch (e) { showAlert('操作失败'); }
     }
 
     // 添加好友/加入群聊 弹窗
@@ -3519,7 +3625,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const friendBtn = overlay.querySelector('#ap-friend-btn');
         friendBtn.addEventListener('click', async () => {
             const val = overlay.querySelector('#ap-friend-input').value.trim();
-            if (!val) { alert('请输入对方 UID 或 NCUID'); return; }
+            if (!val) { showAlert('请输入对方 UID 或 NCUID'); return; }
             friendBtn.disabled = true;
             friendBtn.textContent = '发送中...';
             try {
@@ -3529,9 +3635,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     body: JSON.stringify(toUidParam(val))
                 });
                 const d = await r.json();
-                if (d.error) { alert(d.error); }
-                else { alert('好友请求已发送'); close(); }
-            } catch (e) { alert('请求失败'); }
+                if (d.error) { showAlert(d.error); }
+                else { showAlert('好友请求已发送'); close(); }
+            } catch (e) { showAlert('请求失败'); }
             friendBtn.disabled = false;
             friendBtn.textContent = '发送好友请求';
         });
@@ -3540,7 +3646,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const groupBtn = overlay.querySelector('#ap-group-btn');
         groupBtn.addEventListener('click', async () => {
             const val = overlay.querySelector('#ap-group-input').value.trim();
-            if (!val) { alert('请输入群聊 ID'); return; }
+            if (!val) { showAlert('请输入群聊 ID'); return; }
             groupBtn.disabled = true;
             groupBtn.textContent = '加入中...';
             try {
@@ -3550,9 +3656,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     body: JSON.stringify({ group_id: val })
                 });
                 const d = await r.json();
-                if (d.error || d.code) { alert(d.error || '加入失败'); }
-                else { alert('已加入群聊'); close(); loadContacts(); }
-            } catch (e) { alert('请求失败'); }
+                if (d.error || d.code) { showAlert(d.error || '加入失败'); }
+                else { showAlert('已加入群聊'); close(); loadContacts(); }
+            } catch (e) { showAlert('请求失败'); }
             groupBtn.disabled = false;
             groupBtn.textContent = '加入群聊';
         });
@@ -4467,22 +4573,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         }, 30);
     }
 
-    function scrollToBottom(force = false) {
+    function scrollToBottom(force = false, smooth = false) {
+        const behavior = smooth ? 'smooth' : 'auto';
         ensureScrollAnchor();
         if (force) {
             // 强制滚动到底部（切换会话/发送消息后使用）
-            // 先用 rAF 等布局稳定，再用锚点对齐（比 scrollHeight 更准确，不受图片加载影响）
             requestAnimationFrame(() => {
                 ensureScrollAnchor();
-                try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'auto' }); } catch(e) {}
-                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                if (smooth) {
+                    try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch(e) {}
+                } else {
+                    try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'auto' }); } catch(e) {}
+                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                }
                 if (chatScrollbar) requestAnimationFrame(() => chatScrollbar.update());
             });
             // 长消息/图片加载可能延迟，再补一次兜底
             setTimeout(() => {
                 ensureScrollAnchor();
-                try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'auto' }); } catch(e) {}
-                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                if (smooth) {
+                    try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch(e) {}
+                } else {
+                    try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'auto' }); } catch(e) {}
+                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                }
                 if (chatScrollbar) chatScrollbar.update();
             }, 250);
             return;
@@ -4491,10 +4605,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const threshold = messagesContainer.clientHeight / 2;
         const atBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < threshold;
         if (atBottom) {
+            // 自动滚动使用平滑动画
             requestAnimationFrame(() => {
                 ensureScrollAnchor();
-                try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'auto' }); } catch(e) {}
-                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch(e) {}
                 if (chatScrollbar) requestAnimationFrame(() => chatScrollbar.update());
             });
             setTimeout(() => {
@@ -4503,8 +4617,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const at2 = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < t2;
                 if (at2) {
                     ensureScrollAnchor();
-                    try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'auto' }); } catch(e) {}
-                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                    try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch(e) {}
                     if (chatScrollbar) chatScrollbar.update();
                 }
             }, 250);
@@ -4846,7 +4959,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             tempMsg.group_id = currentConv.id;
         }
         appendMessage(tempMsg, currentConv.key, seenMsgIds[currentConv.key]);
-        scrollToBottom(true);
+        scrollToBottom(true, true);
 
         // 找到临时消息元素，设置半透明
         const tempEl = messagesContainer.querySelector(`[data-msg-id="${tempId}"]`);
@@ -4914,7 +5027,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     seenMsgIds[currentConv.key]?.add(msg.id);
                 } else {
                     appendMessage(msg, currentConv.key, seenMsgIds[currentConv.key]);
-                    scrollToBottom(true);
+                    scrollToBottom(true, true);
                 }
             }
         } else {
@@ -5132,7 +5245,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // 图片粘贴の上传判定
-    messageInput.addEventListener('paste', (e) => {
+    messageInput.addEventListener('paste', async (e) => {
         const items = (e.clipboardData || window.clipboardData).items;
         if (!items) return;
 
@@ -5142,11 +5255,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const file = items[i].getAsFile();
                 if (!file) continue;
                 if (!currentConv) {
-                    alert('请先选择一个会话');
+                    showAlert('请先选择一个会话');
                     return;
                 }
-                if (confirm(`是否发送图片 "${file.name || '粘贴的图片'}"？`)) {
-                    uploadAndSend(file);
+                if (await showConfirm(`是否发送图片 "${file.name || '粘贴的图片'}"？`)) {
+                    await uploadAndSend(file);
                 }
                 break;
             }
@@ -5208,7 +5321,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (burnDialogSend) {
         burnDialogSend.addEventListener('click', () => {
             const text = burnTextInput.value.trim();
-            if (!text) { alert('请输入内容'); return; }
+            if (!text) { showAlert('请输入内容'); return; }
             const seconds = parseInt(burnTimeSelect.value) || 10;
             const burnPayload = { v: 2, text: text };
             sendMessage(JSON.stringify(burnPayload), 'text', null, null, seconds);
@@ -5227,7 +5340,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (sendRedPacketBtn) {
         sendRedPacketBtn.addEventListener('click', () => {
-            if (!currentConv) { alert('请先选择会话'); return; }
+            if (!currentConv) { showAlert('请先选择会话'); return; }
             rpAmountInput.value = '';
             rpCountInput.value = '2';
             rpTitleInput.value = '恭喜发财';
@@ -5240,11 +5353,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (rpDialogOverlay) rpDialogOverlay.addEventListener('click', (e) => { if (e.target === rpDialogOverlay) rpDialogOverlay.style.display = 'none'; });
     if (rpDialogSend) {
         rpDialogSend.addEventListener('click', async () => {
-            if (!currentConv) { alert('请先选择会话'); return; }
+            if (!currentConv) { showAlert('请先选择会话'); return; }
             const amount = parseFloat(rpAmountInput.value);
-            if (!amount || amount < 2) { alert('金额不能小于2'); return; }
+            if (!amount || amount < 2) { showAlert('金额不能小于2'); return; }
             const count = parseInt(rpCountInput.value) || 1;
-            if (count < 2) { alert('个数不能小于2'); return; }
+            if (count < 2) { showAlert('个数不能小于2'); return; }
             const title = rpTitleInput.value.trim() || '恭喜发财';
             try {
                 const payload = { title: title, total_amount: amount, total_count: count };
@@ -5261,9 +5374,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const text = await res.text();
                 let data = {};
                 try { data = JSON.parse(text); } catch (e) {}
-                if (data.error) { alert(data.error); return; }
+                if (data.error) { showAlert(data.error); return; }
                 rpDialogOverlay.style.display = 'none';
-            } catch (e) { alert('发送失败'); }
+            } catch (e) { showAlert('发送失败'); }
         });
     }
 
@@ -5271,7 +5384,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const files = e.target.files;
         if (!files.length) return;
         const file = files[0];
-        if (!confirm(`是否发送文件 "${file.name}"？`)) return;
+        if (!await showConfirm(`是否发送文件 "${file.name}"？`)) return;
         await uploadAndSend(file);
         fileInput.value = '';
     });
@@ -5285,7 +5398,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const files = e.dataTransfer.files;
         if (!files.length || !currentConv) return;
         const file = files[0];
-        if (!confirm(`是否发送文件 "${file.name}" 到当前会话？`)) return;
+        if (!await showConfirm(`是否发送文件 "${file.name}" 到当前会话？`)) return;
         await uploadAndSend(file);
     });
 
@@ -5311,7 +5424,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             tempMsg.group_id = currentConv.id;
         }
         appendMessage(tempMsg, currentConv.key, seenMsgIds[currentConv.key]);
-        scrollToBottom(true);
+        scrollToBottom(true, true);
         const tempEl = messagesContainer.querySelector(`[data-msg-id="${tempId}"]`);
         if (tempEl) {
             tempEl.style.opacity = '0.5';
@@ -5324,7 +5437,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (upData.error || !upData.url) {
                 if (tempEl) tempEl.remove();
                 seenMsgIds[currentConv.key]?.delete(tempId);
-                alert('上传失败: ' + (upData.error || '未知错误'));
+                showAlert('上传失败: ' + (upData.error || '未知错误'));
                 return;
             }
             // 第二步：发送消息（根据文件类型判断 msg_type）
@@ -5351,7 +5464,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (data.error || !data.id) {
                 if (tempEl) tempEl.remove();
                 seenMsgIds[currentConv.key]?.delete(tempId);
-                alert('发送失败: ' + (data.error || '未知错误'));
+                showAlert('发送失败: ' + (data.error || '未知错误'));
                 return;
             }
             const msg = data;
@@ -5383,12 +5496,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 pendingQuote = null;
                 quotePreview.style.display = 'none';
             }
-            scrollToBottom(true);
+            scrollToBottom(true, true);
         } catch (error) {
             console.error(error);
             if (tempEl) tempEl.remove();
             seenMsgIds[currentConv.key]?.delete(tempId);
-            alert('网络错误，发送失败');
+            showAlert('网络错误，发送失败');
         }
     }
 
@@ -5578,7 +5691,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         .then(r => r.json())
                         .then(d => {
                             if (d.error) {
-                                alert(d.error || '撤回失败');
+                                showAlert(d.error || '撤回失败');
                             } else {
                                 const recallText = '你 撤回了一条消息';
                                 const timeSep = document.createElement('div');
@@ -5588,7 +5701,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 // 清理去重记录
                                 seenMsgIds[currentConv.key]?.delete(msgId);
                             }
-                        }).catch(() => alert('网络错误'));
+                        }).catch(() => showAlert('网络错误'));
                 }
                 hideContextMenu();
             });
@@ -5655,7 +5768,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const selection = window.getSelection();
         selection.removeAllRanges();
         selection.addRange(range);
-        try { document.execCommand('copy'); } catch (e) { alert('复制失败'); }
+        try { document.execCommand('copy'); } catch (e) { showAlert('复制失败'); }
         selection.removeAllRanges();
     }
 
@@ -5666,7 +5779,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         textarea.style.opacity = '0';
         document.body.appendChild(textarea);
         textarea.select();
-        try { document.execCommand('copy'); } catch (e) { alert('复制失败'); }
+        try { document.execCommand('copy'); } catch (e) { showAlert('复制失败'); }
         document.body.removeChild(textarea);
     }
 
@@ -5825,9 +5938,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     urlInputSend.addEventListener('click', () => {
         const url = urlImageInput.value.trim();
-        if (!url) { alert('请输入链接'); return; }
+        if (!url) { showAlert('请输入链接'); return; }
         // URL 格式校验：允许 http(s) 开头或 / 开头的相对路径
-        if (!/^https?:\/\//i.test(url) && !/^\//.test(url)) { alert('请输入有效的 http(s) 链接或相对路径'); return; }
+        if (!/^https?:\/\//i.test(url) && !/^\//.test(url)) { showAlert('请输入有效的 http(s) 链接或相对路径'); return; }
         // 按 MCL0 官方文档：voice 消息使用 msg_type=voice + media_url，body 为空
         const msgType = urlInputMode === 'image' ? 'image' : 'voice';
         sendMessage('', msgType, url);
@@ -5881,7 +5994,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const data = await res.json();
             const items = data.items || [];
             if (items.length === 0) {
-                alert('没有可用的表情包');
+                showAlert('没有可用的表情包');
                 return;
             }
 
@@ -5916,7 +6029,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             setTimeout(() => document.addEventListener('click', closeHandler), 0);
         } catch (e) {
             console.error(e);
-            alert('加载表情失败');
+            showAlert('加载表情失败');
         }
     }
 
@@ -6087,7 +6200,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.getElementById('settingsEditProfile')?.addEventListener('click', () => openMyProfile());
         document.getElementById('settingsMyMoments')?.addEventListener('click', () => openSpacePanel(myUid));
         document.getElementById('settingsMyFavorites')?.addEventListener('click', () => {
-            alert('收藏功能开发中');
+            showAlert('收藏功能开发中');
         });
         document.getElementById('settingsMyMusic')?.addEventListener('click', () => {
             switchTab('music');
@@ -6096,8 +6209,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             musicCurrentPage = 1;
             loadMusicList();
         });
-        document.getElementById('settingsLogout')?.addEventListener('click', () => {
-            if (confirm('确定退出登录？')) {
+        document.getElementById('settingsLogout')?.addEventListener('click', async () => {
+            if (await showConfirm('确定退出登录？')) {
                 localStorage.removeItem('oc_access_token');
                 localStorage.removeItem('oc_refresh_token');
                 localStorage.removeItem('oc_user');
@@ -6176,7 +6289,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         // 清除媒体缓存
         document.getElementById('settingsClearMediaCache')?.addEventListener('click', async () => {
-            if (!confirm('确定清除所有媒体缓存吗？下次访问图片/音频/头像会重新下载。')) return;
+            if (!await showConfirm('确定清除所有媒体缓存吗？下次访问图片/音频/头像会重新下载。')) return;
             try {
                 if (window.__MediaCache && typeof window.__MediaCache.clear === 'function') {
                     await window.__MediaCache.clear();
@@ -6188,11 +6301,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                         await Promise.all(keys.filter(k => /media/i.test(k) || /oldchat/i.test(k)).map(k => caches.delete(k)));
                     } catch (e) {}
                 }
-                alert('媒体缓存已清除');
+                showAlert('媒体缓存已清除');
                 // 清除后刷新缓存大小
                 loadCacheSize();
             } catch (e) {
-                alert('清除失败: ' + (e.message || e));
+                showAlert('清除失败: ' + (e.message || e));
             }
         });
         // 加载缓存大小
@@ -6286,25 +6399,25 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const text = await res.text();
                     let data = {};
                     try { data = JSON.parse(text); } catch (e) {}
-                    if (data.error) { alert(data.error); return; }
+                    if (data.error) { showAlert(data.error); return; }
                     renderSettingsCheckin();
-                } catch (e) { alert('签到失败'); }
+                } catch (e) { showAlert('签到失败'); }
             });
 
             // 留言（发布今日话语）
             document.getElementById('checkinPostBtn')?.addEventListener('click', async () => {
                 const input = document.getElementById('checkinMsgInput');
                 const msg = (input?.value || '').trim();
-                if (!msg) { alert('请输入留言内容'); return; }
+                if (!msg) { showAlert('请输入留言内容'); return; }
                 try {
                     const res = await apiFetch('/v1/me/checkin/wall', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ content_text: msg })
                     });
                     const data = await res.json().catch(() => ({}));
-                    if (data.error) { alert(data.error); return; }
+                    if (data.error) { showAlert(data.error); return; }
                     renderSettingsCheckin();
-                } catch (e) { alert('留言失败'); }
+                } catch (e) { showAlert('留言失败'); }
             });
 
             // 点赞
@@ -6320,7 +6433,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             body: JSON.stringify({ post_id: id })
                         });
                         const data = await res.json().catch(() => ({}));
-                        if (data.error) { alert(data.error); return; }
+                        if (data.error) { showAlert(data.error); return; }
                         renderSettingsCheckin();
                     } catch (e) { console.error(e); }
                 });
