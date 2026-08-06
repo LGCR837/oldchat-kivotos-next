@@ -18,6 +18,11 @@ on:
         required: true
         default: true
         type: boolean
+      build_all:
+        description: Build all five release targets
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -25,7 +30,7 @@ permissions:
 jobs:
   windows:
     name: Build and Upload Windows (${{ matrix.asset_suffix }})
-    if: github.event_name == 'release' || inputs.linux_only == false
+    if: github.event_name == 'release' || inputs.linux_only == false || inputs.build_all == true
     strategy:
       fail-fast: false
       matrix:
@@ -70,7 +75,7 @@ jobs:
 
   linux:
     name: Build and Upload Linux (${{ matrix.asset_suffix }})
-    if: github.event_name == 'release' || inputs.linux_only == true
+    if: github.event_name == 'release' || inputs.linux_only == true || inputs.build_all == true
     strategy:
       fail-fast: false
       matrix:
