@@ -495,7 +495,36 @@ body::-webkit-scrollbar {
 	flex-direction: column;
 	gap: 4px;
 	scrollbar-color: rgba(0,0,0,0.2) transparent;
-    min-width: 0
+    min-width: 0;
+}
+
+.scroll-to-bottom-btn {
+    position: absolute;
+    bottom: 115px;
+    right: 20px;
+    width: 30px;
+    height: 30px;
+    background: rgba(0,0,0,0.04);
+    color: var(--text);
+    border: none;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 100;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.25s ease, visibility 0.25s ease, background 0.2s;
+    font-size: 13px;
+    padding: 0;
+}
+.scroll-to-bottom-btn.visible {
+    opacity: 1;
+    visibility: visible;
+}
+.scroll-to-bottom-btn:hover {
+    background: var(--hover);
 }
 
 @keyframes msgFadeIn {

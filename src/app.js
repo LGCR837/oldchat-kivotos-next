@@ -1145,6 +1145,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     const quotePreviewText = quotePreview.querySelector('.quote-preview-text');
     const cancelQuoteBtn = document.getElementById('cancelQuoteBtn');
     const syncIndicator = document.getElementById('syncIndicator');
+    const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
+
+    // 回到底部按钮：显示/隐藏逻辑（淡入淡出）
+    function updateScrollToBottomBtn() {
+        if (!scrollToBottomBtn) return;
+        const distanceFromBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight;
+        const threshold = 100;
+        if (distanceFromBottom > threshold) {
+            scrollToBottomBtn.classList.add('visible');
+        } else {
+            scrollToBottomBtn.classList.remove('visible');
+        }
+    }
+    if (scrollToBottomBtn) {
+        scrollToBottomBtn.addEventListener('click', () => {
+            scrollToBottom(true, true);
+        });
+    }
 
     const emojiPlazaBtn = document.getElementById('emojiPlazaBtn');
 
@@ -2915,8 +2933,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     emojiPlazaBtn.addEventListener('click', () => {
-        showEmojiPlaza();
+        // 表情按钮功能暂空，后续加入特定表情功能
     });
+
+    const emojiPlazaMoreBtn = document.getElementById('emojiPlazaMoreBtn');
+    if (emojiPlazaMoreBtn) {
+        emojiPlazaMoreBtn.addEventListener('click', () => {
+            moreMenu.classList.remove('show');
+            showEmojiPlaza();
+        });
+    }
     
 
     logoutBtn.addEventListener('click', () => {
@@ -3268,6 +3294,65 @@ document.addEventListener('DOMContentLoaded', async () => {
         lastRenderedTs = 0;
     }
 
+    // 创建撤回消息的分隔符（如果是自己的文本消息，附带"重新编辑"链接）
+    function createRecallSeparator(recallName, originalMsgEl) {
+        const sep = document.createElement('div');
+        sep.className = 'time-separator';
+
+        let hasReEdit = false;
+        let originalText = '';
+        let originalQuote = null;
+
+        if (originalMsgEl) {
+            try {
+                const rawMsgData = JSON.parse(originalMsgEl.dataset.rawBody || '{}');
+                const rawMsgType = rawMsgData.msg_type || originalMsgEl.dataset.msgType;
+                if (rawMsgType === 'text') {
+                    let body = rawMsgData.body || '';
+                    if (body.trim().startsWith('{')) {
+                        try {
+                            const obj = JSON.parse(body);
+                            originalText = obj.text || '';
+                            if (obj.quote) originalQuote = obj.quote;
+                        } catch (e) {
+                            originalText = body;
+                        }
+                    } else {
+                        originalText = body;
+                    }
+                    if (originalText) hasReEdit = true;
+                }
+            } catch (e) {}
+        }
+
+        if (hasReEdit) {
+            const label = document.createElement('span');
+            label.textContent = recallName + ' 撤回了一条消息 ';
+            const reEdit = document.createElement('a');
+            reEdit.textContent = '重新编辑';
+            reEdit.className = 'recall-reedit-link';
+            reEdit.style.cssText = 'color:var(--accent);cursor:pointer;text-decoration:none;margin-left:6px;';
+            reEdit.onclick = (ev) => {
+                ev.stopPropagation();
+                messageInput.value = originalText;
+                messageInput.style.height = 'auto';
+                if (originalQuote) {
+                    pendingQuote = originalQuote;
+                    quotePreviewText.textContent = `引用: ${originalQuote.from_name || ''} - ${(originalQuote.text || '').substring(0, 50)}`;
+                    quotePreview.style.display = 'flex';
+                }
+                messageInput.focus();
+                messageInput.setSelectionRange(originalText.length, originalText.length);
+            };
+            sep.appendChild(label);
+            sep.appendChild(reEdit);
+        } else {
+            sep.textContent = recallName + ' 撤回了一条消息';
+        }
+
+        return sep;
+    }
+
     function handleWsMessage(msg) {
         if (!msg) return;
         // 兼容服务器裸消息格式（无 type 包装，直接推送消息对象）
@@ -3343,10 +3428,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (currentConv && currentConv.key === convKey) {
                 const target = document.querySelector(`.message[data-msg-id="${CSS.escape(messageId)}"]`);
                 if (target) {
-                    const recallName = uidEq(fromUid, myUid) ? '你' : (lookupName(fromUid) || fromUid);
-                    const sep = document.createElement('div');
-                    sep.className = 'time-separator';
-                    sep.textContent = recallName + ' 撤回了一条消息';
+                    const isMe = uidEq(fromUid, myUid);
+                    const recallName = isMe ? '你' : (lookupName(fromUid) || fromUid);
+                    const sep = createRecallSeparator(recallName, isMe ? target : null);
                     target.replaceWith(sep);
                     breakRecallChain(target, sep);
                 }
@@ -3363,10 +3447,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (currentConv && currentConv.key === convKey) {
                 const target = document.querySelector(`.message[data-msg-id="${CSS.escape(messageId)}"]`);
                 if (target) {
-                    const recallName = uidEq(fromUid, myUid) ? '你' : (lookupName(fromUid) || fromUid);
-                    const sep = document.createElement('div');
-                    sep.className = 'time-separator';
-                    sep.textContent = recallName + ' 撤回了一条消息';
+                    const isMe = uidEq(fromUid, myUid);
+                    const recallName = isMe ? '你' : (lookupName(fromUid) || fromUid);
+                    const sep = createRecallSeparator(recallName, isMe ? target : null);
                     target.replaceWith(sep);
                     breakRecallChain(target, sep);
                 }
@@ -3759,6 +3842,94 @@ document.addEventListener('DOMContentLoaded', async () => {
             // ASC 顺序
             const msgs = (data.messages || []).slice().reverse();
 
+            // ====== 增量更新：检查是否已有缓存 DOM，尝试增量追加新消息 ======
+            const existingMsgEls = messagesContainer.querySelectorAll('.message[data-msg-id]');
+            const existingIds = new Set();
+            existingMsgEls.forEach(el => { if (el.dataset.msgId) existingIds.add(el.dataset.msgId); });
+
+            const newMsgs = msgs.filter(m => m.id && !existingIds.has(m.id));
+
+            // 已有消息且无新消息：直接保留当前 DOM，仅更新状态
+            if (existingMsgEls.length > 0 && newMsgs.length === 0) {
+                convOffset[convKey] = msgs.length;
+                convHasMore[convKey] = msgs.length >= PAGE_SIZE;
+                // 更新缓存
+                delete convCache[convKey];
+                if (currentConv?.key) {
+                    const frag = document.createDocumentFragment();
+                    Array.from(messagesContainer.children).forEach(el => frag.appendChild(el.cloneNode(true)));
+                    convCache[currentConv.key] = {
+                        fragment: frag,
+                        scrollTop: messagesContainer.scrollTop,
+                        seenMsgIds: seenMsgIds[currentConv.key] ? new Set(seenMsgIds[currentConv.key]) : new Set(),
+                        offset: convOffset[currentConv.key] || 0,
+                        hasMore: convHasMore[currentConv.key] !== false,
+                        lastTs: lastRenderedTs || 0
+                    };
+                }
+                return;
+            }
+
+            // 已有消息且有新消息：增量追加
+            if (existingMsgEls.length > 0 && newMsgs.length > 0) {
+                // 检查新消息是否在现有消息之后（简单验证：第一条现有消息在 msgs 中的位置）
+                const firstExisting = existingMsgEls[0].dataset.msgId;
+                const firstExistingIdx = msgs.findIndex(m => m.id === firstExisting);
+
+                if (firstExistingIdx >= 0) {
+                    // 找到重叠点，确定需要追加的消息
+                    const existingIdSet = new Set();
+                    existingMsgEls.forEach(el => { if (el.dataset.msgId) existingIdSet.add(el.dataset.msgId); });
+
+                    // 追加新消息到末尾
+                    newMsgs.forEach(msg => {
+                        if (reqId !== fetchLatestReqId || currentConv?.key !== convKey) return;
+                        appendMessage(msg, convKey, seenMsgIds[convKey] || new Set());
+                    });
+
+                    // 更新连续消息标记
+                    const allMsgEls = messagesContainer.querySelectorAll('.message');
+                    const existingLastIdx = allMsgEls.length - newMsgs.length - 1;
+                    if (existingLastIdx >= 0 && allMsgEls[existingLastIdx]) {
+                        const prevEl = allMsgEls[existingLastIdx];
+                        if (prevEl.classList.contains('consecutive') || prevEl.classList.contains('consecutive-first')) {
+                            prevEl.classList.add('consecutive-last');
+                            const lastNew = allMsgEls[existingLastIdx + 1];
+                            if (lastNew) {
+                                lastNew.classList.remove('consecutive-last');
+                                if (prevEl.dataset.fromUid === lastNew.dataset.fromUid) {
+                                    lastNew.classList.add('consecutive');
+                                }
+                            }
+                        }
+                    }
+
+                    // 更新状态
+                    convOffset[convKey] = msgs.length;
+                    convHasMore[convKey] = msgs.length >= PAGE_SIZE;
+
+                    // 平滑滚动到新消息位置
+                    scrollToBottom(true, true);
+
+                    // 缓存最新 DOM
+                    delete convCache[convKey];
+                    if (currentConv?.key) {
+                        const frag = document.createDocumentFragment();
+                        Array.from(messagesContainer.children).forEach(el => frag.appendChild(el.cloneNode(true)));
+                        convCache[currentConv.key] = {
+                            fragment: frag,
+                            scrollTop: messagesContainer.scrollTop,
+                            seenMsgIds: seenMsgIds[currentConv.key] ? new Set(seenMsgIds[currentConv.key]) : new Set(),
+                            offset: convOffset[currentConv.key] || 0,
+                            hasMore: convHasMore[currentConv.key] !== false,
+                            lastTs: lastRenderedTs || 0
+                        };
+                    }
+                    return;
+                }
+            }
+
+            // ====== 完整重建路径（无缓存/无新消息/消息顺序异常） ======
             // 重建期间隐藏容器，避免清空容器导致 scrollTop 跳转到顶部
             messagesContainer.style.visibility = 'hidden';
             // 清空容器
@@ -3847,6 +4018,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             messagesContainer.removeEventListener('scroll', messagesContainer._scrollHandler);
         }
         messagesContainer._scrollHandler = async () => {
+            updateScrollToBottomBtn();
             if (!convHasMore[convKey] || isLoadingMore) return;
             if (messagesContainer.scrollTop > 5) return;
 
@@ -4146,7 +4318,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 try {
                     const obj = JSON.parse(msg.body);
                     if (obj.v === 2) {
-                        displayText = obj.text || '';
+                        displayText = escapeHtml(obj.text || '');
                         if (obj.quote) {
                             const quote = obj.quote;
                             displayText = `<div class="quote-block" data-quoted-id="${escapeHtml(quote.id || '')}">
@@ -4252,7 +4424,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 try {
                     const obj = JSON.parse(body);
                     if (obj.v === 2) {
-                        let textBody = obj.text || '';
+                        let textBody = escapeHtml(obj.text || '');
                         if (obj.quote) {
                             const quote = obj.quote;
                             quoteHtml = `
@@ -4458,14 +4630,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
 
-        const fromUid = msg.from_uid || '';
+        const fromUid = getFromUid(msg) || msg.from_uid || '';
         const isPlainText = (msg.msg_type || 'text') === 'text' && !(msg.body || '').trim().startsWith('{');
         const msgTs = msg.created_at || 0;
 
         // 检查是否为连续消息（同发送者、5分钟内、同会话）
+        // 使用 uidEq 兼容 uid/ncuid 两种格式
         const isConsecutive = lastRenderedMsg &&
             lastRenderedMsg.convKey === convKey &&
-            lastRenderedMsg.from_uid === fromUid &&
+            uidEq(lastRenderedMsg.from_uid, fromUid) &&
             msgTs && lastRenderedTs && (msgTs - lastRenderedTs) <= 300;
 
         // 检查时间间隔，超过5分钟插入时间分隔符
@@ -4587,6 +4760,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     messagesContainer.scrollTop = messagesContainer.scrollHeight;
                 }
                 if (chatScrollbar) requestAnimationFrame(() => chatScrollbar.update());
+                updateScrollToBottomBtn();
             });
             // 长消息/图片加载可能延迟，再补一次兜底
             setTimeout(() => {
@@ -4598,6 +4772,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     messagesContainer.scrollTop = messagesContainer.scrollHeight;
                 }
                 if (chatScrollbar) chatScrollbar.update();
+                updateScrollToBottomBtn();
             }, 250);
             return;
         }
@@ -4610,6 +4785,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 ensureScrollAnchor();
                 try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch(e) {}
                 if (chatScrollbar) requestAnimationFrame(() => chatScrollbar.update());
+                updateScrollToBottomBtn();
             });
             setTimeout(() => {
                 // 再检查一次：图片/长消息加载后仍在底部附近则继续对齐
@@ -4620,6 +4796,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch(e) {}
                     if (chatScrollbar) chatScrollbar.update();
                 }
+                updateScrollToBottomBtn();
             }, 250);
         }
     }
@@ -4946,7 +5123,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const tempId = 'temp_' + Date.now();
         const tempMsg = {
             id: tempId,
-            from_uid: myUid,
+            from_uid: myDisplayUid,
+            from_ncuid: myUid,
             from_name: myName,
             from_avatar: myAvatar || '',
             body: msgType === 'text' ? body : '',
@@ -5004,24 +5182,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (tempEl) {
                     const newEl = createMessageElement(msg, currentConv.key, seenMsgIds[currentConv.key]);
                     if (newEl) {
-                        // 检查是否为连消息
-                        const msgTs = msg.created_at || 0;
-                        if (lastRenderedMsg &&
-                            lastRenderedMsg.convKey === currentConv.key &&
-                            lastRenderedMsg.from_uid === (msg.from_uid || '') &&
-                            msgTs && lastRenderedTs && (msgTs - lastRenderedTs) <= 300) {
-                            newEl.classList.add('consecutive');
-                            if (lastRenderedMsg.element) {
-                                lastRenderedMsg.element.classList.add('consecutive-first');
-                            }
-                        } else {
-                            if (lastRenderedMsg && lastRenderedMsg.element) {
-                                lastRenderedMsg.element.classList.remove('consecutive-first');
-                            }
-                        }
+                        // 保留临时消息上的连消息 class
+                        if (tempEl.classList.contains('consecutive')) newEl.classList.add('consecutive');
+                        if (tempEl.classList.contains('consecutive-first')) newEl.classList.add('consecutive-first');
+                        if (tempEl.classList.contains('consecutive-last')) newEl.classList.add('consecutive-last');
                         tempEl.replaceWith(newEl);
-                        lastRenderedMsg = { convKey: currentConv.key, from_uid: msg.from_uid || '', element: newEl };
-                        lastRenderedTs = msgTs;
+                        lastRenderedMsg = { convKey: currentConv.key, from_uid: getFromUid(msg) || msg.from_uid || '', element: newEl };
+                        lastRenderedTs = msg.created_at || 0;
                     }
                     seenMsgIds[currentConv.key]?.delete(tempId);
                     seenMsgIds[currentConv.key]?.add(msg.id);
@@ -5411,7 +5578,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const tempId = 'temp_' + Date.now();
         const tempMsg = {
             id: tempId,
-            from_uid: myUid,
+            from_uid: myDisplayUid,
+            from_ncuid: myUid,
             from_name: myName,
             from_avatar: myAvatar || '',
             body: '',
@@ -5472,23 +5640,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (tempEl) {
                 const newEl = createMessageElement(msg, currentConv.key, seenMsgIds[currentConv.key]);
                 if (newEl) {
-                    const msgTs = msg.created_at || 0;
-                    if (lastRenderedMsg &&
-                        lastRenderedMsg.convKey === currentConv.key &&
-                        lastRenderedMsg.from_uid === (msg.from_uid || '') &&
-                        msgTs && lastRenderedTs && (msgTs - lastRenderedTs) <= 300) {
-                        newEl.classList.add('consecutive');
-                        if (lastRenderedMsg.element) {
-                            lastRenderedMsg.element.classList.add('consecutive-first');
-                        }
-                    } else {
-                        if (lastRenderedMsg && lastRenderedMsg.element) {
-                            lastRenderedMsg.element.classList.remove('consecutive-first');
-                        }
-                    }
+                    // 保留临时消息上的连消息 class
+                    if (tempEl.classList.contains('consecutive')) newEl.classList.add('consecutive');
+                    if (tempEl.classList.contains('consecutive-first')) newEl.classList.add('consecutive-first');
+                    if (tempEl.classList.contains('consecutive-last')) newEl.classList.add('consecutive-last');
                     tempEl.replaceWith(newEl);
-                    lastRenderedMsg = { convKey: currentConv.key, from_uid: msg.from_uid || '', element: newEl };
-                    lastRenderedTs = msgTs;
+                    lastRenderedMsg = { convKey: currentConv.key, from_uid: getFromUid(msg) || msg.from_uid || '', element: newEl };
+                    lastRenderedTs = msg.created_at || 0;
                 }
             }
             // 发送成功后清除引用
@@ -5567,7 +5725,89 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
         
-        // 优先显示消息菜单
+        // 优先判断是否点在消息头像上 —— 显示头像专属菜单
+        const avatarEl = e.target.closest('.msg-avatar');
+        if (avatarEl) {
+            const msgDiv = avatarEl.closest('.message');
+            const fromUid = msgDiv ? msgDiv.dataset.fromUid : '';
+            const fromName = msgDiv ? msgDiv.dataset.fromName : '';
+            const isOwn = fromUid && fromUid.toUpperCase() === myUid.toUpperCase();
+
+            const menu = document.createElement('div');
+            menu.className = 'custom-context-menu';
+            menu.style.left = e.clientX + 'px';
+            menu.style.top = e.clientY + 'px';
+
+            let menuHtml = '';
+            if (!isOwn) {
+                menuHtml = `
+                    <div class="context-menu-item" data-action="mention">@ TA</div>
+                    <div class="context-menu-item" data-action="profile">查看主页</div>
+                    <div class="context-menu-divider"></div>
+                    <div class="context-menu-item" data-action="copy-name">复制昵称</div>
+                    <div class="context-menu-item" data-action="copy-uid">复制ID</div>
+                `;
+            } else {
+                menuHtml = `
+                    <div class="context-menu-item" data-action="profile">查看主页</div>
+                    <div class="context-menu-divider"></div>
+                    <div class="context-menu-item" data-action="copy-name">复制昵称</div>
+                    <div class="context-menu-item" data-action="copy-uid">复制ID</div>
+                `;
+            }
+            menu.innerHTML = menuHtml;
+            document.body.appendChild(menu);
+            requestAnimationFrame(() => menu.classList.add('show'));
+            contextMenu = menu;
+
+            menu.addEventListener('click', (event) => {
+                const action = event.target.dataset.action;
+                if (action === 'mention') {
+                    if (currentConv && currentConv.type === 'group' && !isOwn) {
+                        const insertText = `@${fromName} `;
+                        messageInput.value = (messageInput.value || '') + insertText;
+                        messageInput.focus();
+                    } else if (isOwn) {
+                        openSpacePanel(fromUid);
+                    } else {
+                        // 单聊或非群聊：直接打开对方主页
+                        openSpacePanel(fromUid);
+                    }
+                } else if (action === 'profile') {
+                    if (isOwn) {
+                        openSpacePanel(myUid);
+                    } else {
+                        openSpacePanel(fromUid);
+                    }
+                } else if (action === 'copy-name') {
+                    const text = fromName || fromUid || '';
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(text).catch(() => fallbackCopyText(text));
+                    } else {
+                        fallbackCopyText(text);
+                    }
+                } else if (action === 'copy-uid') {
+                    const text = fromUid || '';
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(text).catch(() => fallbackCopyText(text));
+                    } else {
+                        fallbackCopyText(text);
+                    }
+                }
+                hideContextMenu();
+            });
+
+            const closeHandler = (ev) => {
+                if (!menu.contains(ev.target)) {
+                    hideContextMenu();
+                    document.removeEventListener('click', closeHandler);
+                }
+            };
+            setTimeout(() => document.addEventListener('click', closeHandler), 0);
+            return;
+        }
+
+        // 其次判断是否在消息上 —— 显示消息菜单
         const msgDiv = e.target.closest('.message');
         if (msgDiv) {
             // 右键 mousedown 可能已清除选区，优先用 getSelection，回退到 mouseup 时保存的文本
@@ -5687,19 +5927,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const recallUrl = currentConv.type === 'group'
                         ? `/v1/groups/messages/${encodeURIComponent(msgId)}`
                         : `/v1/direct/messages/${encodeURIComponent(msgId)}`;
+
+                    // 先在本地替换 DOM（在 WebSocket 回调到达前生效），再发请求
+                    const timeSep = createRecallSeparator('你', msgDiv);
+                    msgDiv.replaceWith(timeSep);
+                    breakRecallChain(msgDiv, timeSep);
+                    seenMsgIds[currentConv.key]?.delete(msgId);
+
                     apiFetch(recallUrl, { method: 'DELETE' })
                         .then(r => r.json())
                         .then(d => {
                             if (d.error) {
                                 showAlert(d.error || '撤回失败');
-                            } else {
-                                const recallText = '你 撤回了一条消息';
-                                const timeSep = document.createElement('div');
-                                timeSep.className = 'time-separator';
-                                timeSep.textContent = recallText;
-                                msgDiv.replaceWith(timeSep);
-                                // 清理去重记录
-                                seenMsgIds[currentConv.key]?.delete(msgId);
                             }
                         }).catch(() => showAlert('网络错误'));
                 }
@@ -6098,7 +6337,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadMoreBtn.addEventListener('click', loadPage);
 
         const closeHandler = (e) => {
-            if (!panel.contains(e.target) && e.target !== emojiPlazaBtn) {
+            if (!panel.contains(e.target) && e.target !== emojiPlazaBtn && e.target !== emojiPlazaMoreBtn) {
                 panel.remove();
                 document.removeEventListener('click', closeHandler);
             }
