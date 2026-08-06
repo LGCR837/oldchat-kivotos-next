@@ -4,6 +4,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, WebviewWindow,
 };
+use tauri_plugin_dialog::{DialogExt, FilePath};
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -107,12 +108,44 @@ fn flash_taskbar_windows(hwnd_val: isize) {
     }
 }
 
+// 弹出原生保存对话框，写入二进制数据
+fn save_with_dialog(app: &tauri::AppHandle, data: &[u8]) -> Result<(), String> {
+    let file_path = app.dialog().file()
+        .add_filter("图片", &["jpg", "jpeg", "png", "gif", "webp", "bmp"])
+        .blocking_save_file();
+
+    if let Some(path) = file_path {
+        match path {
+            FilePath::Path(p) => {
+                std::fs::write(&p, data).map_err(|e| format!("保存失败: {}", e))?;
+            }
+            _ => return Err("不支持的路径类型".into()),
+        }
+    }
+    Ok(())
+}
+
+// 通过 URL 下载图片（HTTP / HTTPS）
+#[tauri::command]
+async fn save_image(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    let response = reqwest::get(&url).await.map_err(|e| format!("下载失败: {}", e))?;
+    let bytes = response.bytes().await.map_err(|e| format!("读取失败: {}", e))?;
+    save_with_dialog(&app, &bytes)
+}
+
+// 直接保存二进制数据（blob URL 用 canvas 读出后传过来）
+#[tauri::command]
+async fn save_image_data(app: tauri::AppHandle, data: Vec<u8>) -> Result<(), String> {
+    save_with_dialog(&app, &data)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             greet,
             toggle_devtools,
@@ -120,7 +153,9 @@ pub fn run() {
             toggle_maximize_window,
             close_window,
             is_window_maximized,
-            notify_new_message
+            notify_new_message,
+            save_image,
+            save_image_data
         ])
         // 拦截窗口关闭请求：改为隐藏到托盘
         .on_window_event(|window, event| {

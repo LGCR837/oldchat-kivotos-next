@@ -463,7 +463,7 @@
             try {
                 var r = await fetch(getApiBase() + '/v1/auth/login', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'User-Agent': 'OldChatForKivotosNext' },
                     body: JSON.stringify({
                         identifier: id, password: pwd,
                         device_id: getDeviceId(), device_name: navigator.userAgent.slice(0, 120),
@@ -517,7 +517,7 @@
             try {
                 var r = await fetch(getApiBase() + '/v1/auth/email/send', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'User-Agent': 'OldChatForKivotosNext' },
                     body: JSON.stringify({
                         email: email,
                         geetest_lot_number: geetestResult.lot_number,
@@ -572,7 +572,7 @@
             try {
                 var r = await fetch(getApiBase() + '/v1/auth/web/register', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'User-Agent': 'OldChatForKivotosNext' },
                     body: JSON.stringify({
                         email: email, username: username, password: password,
                         email_code: emailCode,

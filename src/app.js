@@ -253,6 +253,15 @@ function resolveMediaUrl(url) {
     if (MEDIA_BASE && url.startsWith('/')) return MEDIA_BASE + url;
     return url;
 }
+// 缓存 resolveMediaUrl 结果，减少重复字符串操作
+const mediaUrlCache = new Map();
+function cachedResolveMediaUrl(url) {
+    if (!url) return url;
+    if (mediaUrlCache.has(url)) return mediaUrlCache.get(url);
+    const result = resolveMediaUrl(url);
+    mediaUrlCache.set(url, result);
+    return result;
+}
 
 function escapeHtml(text) {
     const div = document.createElement('div');
@@ -414,7 +423,7 @@ function escapeRegExp(string) {
                     if (matches.length === 0) return;
                     const newCssPromise = Promise.all(matches.map((m) => {
                         const rawUrl = m[1];
-                        const resolved = resolveMediaUrl(rawUrl);  // 用全局的 resolve
+                        const resolved = cachedResolveMediaUrl(rawUrl);  // 用全局的 resolve
                         return new Promise(res => getCachedUrlOrPass(resolved, (nu) => res({ old: m[0], new: `url("${nu}")` })));
                     }));
                     newCssPromise.then(reps => {
@@ -527,6 +536,154 @@ function createTimeSeparator(ts) {
     return div;
 }
 
+
+// 复制图片到剪贴板
+function copyImageToClipboard(src) {
+    if (!src) return;
+    // 尝试用 canvas 方式获取图片 blob
+    const img = new Image();
+    // blob URL 不需要 crossOrigin（且设置 crossOrigin 可能导致加载失败）
+    if (!src.startsWith('blob:')) {
+        img.crossOrigin = 'anonymous';
+    }
+    img.onload = function() {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob(function(blob) {
+            if (blob && navigator.clipboard && navigator.clipboard.write) {
+                navigator.clipboard.write([
+                    new ClipboardItem({ 'image/png': blob })
+                ]).catch(function() {
+                    // 如果 clipboard write 失败，回退到复制 URL
+                    fallbackCopyText(src);
+                });
+            } else {
+                fallbackCopyText(src);
+            }
+        });
+    };
+    img.onerror = function() {
+        // 如果加载失败，回退到复制 URL
+        navigator.clipboard.writeText(src).catch(() => fallbackCopyText(src));
+    };
+    img.src = src;
+}
+
+// 下载图片到本地（触发浏览器下载）
+function downloadImage(src) {
+    if (!src) return;
+
+    // Tauri 环境：使用原生 Rust 命令下载
+    if (IS_TAURI) {
+        if (src.startsWith('blob:')) {
+            // blob URL：用 canvas 读出像素数据，传给 Rust 保存
+            var img = new Image();
+            img.onload = function() {
+                var canvas = document.createElement('canvas');
+                canvas.width = img.naturalWidth;
+                canvas.height = img.naturalHeight;
+                canvas.getContext('2d').drawImage(img, 0, 0);
+                canvas.toBlob(function(blob) {
+                    if (!blob) { console.error('canvas toBlob 失败'); return; }
+                    var reader = new FileReader();
+                    reader.onload = function() {
+                        var arr = new Uint8Array(reader.result);
+                        window.__TAURI_INTERNALS__.invoke('save_image_data', { data: Array.from(arr) })
+                            .catch(function(e) { console.error('save_image_data 失败:', e); });
+                    };
+                    reader.onerror = function() { console.error('FileReader 失败'); };
+                    reader.readAsArrayBuffer(blob);
+                });
+            };
+            img.onerror = function() { console.error('图片加载失败'); };
+            img.src = src;
+        } else {
+            // HTTP URL：直接传给 Rust 用 reqwest 下载
+            window.__TAURI_INTERNALS__.invoke('save_image', { url: src })
+                .catch(function(err) {
+                    console.error('Tauri save_image 失败:', err);
+                });
+        }
+        return;
+    }
+
+    // 非 Tauri 环境：Web 下载方式
+    webDownloadImage(src);
+}
+
+// Web 环境下的下载方式（非 Tauri 回退 + Tauri 回退）
+function webDownloadImage(src) {
+    if (!src) return;
+    var filename = 'image_' + Date.now() + '.jpg';
+
+    function saveBlob(blob) {
+        // 尝试 msSaveBlob（WebView2 专用）
+        if (window.navigator.msSaveBlob) {
+            window.navigator.msSaveBlob(blob, filename);
+            return;
+        }
+        // 使用 ObjectURL 创建下载链接
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+    }
+
+    function fetchAndSave(imgUrl) {
+        fetch(imgUrl)
+            .then(function(res) { return res.blob(); })
+            .then(function(blob) { saveBlob(blob); })
+            .catch(function() { fallbackDownload(imgUrl); });
+    }
+
+    function fallbackDownload(imgUrl) {
+        var img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = function() {
+            var canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            var ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            canvas.toBlob(function(blob) {
+                if (blob) {
+                    saveBlob(blob);
+                } else {
+                    window.open(imgUrl, '_blank');
+                }
+            });
+        };
+        img.onerror = function() {
+            window.open(imgUrl, '_blank');
+        };
+        img.src = imgUrl;
+    }
+
+    if (src.startsWith('blob:')) {
+        var img = new Image();
+        img.onload = function() {
+            var canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            var ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            canvas.toBlob(function(blob) {
+                if (blob) saveBlob(blob);
+            });
+        };
+        img.onerror = function() {};
+        img.src = src;
+    } else {
+        fetchAndSave(src);
+    }
+}
 
 function openImageViewer(src) {
 	let overlay = document.getElementById('imageOverlay');
@@ -832,8 +989,9 @@ function openImageViewer(src) {
 async function apiFetch(url, options = {}) {
     const fullUrl = url.startsWith('/v1/') ? API_BASE + url.slice(3) : url;
     const token = localStorage.getItem('oc_access_token');
+    options.headers = options.headers || {};
+    options.headers['User-Agent'] = 'OldChatForKivotosNext';
     if (token) {
-        options.headers = options.headers || {};
         options.headers['Authorization'] = 'Bearer ' + token;
     }
     let res = await fetch(fullUrl, options);
@@ -842,7 +1000,7 @@ async function apiFetch(url, options = {}) {
         if (refreshToken) {
             const refreshRes = await fetch(API_BASE + '/auth/refresh', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'User-Agent': 'OldChatForKivotosNext' },
                 body: JSON.stringify({ refresh_token: refreshToken })
             });
             if (refreshRes.ok) {
@@ -1028,6 +1186,12 @@ function showConfirm(text, title = '提示') {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+    // 用户信息缓存（4小时过期）——必须放在最前面，避免 temporal dead zone
+    const userProfileCache = new Map();
+    const invalidUidCache = new Set();
+    const CACHE_TTL = 4 * 60 * 60 * 1000;
+    const pendingProfileFetches = new Map();
+
     // 从 localStorage 读取用户信息（登录页写入）
     const storedUser = JSON.parse(localStorage.getItem('oc_user') || '{}');
     let myUid = storedUser.ncuid || storedUser.uid || '';  // API用
@@ -1237,8 +1401,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         div.dataset.musicUrl = m.media_url || m.song_url || '';
         div.dataset.musicName = m.name || '未知歌曲';
         div.dataset.musicArtist = m.owner_name || m.artist || '未知';
-        div.dataset.musicCover = m.cover_url ? resolveMediaUrl(m.cover_url) : '';
-        const cover = m.cover_url ? resolveMediaUrl(m.cover_url) : 'assets/default-avatar.png';
+        div.dataset.musicCover = m.cover_url ? cachedResolveMediaUrl(m.cover_url) : '';
+        const cover = m.cover_url ? cachedResolveMediaUrl(m.cover_url) : 'assets/default-avatar.png';
         const artist = m.owner_name || m.artist || '未知';
         div.innerHTML = `<img class="contact-avatar" src="${cover}" onerror="this.src='assets/default-avatar.png'"><div class="contact-info"><div class="name">${escapeHtml(m.name || '未知歌曲')}</div><div class="uid">${escapeHtml(artist)}</div></div>`;
         div.addEventListener('click', () => playMusic(m));
@@ -1525,7 +1689,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     function renderMusicWorkspace(m) {
         if (!musicWorkspace) return;
-        const cover = m.cover_url ? resolveMediaUrl(m.cover_url) : '';
+        const cover = m.cover_url ? cachedResolveMediaUrl(m.cover_url) : '';
         const bgStyle = cover ? `style="background-image:url('${escapeAttr(cover)}')"` : '';
         // 保留右上角三大金刚键
         const winControls = musicWorkspace.querySelector('.music-win-controls');
@@ -1612,7 +1776,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         try {
             // 使用 resolveMediaUrl 转换URL（与音频、封面相同的逻辑）
-            const fullUrl = resolveMediaUrl(lyricsUrl);
+            const fullUrl = cachedResolveMediaUrl(lyricsUrl);
             const res = await fetch(fullUrl);
             if (!res.ok) throw new Error('HTTP ' + res.status);
             const lrcText = await res.text();
@@ -1654,7 +1818,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         ensureMusicAudio();
         const url = m.media_url || m.song_url || '';
         if (!url) { console.warn('[music] no url'); return; }
-        const fullUrl = resolveMediaUrl(url);
+        const fullUrl = cachedResolveMediaUrl(url);
         musicCurrentItem = m;
         window.musicCurrentItem = m;
         console.log('[music] 播放音乐对象:', m);
@@ -1923,8 +2087,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                         if (mediaUrls.length > 0) {
                             media = '<div style="margin-top:8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;">';
                             mediaUrls.forEach(mu => {
-                                const resolvedUrl = resolveMediaUrl(mu);
-                                media += '<img src="' + resolvedUrl + '" style="width:100%;max-height:200px;object-fit:cover;border-radius:8px;cursor:pointer;" onclick="openImageViewer(\'' + resolvedUrl.replace(/'/g, "\\'") + '\')" onerror="this.style.display=\'none\'">';
+                                const resolvedUrl = cachedResolveMediaUrl(mu);
+                                // loading="lazy" 延迟加载 + min-height 预留空位避免闪烁
+                                media += '<img src="' + resolvedUrl + '" loading="lazy" style="width:100%;min-height:120px;max-height:200px;object-fit:cover;border-radius:8px;cursor:pointer;background:var(--hover);" onclick="openImageViewer(\'' + resolvedUrl.replace(/'/g, "\\'") + '\')" onerror="this.style.display=\'none\'">';
                             });
                             media += '</div>';
                         }
@@ -1956,14 +2121,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                             '</div>' +
                         '</div>';
                 }
-                const coverUrl = u.cover_url ? resolveMediaUrl(u.cover_url) : '';
+                const coverUrl = u.cover_url ? cachedResolveMediaUrl(u.cover_url) : '';
                 const coverHtml = coverUrl
                     ? '<div style="position:relative;height:320px;background-image:url(\'' + coverUrl.replace(/'/g, "\\'") + '\');background-size:cover;background-position:center;"></div>'
                     : '';
                 scroll.innerHTML =
                     coverHtml +
                     '<div style="background:var(--chat-bg);padding:28px 20px 20px;display:flex;flex-direction:column;align-items:center;' + (coverUrl ? 'margin-top:-40px;position:relative;z-index:1;' : '') + '">' +
-                        '<img src="' + resolveMediaUrl(avatar) + '" style="width:80px;height:80px;border-radius:50%;object-fit:cover;margin-bottom:12px;background:var(--border);border:3px solid var(--chat-bg);" onerror="this.src=\'' + defaultAvatar + '\'">' +
+                        '<img src="' + cachedResolveMediaUrl(avatar) + '" style="width:80px;height:80px;border-radius:50%;object-fit:cover;margin-bottom:12px;background:var(--border);border:3px solid var(--chat-bg);" onerror="this.src=\'' + defaultAvatar + '\'">' +
                         '<div style="font-size:20px;font-weight:600;color:var(--text);margin-bottom:4px;display:flex;align-items:center;justify-content:center;gap:8px;">' + (u.display_name || u.username) + (u.user_title ? '<span style="font-size:11px;color:#333;background:#e8e8e8;padding:1px 7px;border-radius:4px;line-height:18px;font-weight:400;">' + escapeHtml(u.user_title) + '</span>' : '') + '</div>' +
                         '<div style="font-size:12px;color:var(--secondary-text);margin-bottom:4px;">' + getDisplayUid(u) + '</div>' +
                         (u.signature ? '<div style="font-size:13px;color:var(--secondary-text);margin-bottom:12px;text-align:center;max-width:300px;">' + escapeHtml(u.signature) + '</div>' : '') +
@@ -2114,6 +2279,24 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (e) { console.error(e); }
     }
 
+    // 节流标记已读：WS 消息到达时不立即发送，合并到 2 秒内只发一次
+    const _debouncedReadTimers = new Map(); // convKey -> timer
+    function debouncedMarkRead(convType, convId) {
+        if (!convId) return;
+        const convKey = convType + ':' + convId;
+        if (_debouncedReadTimers.has(convKey)) {
+            clearTimeout(_debouncedReadTimers.get(convKey));
+        }
+        _debouncedReadTimers.set(convKey, setTimeout(() => {
+            _debouncedReadTimers.delete(convKey);
+            if (convType === 'direct') {
+                apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(withUidParam(convId)) }).catch(() => {});
+            } else {
+                apiFetch('/v1/groups/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ group_id: convId }) }).catch(() => {});
+            }
+        }, 2000));
+    }
+
     // 动态评论弹窗：展示评论列表并支持添加
     function openMomentCommentsPanel(momentId, triggerBtn) {
         const overlay = document.createElement('div');
@@ -2165,7 +2348,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const cid = getUid(c) || c.from_ncuid || c.from_uid || '';
                     const cname = c.from_name || c.display_name || c.username || (cid ? lookupName(cid) : '') || '匿名用户';
                     const cavatar = c.from_avatar || c.avatar_url || (cid ? lookupAvatar(cid) : '') || '';
-                    const avatarSrc = cavatar ? resolveMediaUrl(cavatar) : 'assets/default-avatar.png';
+                    const avatarSrc = cavatar ? cachedResolveMediaUrl(cavatar) : 'assets/default-avatar.png';
                     return '<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--border-color);">' +
                         '<img src="' + avatarSrc + '" onerror="this.src=\'assets/default-avatar.png\'" style="width:36px;height:36px;border-radius:50%;flex-shrink:0;cursor:pointer;" data-uid="' + escapeHtml(cid) + '" />' +
                         '<div style="flex:1;min-width:0;">' +
@@ -2284,7 +2467,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const cid = getUid(cu) || cu.uid || cu.ncuid || getUid(c) || c.from_ncuid || c.from_uid || '';
                     const cname = cu.display_name || cu.username || cu.name || c.from_name || c.display_name || c.username || (cid ? lookupName(cid) : '') || '匿名用户';
                     const cavatar = cu.avatar_url || c.from_avatar || c.avatar_url || (cid ? lookupAvatar(cid) : '') || '';
-                    const avatarSrc = cavatar ? resolveMediaUrl(cavatar) : 'assets/default-avatar.png';
+                    const avatarSrc = cavatar ? cachedResolveMediaUrl(cavatar) : 'assets/default-avatar.png';
                     const body = c.content_text || c.body || c.text || '';
                     return '<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">' +
                         '<img src="' + avatarSrc + '" onerror="this.src=\'assets/default-avatar.png\'" style="width:36px;height:36px;border-radius:50%;flex-shrink:0;cursor:pointer;" data-uid="' + escapeHtml(cid) + '" />' +
@@ -2383,7 +2566,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const mUid = m.uid;
                     const isMe = isSelfUid(mUid);
                     membersHtml += `<div class="gm-member-item" data-uid="${escapeHtml(mUid)}" style="cursor:pointer;">` +
-                        `<img class="gm-member-avatar" src="${resolveMediaUrl(m.avatar || defaultAvatar)}" onerror="this.src='${defaultAvatar}'">` +
+                        `<img class="gm-member-avatar" src="${cachedResolveMediaUrl(m.avatar || defaultAvatar)}" onerror="this.src='${defaultAvatar}'">` +
                         `<div class="gm-member-info"><div class="gm-member-name">${escapeHtml(m.name)}</div><div class="gm-member-uid">${escapeHtml(m.displayUid)}</div></div>` +
                         (isMe ? '<span class="gm-member-tag">我</span>' : '') +
                         `</div>`;
@@ -2396,7 +2579,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 scroll.innerHTML =
                     '<div class="gm-profile">' +
-                        `<img class="gm-avatar" src="${resolveMediaUrl(avatar)}" onerror="this.src='${defaultAvatar}'">` +
+                        `<img class="gm-avatar" src="${cachedResolveMediaUrl(avatar)}" onerror="this.src='${defaultAvatar}'">` +
                         `<div class="gm-name">${escapeHtml(info.name || groupName)}</div>` +
                         `<div class="gm-meta">群聊ID: ${escapeHtml(info.group_id || groupId)}</div>` +
                         `<div class="gm-meta">成员数: ${info.member_count || members.length} 人</div>` +
@@ -2468,7 +2651,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (friends.length > 0) {
                 friends.forEach(f => {
                     friendsHtml += `<div class="gm-friend-item" data-uid="${escapeHtml(f.uid)}">` +
-                        `<img class="gm-friend-avatar" src="${resolveMediaUrl(f.avatar || defaultAvatar)}" onerror="this.src='${defaultAvatar}'">` +
+                        `<img class="gm-friend-avatar" src="${cachedResolveMediaUrl(f.avatar || defaultAvatar)}" onerror="this.src='${defaultAvatar}'">` +
                         `<div class="gm-friend-info"><div class="gm-friend-name">${escapeHtml(f.name)}</div><div class="gm-friend-uid">${escapeHtml(getDisplayUid(f))}</div></div>` +
                         `<button class="gm-friend-invite-btn">邀请</button>` +
                         `</div>`;
@@ -2596,7 +2779,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         const fAvatar = f.avatar_url || defaultAvatar;
                         const displayName = f.remark_name || f.display_name || f.username || getUid(f);
                         friendsHtml += `<div class="mp-req-item" data-uid="${escapeHtml(f.uid)}">` +
-                            `<img class="mp-req-avatar" src="${resolveMediaUrl(fAvatar)}" onerror="this.src='${defaultAvatar}'">` +
+                            `<img class="mp-req-avatar" src="${cachedResolveMediaUrl(fAvatar)}" onerror="this.src='${defaultAvatar}'">` +
                             `<div class="mp-req-info"><div class="mp-req-name">${escapeHtml(displayName)}</div>` +
                             `<div class="mp-req-time">${escapeHtml(getDisplayUid(f))}</div></div>` +
                             `<button class="mp-req-chat-btn" data-uid="${escapeHtml(f.uid)}">私聊</button>` +
@@ -2610,7 +2793,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 scroll.innerHTML =
                     '<div class="mp-profile">' +
                         `<div class="mp-avatar-wrap" id="mpAvatarWrap">` +
-                            `<img class="mp-avatar" id="mpAvatar" src="${resolveMediaUrl(avatar)}" onerror="this.src='${defaultAvatar}'">` +
+                            `<img class="mp-avatar" id="mpAvatar" src="${cachedResolveMediaUrl(avatar)}" onerror="this.src='${defaultAvatar}'">` +
                             `<div class="mp-avatar-mask">更换头像</div>` +
                         `</div>` +
                         `<input type="file" id="mpAvatarInput" accept="image/*" style="display:none">` +
@@ -2652,7 +2835,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         const r = await apiFetch('/v1/me/avatar', { method: 'POST', body: formData });
                         const d = await r.json();
                         if (d.error) { showAlert(d.error); return; }
-                        document.getElementById('mpAvatar').src = resolveMediaUrl(d.avatar_url);
+                        document.getElementById('mpAvatar').src = cachedResolveMediaUrl(d.avatar_url);
                         currentProfile.avatar_url = d.avatar_url;
                     } catch (err) { showAlert('上传失败'); }
                 });
@@ -3006,13 +3189,31 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }))
             };
             renderContacts();
-            // 后台预加载联系人资料（填充称号到缓存）
-            contacts.friends.forEach(f => {
-                const cacheKey = f.uid.toUpperCase();
-                if (!userProfileCache.has(cacheKey)) {
-                    fetchUserProfile(f.displayUid, f.uid).catch(() => {});
+            // 后台预加载联系人资料（填充称号到缓存），节流控制并发数
+            const MAX_CONCURRENT_PROFILE_FETCHES = 3;
+            let profileFetchIndex = 0;
+            function fetchProfileBatch() {
+                const batch = [];
+                while (profileFetchIndex < contacts.friends.length && batch.length < MAX_CONCURRENT_PROFILE_FETCHES) {
+                    const f = contacts.friends[profileFetchIndex++];
+                    const cacheKey = f.uid.toUpperCase();
+                    if (!userProfileCache.has(cacheKey)) {
+                        batch.push(fetchUserProfile(f.displayUid, f.uid).catch(() => {}));
+                    }
                 }
-            });
+                if (batch.length > 0) {
+                    Promise.all(batch).then(() => {
+                        // 继续下一批
+                        if (profileFetchIndex < contacts.friends.length) {
+                            fetchProfileBatch();
+                        }
+                    });
+                } else if (profileFetchIndex < contacts.friends.length) {
+                    // 没有需要请求的，跳过
+                    fetchProfileBatch();
+                }
+            }
+            fetchProfileBatch();
             // 加载未读计数（同步等待，避免后续 switchConversation 清红点后被覆盖）
             await loadUnreadCounts();
         } catch (e) { console.error(e); }
@@ -3063,10 +3264,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     // WebSocket 连接
     let ws = null;
     let wsReconnectTimer = null;
+    let wsReconnectAttempts = 0;
+    const WS_RECONNECT_BASE_DELAY = 5000; // 初始 5 秒（不要太快退避）
+    const WS_RECONNECT_MAX_DELAY = 30000; // 最大 30 秒
     // ECDH 会话密钥
     let wsSessionId = null;
     let wsEncKey = null;
     let wsMacKey = null;
+
+    // 指数退避调度重连
+    function scheduleWsReconnect() {
+        if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
+        const delay = Math.min(WS_RECONNECT_BASE_DELAY * Math.pow(2, wsReconnectAttempts), WS_RECONNECT_MAX_DELAY);
+        wsReconnectAttempts++;
+        console.log('[WS] reconnect in ' + delay + 'ms (attempt ' + wsReconnectAttempts + ')');
+        wsReconnectTimer = setTimeout(initWebSocket, delay);
+    }
 
     // Typing 状态
     const typingUsers = new Map(); // convKey -> { uid, name, avatar, timer }
@@ -3124,6 +3337,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             ws = new WebSocket(wsUrl);
             ws.onopen = () => {
                 console.log('[WS] connected');
+                wsReconnectAttempts = 0; // 连接成功，重置重连计数
             };
             ws.onmessage = async (event) => {
                 try {
@@ -3150,16 +3364,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                     typingIndicator.style.display = 'none';
                     typingIndicator.innerHTML = '';
                 }
-                if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
-                wsReconnectTimer = setTimeout(initWebSocket, 3000);
+                scheduleWsReconnect();
             };
             ws.onerror = (e) => {
                 console.error('[WS] error:', e);
             };
         } catch (e) {
             console.error('[WS] init failed:', e);
-            if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
-            wsReconnectTimer = setTimeout(initWebSocket, 5000);
+            scheduleWsReconnect();
         }
     }
 
@@ -3194,12 +3406,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    // 用户信息缓存（4小时过期）
-    const userProfileCache = new Map();
-    // 记录已知无效的 UID（服务器返回 invalid uid 等），避免重复请求
-    const invalidUidCache = new Set();
-    const CACHE_TTL = 4 * 60 * 60 * 1000;
-
     async function fetchUserProfile(uid, ncuid, forceRefresh) {
         // uid: 旧格式 uid，用于 ?uid= 参数
         // ncuid: 新格式 ncuid，用于 ?ncuid= 参数
@@ -3215,58 +3421,75 @@ document.addEventListener('DOMContentLoaded', async () => {
             const cached = userProfileCache.get(key);
             if (Date.now() - cached._ts < CACHE_TTL) return cached;
         }
-        try {
-            let data = null;
-            // 优先使用 ncuid 参数（?ncuid= 路径）
-            if (ncuid) {
-                const res = await apiFetch('/v1/users/profile?ncuid=' + encodeURIComponent(ncuid));
-                if (res.ok) {
-                    const d = await res.json();
-                    if (d && !d.error) data = d;
+        // 并发去重：已有相同key的请求在进行中，直接复用
+        if (pendingProfileFetches.has(key)) {
+            return pendingProfileFetches.get(key);
+        }
+        const promise = (async () => {
+            try {
+                let data = null;
+                // 优先使用 ncuid 参数（?ncuid= 路径）
+                if (ncuid) {
+                    const res = await apiFetch('/v1/users/profile?ncuid=' + encodeURIComponent(ncuid));
+                    if (res.ok) {
+                        const d = await res.json();
+                        if (d && !d.error) data = d;
+                    }
                 }
-            }
-            // ncuid 查询失败，尝试用 uid 查询（?uid= 路径，注意 ncuid 不能传入 ?uid=）
-            if (!data && uid) {
-                const res = await apiFetch('/v1/users/profile?uid=' + encodeURIComponent(uid));
-                if (res.ok) {
-                    const d = await res.json();
-                    if (d && !d.error) data = d;
+                // ncuid 查询失败，尝试用 uid 查询（?uid= 路径，注意 ncuid 不能传入 ?uid=）
+                if (!data && uid) {
+                    const res = await apiFetch('/v1/users/profile?uid=' + encodeURIComponent(uid));
+                    if (res.ok) {
+                        const d = await res.json();
+                        if (d && !d.error) data = d;
+                    }
                 }
-            }
-            // 补充：uid 查询也失败，但 uid 实际上可能是 ncuid（服务器把 ncuid 放进了 from_uid 字段）
-            // 尝试用 ?ncuid= 查询 uid 值
-            if (!data && uid && !ncuid) {
-                const res = await apiFetch('/v1/users/profile?ncuid=' + encodeURIComponent(uid));
-                if (res.ok) {
-                    const d = await res.json();
-                    if (d && !d.error) data = d;
+                // 补充：uid 查询也失败，但 uid 实际上可能是 ncuid（服务器把 ncuid 放进了 from_uid 字段）
+                // 尝试用 ?ncuid= 查询 uid 值
+                if (!data && uid && !ncuid) {
+                    const res = await apiFetch('/v1/users/profile?ncuid=' + encodeURIComponent(uid));
+                    if (res.ok) {
+                        const d = await res.json();
+                        if (d && !d.error) data = d;
+                    }
                 }
+                // 三种都失败（网络错误等情况），不标记无效，允许后续重试
+                if (!data) return null;
+                // 服务器返回错误信息（理论上上面已过滤，但保留防御性检查）
+                if (data.error && /invalid|not found|不存在/i.test(data.error)) {
+                    invalidUidCache.add(key);
+                    return null;
+                }
+                // 成功
+                data._ts = Date.now();
+                userProfileCache.set(key, data);
+                invalidUidCache.delete(key);
+                return data;
+            } catch (e) {}
+            return null;
+        })();
+        pendingProfileFetches.set(key, promise);
+        promise.then(() => {
+            if (pendingProfileFetches.get(key) === promise) {
+                pendingProfileFetches.delete(key);
             }
-            // 三种都失败（网络错误等情况），不标记无效，允许后续重试
-            if (!data) return null;
-            // 服务器返回错误信息（理论上上面已过滤，但保留防御性检查）
-            if (data.error && /invalid|not found|不存在/i.test(data.error)) {
-                invalidUidCache.add(key);
-                return null;
+        }, () => {
+            if (pendingProfileFetches.get(key) === promise) {
+                pendingProfileFetches.delete(key);
             }
-            // 成功
-            data._ts = Date.now();
-            userProfileCache.set(key, data);
-            invalidUidCache.delete(key);
-            return data;
-        } catch (e) {}
-        return null;
+        });
+        return promise;
     }
 
-    // 重试加载用户资料（递增间隔 3s → 6s → 12s，共3次）
+    // 重试加载用户资料（递增间隔 5s → 15s，共2次）
     // isAvatar=true 时更新头像 img 元素，否则更新昵称文本
     function scheduleProfileRetry(uid, ncuid, element, isAvatar, retryCount) {
         if (!uid && !ncuid) return;
         if (!element || !element.isConnected) return;
         retryCount = retryCount || 0;
-        if (retryCount >= 3) return;
+        if (retryCount >= 2) return;
 
-        const intervals = [3000, 6000, 12000];
+        const intervals = [5000, 15000];
         setTimeout(async () => {
             if (!element.isConnected) return;
             const profile = await fetchUserProfile(uid, ncuid, true);
@@ -3275,7 +3498,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 return;
             }
             if (isAvatar) {
-                const newAvatar = profile.avatar_url ? resolveMediaUrl(profile.avatar_url) : 'assets/default-avatar.png';
+                const newAvatar = profile.avatar_url ? cachedResolveMediaUrl(profile.avatar_url) : 'assets/default-avatar.png';
                 if (element.src !== newAvatar) element.src = newAvatar;
             } else {
                 const newName = profile.display_name || profile.username || (ncuid || uid || '');
@@ -3298,31 +3521,39 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 根据 uid 查找联系人显示名
     // 支持按 x.uid（ncuid）和 x.displayUid（旧 uid）两种格式查找
+    const lookupNameCache = new Map();
     function lookupName(uid) {
         if (!uid) return '';
         if (uid.toUpperCase() === myUid.toUpperCase()) return myName;
         const upper = uid.toUpperCase();
+        // 命中缓存
+        if (lookupNameCache.has(upper)) return lookupNameCache.get(upper);
         const f = contacts.friends.find(x => x.uid.toUpperCase() === upper || (x.displayUid && x.displayUid.toUpperCase() === upper));
-        if (f) return f.name;
+        if (f) { lookupNameCache.set(upper, f.name); return f.name; }
         const m = groupMembers.find(x => x.uid.toUpperCase() === upper || (x.displayUid && x.displayUid.toUpperCase() === upper));
-        if (m) return m.name;
+        if (m) { lookupNameCache.set(upper, m.name); return m.name; }
         const cached = userProfileCache.get(upper);
-        if (cached) return cached.display_name || cached.username || uid;
+        if (cached) { const n = cached.display_name || cached.username || uid; lookupNameCache.set(upper, n); return n; }
+        lookupNameCache.set(upper, uid);
         return uid;
     }
 
+    const lookupAvatarCache = new Map();
     function lookupAvatar(uid) {
         if (!uid) return '';
         if (uid.toUpperCase() === myUid.toUpperCase()) return myAvatar;
         const upper = uid.toUpperCase();
+        // 命中缓存
+        if (lookupAvatarCache.has(upper)) return lookupAvatarCache.get(upper);
         const f = contacts.friends.find(x => x.uid.toUpperCase() === upper || (x.displayUid && x.displayUid.toUpperCase() === upper));
-        if (f && f.avatar) return f.avatar;
+        if (f && f.avatar) { lookupAvatarCache.set(upper, f.avatar); return f.avatar; }
         const g = contacts.groups.find(x => x.id === uid);
-        if (g && g.avatar) return g.avatar;
+        if (g && g.avatar) { lookupAvatarCache.set(upper, g.avatar); return g.avatar; }
         const m = groupMembers.find(x => x.uid.toUpperCase() === upper || (x.displayUid && x.displayUid.toUpperCase() === upper));
-        if (m && m.avatar) return m.avatar;
+        if (m && m.avatar) { lookupAvatarCache.set(upper, m.avatar); return m.avatar; }
         const cached = userProfileCache.get(upper);
-        if (cached && cached.avatar_url) return cached.avatar_url;
+        if (cached && cached.avatar_url) { lookupAvatarCache.set(upper, cached.avatar_url); return cached.avatar_url; }
+        lookupAvatarCache.set(upper, '');
         return '';
     }
 
@@ -3474,12 +3705,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             };
             appendMessage(msgObj, convKey, seenMsgIds[convKey]);
             scheduleAutoScroll();
-            apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(withUidParam(fromUid)) });
+            // 节流标记已读，不每条消息都发请求
+            debouncedMarkRead('direct', fromUid);
         } else if (msg.type === 'group_message') {
             const d = msg.data || {};
             const groupId = d.group_id || '';
             const fromUid = getFromUid(d);
             if (isSelfUid(fromUid)) return;
+            // 检查群成员缓存：如果该发送者不在缓存中，后台刷新缓存（大群不频繁刷新）
+            if (groupId) {
+                const cached = groupMembersCache.get(groupId);
+                if (cached && !cached.members.some(m => uidEq(m.ncuid, fromUid) || uidEq(m.uid, fromUid))) {
+                    // 发送者不在缓存中，后台刷新（不阻塞当前消息处理）
+                    refreshGroupMembersCache(groupId);
+                }
+            }
             const _grp = contacts.groups.find(g => g.id === groupId);
             notifyNewMessage(((_grp && _grp.name) || groupId) + ' · ' + lookupName(fromUid), messagePreview(d));
             const convKey = `group:${groupId}`;
@@ -3504,7 +3744,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             };
             appendMessage(msgObj, convKey, seenMsgIds[convKey]);
             scheduleAutoScroll();
-            apiFetch('/v1/groups/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ group_id: groupId }) });
+            // 节流标记已读
+            debouncedMarkRead('group', groupId);
         } else if (msg.type === 'direct_recall') {
             const d = msg.data || {};
             const messageId = d.message_id || '';
@@ -3547,14 +3788,29 @@ document.addEventListener('DOMContentLoaded', async () => {
             // d: {thread_id, reader_uid, read_at}
         } else if (msg.type === 'typing') {
             const d = msg.data || {};
-            const fromUid = getFromUid(d);
-            if (isSelfUid(fromUid)) return;
-            const convKey = d.group_id
-                ? `group:${d.group_id}`
-                : `direct:${fromUid}`;
+            // 服务器实际格式：{ chat_id, uid, is_group, is_typing }
+            // 不是 { from_uid, from_ncuid, group_id }
+            const fromUid = d.uid || getFromUid(d);
+            console.log('[TYPING] received', fromUid, 'self?', isSelfUid(fromUid), 'currentConv:', currentConv?.key);
+            if (!fromUid || isSelfUid(fromUid)) return;
+            // 聊天类型判断：is_group 为 true 时是群聊，否则是私聊
+            const isGroup = d.is_group === true || !!d.group_id;
+            let convKey;
+            if (isGroup) {
+                const groupId = d.chat_id || d.group_id || '';
+                convKey = `group:${groupId}`;
+            } else {
+                // 私聊 - 使用 uidEq 比较 fromUid 与 currentConv.id，避免格式差异导致匹配失败
+                if (currentConv && currentConv.type === 'direct' && uidEq(fromUid, currentConv.id)) {
+                    convKey = currentConv.key;
+                } else {
+                    convKey = `direct:${fromUid}`;
+                }
+            }
+            console.log('[TYPING] convKey:', convKey, 'match:', currentConv?.key === convKey);
             // 仅显示当前会话的 typing 指示器
             if (!currentConv || currentConv.key !== convKey) return;
-            const fromName = getFromName(d) || lookupName(fromUid);
+            const fromName = d.uid ? lookupName(fromUid) : (getFromName(d) || lookupName(fromUid));
             const fromAvatar = getFromAvatar(d);
             // 显示 typing 指示器，5 秒后自动隐藏
             showTypingIndicator(convKey, {
@@ -3569,7 +3825,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const typingIndicator = document.getElementById('typingIndicator');
 
     function showTypingIndicator(convKey, user, timeoutMs) {
-        if (!typingIndicator) return;
+        if (!typingIndicator) { console.log('[TYPING] indicator element not found'); return; }
+        console.log('[TYPING] showTypingIndicator', convKey, user.name, 'timeout:', timeoutMs);
         // 更新或添加用户到 typingUsers
         if (typingUsers.has(convKey)) {
             const existing = typingUsers.get(convKey);
@@ -3583,7 +3840,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         typingIndicator.innerHTML = '';
         const avatar = document.createElement('img');
         avatar.className = 'typing-avatar';
-        const avatarUrl = user.avatar ? resolveMediaUrl(user.avatar) : 'assets/default-avatar.png';
+        const avatarUrl = user.avatar ? cachedResolveMediaUrl(user.avatar) : (lookupAvatar(user.uid) || 'assets/default-avatar.png');
         avatar.src = avatarUrl;
         avatar.alt = user.name || '';
         typingIndicator.appendChild(avatar);
@@ -3623,10 +3880,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         lastTypingSent = now;
         const payload = { type: 'typing', data: {} };
         if (currentConv.type === 'group') {
-            payload.data.group_id = currentConv.id;
+            payload.data.chat_id = currentConv.id;
+            payload.data.is_group = true;
         } else {
-            payload.data.to_uid = currentConv.id;
+            payload.data.chat_id = currentConv.id;
+            payload.data.is_group = false;
         }
+        payload.data.uid = myUid || myDisplayUid || '';
+        payload.data.is_typing = true;
         await encryptAndSendWs(payload);
     }
 
@@ -3706,7 +3967,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const target = document.querySelector(`.sidebar-panel[data-panel="contacts"] [data-conv-key="${convKey}"]`);
         if (target) target.classList.add('active');
 
-        const avatarUrl = avatar ? resolveMediaUrl(avatar) : 'assets/default-avatar.png';
+        const avatarUrl = avatar ? cachedResolveMediaUrl(avatar) : 'assets/default-avatar.png';
         if (type === 'group') {
             const group = contacts.groups.find(g => g.id === id);
             container.innerHTML = `
@@ -3734,12 +3995,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             const friend = contacts.friends.find(f => f.uid === id);
             const displayId = friend ? friend.displayUid : id;
             const titleText = (friend && friend.user_title) || lookupTitle(id);
-            const titleHtml = titleText ? `<span style="font-size:10px;color:#333;background:#e8e8e8;padding:0 6px;border-radius:4px;line-height:16px;font-weight:400;margin-left:6px;">${escapeHtml(titleText)}</span>` : '';
+            const titleHtml = titleText ? `<span class="detail-title">${escapeHtml(titleText)}</span>` : '';
             container.innerHTML = `
                 <div class="contacts-detail-panel">
                     <div class="contacts-detail-header">
                         <img src="${avatarUrl}" onerror="this.src='assets/default-avatar.png'">
-                        <div class="detail-name">${escapeHtml(name)}${titleHtml}</div>
+                        <div class="detail-name-row">
+                            <div class="detail-name-center">
+                                <span class="detail-name">${escapeHtml(name)}</span>
+                            </div>
+                            ${titleHtml}
+                        </div>
                         <div class="detail-uid">${escapeHtml(displayId)}</div>
                         <div class="contacts-detail-actions">
                             <button class="btn primary" id="cdSendMessage">发消息</button>
@@ -3775,7 +4041,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const avatar = req.avatar_url || req.from_avatar || 'assets/default-avatar.png';
                 const name = req.from_display_name || req.from_name || req.display_name || req.from_username || getUid(req) || '未知用户';
                 item.innerHTML = `
-                    <img class="contact-avatar" src="${resolveMediaUrl(avatar)}" onerror="this.src='assets/default-avatar.png'">
+                    <img class="contact-avatar" src="${cachedResolveMediaUrl(avatar)}" onerror="this.src='assets/default-avatar.png'">
                     <div class="friend-request-info">
                         <div class="name">${escapeHtml(name)}</div>
                         <div class="uid">${escapeHtml(getUid(req) || req.from_uid || '')}</div>
@@ -3926,7 +4192,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 群聊显示 group_id，私聊显示给人看的 displayId（旧UID），未提供则不显示
         const showId = type === 'group' ? id : (displayId || '');
         const idLine = showId ? `<div class="uid">${escapeHtml(showId)}</div>` : '';
-        const avatarUrl = avatar ? resolveMediaUrl(avatar) : 'assets/default-avatar.png';
+        const avatarUrl = avatar ? cachedResolveMediaUrl(avatar) : 'assets/default-avatar.png';
         // 查找称号：优先使用传入的 userTitle，再从缓存查找
         const titleText = userTitle || lookupTitle(id);
         const titleHtml = titleText ? `<span class="contact-title">${escapeHtml(titleText)}</span>` : '';
@@ -3997,17 +4263,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 同步完成后丢弃旧缓存，用最新消息重建 DOM，只缓存最新一页
     let fetchLatestReqId = 0;
     async function fetchLatestMessages(type, id, convKey) {
-        const PAGE_SIZE = 100;
+        const PAGE_SIZE = 30;
         const reqId = ++fetchLatestReqId;
         // 显示同步中指示器
         if (syncIndicator) syncIndicator.style.display = '';
         try {
+            // 私聊历史：API 使用 ?with_ncuid= 参数传 NCUID
             const historyUrl = type === 'group'
                 ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`
-                : `/v1/direct/messages/v2?with_uid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
+                : `/v1/direct/messages/v2?with_ncuid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
             const res = await apiFetch(historyUrl);
             const data = await res.json();
-            if (data.error) return;
+            if (data.error) {
+                console.error('[FETCH] API error for', historyUrl, data.error);
+                return;
+            }
             // 检查是否已切换会话或该请求已过期
             if (reqId !== fetchLatestReqId || currentConv?.key !== convKey) return;
 
@@ -4202,12 +4472,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const offset = convOffset[convKey] || 0;
                 const olderUrl = type === 'group'
                     ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=${offset}`
-                    : `/v1/direct/messages/v2?with_uid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=${offset}`;
+                    : `/v1/direct/messages/v2?with_ncuid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=${offset}`;
                 const res = await apiFetch(olderUrl);
                 const data = await res.json();
                 console.log('[LOAD_MORE] response:', olderUrl, 'msgs:', (data.messages||[]).length);
                 if (loadReqId !== isLoadingMoreReqId) return;
-                if (data.error) return;
+                if (data.error) {
+                    console.error('[LOAD_MORE] API error:', data.error);
+                    return;
+                }
 
                 // Go 返回 DESC（新→旧），反转为 ASC（旧→新）
                 const olderMsgs = (data.messages || []).slice().reverse();
@@ -4320,12 +4593,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // 尝试从缓存恢复（快速展示，随后 fetchLatestMessages 会重建 DOM 替换缓存）
         if (convCache[convKey]) {
-            restoreConversation(convKey);
-            // 立即滚动到底部，避免用户看到缓存 DOM 在顶部（restoreConversation 用 rAF 恢复 scrollTop，不够及时）
-            scrollToBottom(true);
-            // 后台拉取最新消息（会重建 DOM、替换缓存、淡入动画、滚动到底部）
-            fetchLatestMessages(type, id, convKey);
-            return;
+            // 检查 restoreConversation 返回值：false 表示缓存无效（空 fragment 等），需走无缓存路径
+            if (restoreConversation(convKey)) {
+                // 立即滚动到底部，避免用户看到缓存 DOM 在顶部（restoreConversation 用 rAF 恢复 scrollTop，不够及时）
+                scrollToBottom(true);
+                // 后台拉取最新消息（会重建 DOM、替换缓存、淡入动画、滚动到底部）
+                fetchLatestMessages(type, id, convKey);
+                return;
+            }
+            // 缓存无效，删除缓存后继续走无缓存路径
+            delete convCache[convKey];
         }
 
         // 无缓存：重置状态，直接调用 fetchLatestMessages（会显示同步中并加载）
@@ -4387,6 +4664,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const isSelfByFlag = msg.is_me === true || msg.isSelf === true;
         const isSelf = isSelfByUid || isSelfByFlag;
 
+        // 共享 Profile 拉取：头像和名称共用同一个 Promise，避免重复请求
+        let sharedProfilePromise = null;
+        if (!isSelf && (apiUid || apiNcuid)) {
+            sharedProfilePromise = fetchUserProfile(apiUid, apiNcuid);
+        }
+
         const sender = isSelf ? (myName || '我') : (msg.from_name || msg.sender_name || msg.display_name || lookupName(displayUid) || displayUid || '未知用户');
         const time = new Date(msg.created_at * 1000).toLocaleTimeString('zh-CN', { hour12: false });
         let content = '';
@@ -4394,7 +4677,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (msgType === 'image') {
             const mediaUrl = msg.media_url || '';
             const imgEl = document.createElement('img');
-            imgEl.src = resolveMediaUrl(mediaUrl);
+            imgEl.src = cachedResolveMediaUrl(mediaUrl);
             imgEl.style.cssText = 'max-width:200px;max-height:200px;border-radius:8px;cursor:pointer;';
             imgEl.className = 'chat-image';
             imgEl.onclick = () => openImageViewer(imgEl);
@@ -4412,15 +4695,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                 ? myAvatar
                 : (msg.from_avatar || msg.sender_avatar || msg.avatar_url || lookupAvatar(displayUid));
             const avatarImg = document.createElement('img');
-            avatarImg.src = avatarUrl ? resolveMediaUrl(avatarUrl) : 'assets/default-avatar.png';
+            avatarImg.src = avatarUrl ? cachedResolveMediaUrl(avatarUrl) : 'assets/default-avatar.png';
             avatarImg.className = 'msg-avatar';
             avatarImg.onerror = () => { avatarImg.src = 'assets/default-avatar.png'; };
-            if (!isSelf && !avatarUrl && (apiUid || apiNcuid)) {
-                fetchUserProfile(apiUid, apiNcuid).then(profile => {
+            if (sharedProfilePromise && !avatarUrl) {
+                sharedProfilePromise.then(profile => {
                     if (profile && profile.avatar_url && avatarImg.isConnected) {
-                        avatarImg.src = resolveMediaUrl(profile.avatar_url);
+                        avatarImg.src = cachedResolveMediaUrl(profile.avatar_url);
                     } else if (!profile) {
-                        // 资料未加载成功，3s 后重试
                         scheduleProfileRetry(apiUid, apiNcuid, avatarImg, true);
                     }
                 });
@@ -4445,11 +4727,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                     titleSpan.textContent = titleText;
                     senderDiv.appendChild(titleSpan);
                 }
-                if (!isSelf && (sender === displayUid || sender === fromUid) && (apiUid || apiNcuid)) {
-                    fetchUserProfile(apiUid, apiNcuid).then(profile => {
+                if (sharedProfilePromise && (sender === displayUid || sender === fromUid)) {
+                    sharedProfilePromise.then(profile => {
                         if (profile && senderDiv.isConnected) {
                             senderDiv.childNodes[0].textContent = profile.display_name || profile.username || sender;
-                            // 更新称号
                             if (profile.user_title) {
                                 let titleSpan = senderDiv.querySelector('.sender-title');
                                 if (!titleSpan) {
@@ -4460,7 +4741,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 titleSpan.textContent = profile.user_title;
                             }
                         } else if (!profile) {
-                            // 昵称未加载成功（显示为 UID），3s 后重试
                             scheduleProfileRetry(apiUid, apiNcuid, senderDiv, false);
                         }
                     });
@@ -4499,9 +4779,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         if (msgType === 'video') {
-            content = `<video controls style="max-width:200px;"><source src="${resolveMediaUrl(msg.media_url || '')}"></video>`;
+            content = `<video controls style="max-width:200px;"><source src="${cachedResolveMediaUrl(msg.media_url || '')}"></video>`;
         } else if (msgType === 'audio') {
-            content = `<audio controls style="max-width:200px;" src="${resolveMediaUrl(msg.media_url || '')}"></audio>`;
+            content = `<audio controls style="max-width:200px;" src="${cachedResolveMediaUrl(msg.media_url || '')}"></audio>`;
         } else if (msgType === 'resource' || msgType === 'file') {
             // 支持嵌套 v2 JSON body（如音乐分享等）+ 音频文件检测
             let fileName = '';
@@ -4568,7 +4848,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             </div>
                             <span class="voice-duration">0:00</span>
                         </div>
-                        <audio preload="metadata" src="${resolveMediaUrl(fileUrl)}"></audio>
+                        <audio preload="metadata" src="${cachedResolveMediaUrl(fileUrl)}"></audio>
                     </div>`;
                 content = displayText
                     ? `<div style="margin-bottom:6px;white-space:pre-wrap;word-break:break-word;">${displayText}</div>${voiceHtml}`
@@ -4579,7 +4859,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <div class="file-info">
                         <div class="file-name">${escapeHtml(fileName)}</div>
                     </div>
-                    <a href="${resolveMediaUrl(fileUrl)}" target="_blank" class="file-download-btn">⬇</a>
+                    <a href="${cachedResolveMediaUrl(fileUrl)}" target="_blank" class="file-download-btn">⬇</a>
                 </div>`;
                 content = displayText
                     ? `<div style="margin-bottom:6px;">${displayText}</div>${fileCardHtml}`
@@ -4597,7 +4877,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             </div>
                             <span class="voice-duration">0:00</span>
                         </div>
-                        <audio preload="metadata" src="${resolveMediaUrl(msg.media_url)}"></audio>
+                        <audio preload="metadata" src="${cachedResolveMediaUrl(msg.media_url)}"></audio>
                     </div>`;
             } else {
                 const dur = (msg.duration_ms || 0) / 1000;
@@ -4655,13 +4935,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                                             </div>
                                             <span class="voice-duration">0:00</span>
                                         </div>
-                                        <audio preload="metadata" src="${resolveMediaUrl(nFileUrl)}"></audio>
+                                        <audio preload="metadata" src="${cachedResolveMediaUrl(nFileUrl)}"></audio>
                                     </div>`;
                             } else if (nFileUrl) {
                                 // 嵌套非音频文件：渲染为文件卡片
                                 nestedFileHtml = `<div class="file-card" style="margin-top:6px;">
                                     <div class="file-info"><div class="file-name">${escapeHtml(nFileName || '文件')}</div></div>
-                                    <a href="${resolveMediaUrl(nFileUrl)}" target="_blank" class="file-download-btn">⬇</a>
+                                    <a href="${cachedResolveMediaUrl(nFileUrl)}" target="_blank" class="file-download-btn">⬇</a>
                                 </div>`;
                             }
                         }
@@ -4720,15 +5000,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             ? myAvatar
             : (msg.from_avatar || msg.sender_avatar || msg.avatar_url || lookupAvatar(displayUid));
         const avatarImg = document.createElement('img');
-        avatarImg.src = avatarUrl ? resolveMediaUrl(avatarUrl) : 'assets/default-avatar.png';
+        avatarImg.src = avatarUrl ? cachedResolveMediaUrl(avatarUrl) : 'assets/default-avatar.png';
         avatarImg.className = 'msg-avatar';
         avatarImg.onerror = () => { avatarImg.src = 'assets/default-avatar.png'; };
-        if (!isSelf && !avatarUrl && (apiUid || apiNcuid)) {
-            fetchUserProfile(apiUid, apiNcuid).then(profile => {
+        if (sharedProfilePromise && !avatarUrl) {
+            sharedProfilePromise.then(profile => {
                 if (profile && profile.avatar_url && avatarImg.isConnected) {
-                    avatarImg.src = resolveMediaUrl(profile.avatar_url);
+                    avatarImg.src = cachedResolveMediaUrl(profile.avatar_url);
                 } else if (!profile) {
-                    // 资料未加载成功，3s 后重试
                     scheduleProfileRetry(apiUid, apiNcuid, avatarImg, true);
                 }
             });
@@ -4755,12 +5034,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 titleSpan.textContent = titleText;
                 senderDiv.appendChild(titleSpan);
             }
-            if (!isSelf && (sender === displayUid || sender === fromUid) && (apiUid || apiNcuid)) {
-                fetchUserProfile(apiUid, apiNcuid).then(profile => {
+            if (sharedProfilePromise && (sender === displayUid || sender === fromUid)) {
+                sharedProfilePromise.then(profile => {
                     if (profile && senderDiv.isConnected) {
                         senderDiv.childNodes[0].textContent = profile.display_name || profile.username || sender;
                         msgDiv.dataset.fromName = profile.display_name || profile.username || sender;
-                        // 更新称号
                         if (profile.user_title) {
                             let titleSpan = senderDiv.querySelector('.sender-title');
                             if (!titleSpan) {
@@ -4771,7 +5049,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                             titleSpan.textContent = profile.user_title;
                         }
                     } else if (!profile) {
-                        // 昵称未加载成功（显示为 UID），3s 后重试
                         scheduleProfileRetry(apiUid, apiNcuid, senderDiv, false);
                     }
                 });
@@ -5501,20 +5778,68 @@ document.addEventListener('DOMContentLoaded', async () => {
     let mentionMembers = [];
     let groupMembers = [];
     let mentionActiveIndex = 0;
+    // 群成员缓存（大群优化）：group_id -> { members, ts }
+    const groupMembersCache = new Map();
+    const GROUP_MEMBERS_CACHE_TTL = 5 * 60 * 1000; // 5 分钟
+
+    // 后台刷新群成员缓存（不阻塞当前流程）
+    // 大群优化：节流，防并发，最小刷新间隔 30 秒
+    const _refreshGroupThrottle = new Map(); // groupId -> last refresh ts
+    const _refreshGroupInFlight = new Map(); // groupId -> promise
+    const GROUP_MEMBERS_REFRESH_INTERVAL = 30 * 1000; // 30 秒
+    async function refreshGroupMembersCache(groupId) {
+        if (!groupId) return;
+        // 节流检查：30 秒内不重复刷新
+        const lastRefresh = _refreshGroupThrottle.get(groupId) || 0;
+        if (Date.now() - lastRefresh < GROUP_MEMBERS_REFRESH_INTERVAL) return;
+        // 防并发：同一群的刷新请求不重复
+        if (_refreshGroupInFlight.has(groupId)) return _refreshGroupInFlight.get(groupId);
+        const promise = (async () => {
+            try {
+                const res = await apiFetch('/v1/groups/members?group_id=' + encodeURIComponent(groupId));
+                const data = await res.json();
+                const members = (data.members || []).map(m => ({
+                    uid: m.uid || '',
+                    ncuid: m.ncuid || getUid(m),
+                    name: m.display_name || m.username || getUid(m),
+                    avatar: m.avatar_url || ''
+                }));
+                _refreshGroupThrottle.set(groupId, Date.now());
+                groupMembersCache.set(groupId, { members, ts: Date.now() });
+                // 如果当前会话刚好是这个群，同步更新 mentionMembers
+                if (currentConv && currentConv.type === 'group' && currentConv.id === groupId) {
+                    groupMembers = members;
+                    mentionMembers = members;
+                }
+            } catch (e) {}
+            finally { _refreshGroupInFlight.delete(groupId); }
+        })();
+        _refreshGroupInFlight.set(groupId, promise);
+        return promise;
+    }
 
     async function loadGroupMembers() {
         if (!currentConv || currentConv.type !== 'group') return;
+        const groupId = currentConv.id;
+        const cached = groupMembersCache.get(groupId);
+        if (cached && Date.now() - cached.ts < GROUP_MEMBERS_CACHE_TTL) {
+            groupMembers = cached.members;
+            mentionMembers = cached.members;
+            return;
+        }
         try {
-            const res = await apiFetch('/v1/groups/members?group_id=' + encodeURIComponent(currentConv.id));
+            const res = await apiFetch('/v1/groups/members?group_id=' + encodeURIComponent(groupId));
             const data = await res.json();
             // Go 返回 {members: [{uid, username, display_name, avatar_url, role, joined_at}]}
-            groupMembers = (data.members || []).map(m => ({
+            const members = (data.members || []).map(m => ({
                 uid: m.uid || '',           // 旧 uid
                 ncuid: m.ncuid || getUid(m), // ncuid（getUid 优先取 ncuid）
                 name: m.display_name || m.username || getUid(m),
                 avatar: m.avatar_url || ''
             }));
-            mentionMembers = groupMembers;
+            groupMembers = members;
+            mentionMembers = members;
+            groupMembersCache.set(groupId, { members, ts: Date.now() });
         } catch (e) {
             mentionMembers = [];
             groupMembers = [];
@@ -5572,7 +5897,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         list.forEach((m, i) => {
             const item = document.createElement('div');
             item.className = 'mention-item' + (i === mentionActiveIndex ? ' active' : '');
-            item.innerHTML = `<img src="${resolveMediaUrl(m.avatar || 'assets/default-avatar.png')}" onerror="this.src='assets/default-avatar.png'"><span class="mention-name">${escapeHtml(m.name)}</span>`;
+            item.innerHTML = `<img src="${cachedResolveMediaUrl(m.avatar || 'assets/default-avatar.png')}" onerror="this.src='assets/default-avatar.png'"><span class="mention-name">${escapeHtml(m.name)}</span>`;
             item.addEventListener('click', () => insertMention(m));
             item.addEventListener('mouseenter', () => {
                 mentionActiveIndex = i;
@@ -6051,6 +6376,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 <div class="context-menu-divider"></div>
                 <div class="context-menu-item" data-action="quote">引用</div>
             `;
+            // 图片消息额外增加"另存为"
+            const msgType = msgDiv.dataset.msgType;
+            if (msgType === 'image') {
+                menuHtml += `<div class="context-menu-item" data-action="save-image">另存为</div>`;
+            }
             if (canRecall) {
                 menuHtml += `<div class="context-menu-item" data-action="recall" style="color:#ff6b6b;">撤回</div>`;
             }
@@ -6159,6 +6489,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 showAlert(d.error || '撤回失败');
                             }
                         }).catch(() => showAlert('网络错误'));
+                } else if (action === 'save-image') {
+                    const chatImg = msgDiv.querySelector('.chat-image');
+                    if (chatImg && chatImg.src) {
+                        downloadImage(chatImg.src);
+                    }
                 }
                 hideContextMenu();
             });
@@ -6173,6 +6508,44 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
     
+        // 判断是否在用户空间/动态面板中的图片上
+        const momentImg = e.target.closest('#sp-scroll img, #myProfileScroll img');
+        if (momentImg) {
+            e.preventDefault();
+            const imgSrc = momentImg.src || '';
+            if (!imgSrc) return;
+            const menu = document.createElement('div');
+            menu.className = 'custom-context-menu';
+            menu.style.left = e.clientX + 'px';
+            menu.style.top = e.clientY + 'px';
+            menu.innerHTML = `
+                <div class="context-menu-item" data-action="copy-img">复制图片</div>
+                <div class="context-menu-item" data-action="save-img">另存为</div>
+            `;
+            document.body.appendChild(menu);
+            requestAnimationFrame(() => menu.classList.add('show'));
+            contextMenu = menu;
+
+            menu.addEventListener('click', (event) => {
+                const action = event.target.dataset.action;
+                if (action === 'copy-img') {
+                    copyImageToClipboard(imgSrc);
+                } else if (action === 'save-img') {
+                    downloadImage(imgSrc);
+                }
+                hideContextMenu();
+            });
+
+            const closeHandler = (ev) => {
+                if (!menu.contains(ev.target)) {
+                    hideContextMenu();
+                    document.removeEventListener('click', closeHandler);
+                }
+            };
+            setTimeout(() => document.addEventListener('click', closeHandler), 0);
+            return;
+        }
+
         // 其次判断是否在聊天面板（data-panel="chat"）的空白处
         const chatPanel = e.target.closest('.main-panel[data-panel="chat"]');
         if (chatPanel) {
@@ -6466,7 +6839,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (!imgUrl) return;
                 const itemEl = document.createElement('div');
                 itemEl.className = 'emoticon-item';
-                itemEl.innerHTML = `<img src="${resolveMediaUrl(imgUrl)}" loading="lazy">`;
+                itemEl.innerHTML = `<img src="${cachedResolveMediaUrl(imgUrl)}" loading="lazy">`;
                 itemEl.addEventListener('click', async () => {
                     picker.remove();
                     // 直接以图片消息发送表情（已有 URL，无需再上传）
@@ -6535,7 +6908,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (!imgUrl) return;
                     const div = document.createElement('div');
                     div.className = 'emoticon-item';
-                    div.innerHTML = `<img src="${resolveMediaUrl(imgUrl)}" loading="lazy">`;
+                    div.innerHTML = `<img src="${cachedResolveMediaUrl(imgUrl)}" loading="lazy">`;
                     div.addEventListener('click', () => {
                         sendMessage('', 'image', imgUrl);
                         panel.remove();
@@ -6622,7 +6995,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         settingsContent.innerHTML = `
             <h3>我的</h3>
             <div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;cursor:pointer;" id="settingsProfileCard">
-                <img src="${resolveMediaUrl(myAvatar || '')}" style="width:64px;height:64px;border-radius:50%;object-fit:cover;background:var(--border);" onerror="this.src='assets/default-avatar.png'">
+                <img src="${cachedResolveMediaUrl(myAvatar || '')}" style="width:64px;height:64px;border-radius:50%;object-fit:cover;background:var(--border);" onerror="this.src='assets/default-avatar.png'">
                 <div>
                     <div style="font-size:18px;font-weight:600;color:var(--text);">${escapeHtml(myName || '未登录')}</div>
                     <div style="font-size:13px;color:var(--secondary-text);">${escapeHtml(myDisplayUid || '')}</div>
@@ -6647,10 +7020,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 </div>
             </div>
             <div class="settings-group">
-                <div class="settings-item" id="settingsRegister">
-                    <span class="label">注册账号</span>
-                    <span class="value"><i class="fa-solid fa-external-link-alt"></i></span>
-                </div>
                 <div class="settings-item" id="settingsLogout" style="color:#ff4757;">
                     <span class="label">退出登录</span>
                     <span class="value"><i class="fa-solid fa-right-from-bracket"></i></span>
@@ -6668,23 +7037,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             musicTab = 'mine';
             musicLoaded = false;
             loadMusicList();
-        });
-        document.getElementById('settingsRegister')?.addEventListener('click', () => {
-            const registerUrl = 'https://oc.mcl0.dpdns.org/register';
-            if (IS_TAURI) {
-                const invoke = (window.__TAURI__ && window.__TAURI__.shell && window.__TAURI__.shell.open)
-                    ? window.__TAURI__.shell.open
-                    : (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);
-                if (invoke) {
-                    invoke('plugin:shell|open', {uri: registerUrl}).catch(() => {
-                        window.open(registerUrl, '_blank');
-                    });
-                } else {
-                    window.open(registerUrl, '_blank');
-                }
-            } else {
-                window.open(registerUrl, '_blank');
-            }
         });
         document.getElementById('settingsLogout')?.addEventListener('click', async () => {
             if (await showConfirm('确定退出登录？')) {
@@ -6847,10 +7199,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             items.forEach(item => {
                 const u = item.user || {};
-                const avatar = u.avatar_url ? resolveMediaUrl(u.avatar_url) : 'assets/default-avatar.png';
+                const avatar = u.avatar_url ? cachedResolveMediaUrl(u.avatar_url) : 'assets/default-avatar.png';
                 const name = u.display_name || u.username || u.uid || '匿名';
                 const contentText = item.content_text || '';
-                const imageUrl = item.image_url ? resolveMediaUrl(item.image_url) : '';
+                const imageUrl = item.image_url ? cachedResolveMediaUrl(item.image_url) : '';
                 const time = item.created_at ? new Date(item.created_at).toLocaleString('zh-CN') : '';
                 html += `<div class="checkin-card" data-post-id="${item.id || ''}">`;
                 html += `<div class="checkin-user">`;
@@ -6931,6 +7283,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function renderSettingsAbout() {
+        const GITHUB_URL = 'https://github.com/LGCR837/oldchat-kivotos-next';
         settingsContent.innerHTML = `
             <h3>关于</h3>
             <div class="settings-group">
@@ -6946,8 +7299,25 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <span class="label">后端地址</span>
                     <span class="value">${BACKEND_ORIGIN}</span>
                 </div>
+                <div class="settings-item" style="cursor:pointer;" id="aboutGithubLink">
+                    <span class="label">GitHub 仓库</span>
+                    <span class="value" style="color:var(--accent);text-decoration:underline;">${GITHUB_URL}</span>
+                </div>
             </div>
         `;
+        document.getElementById('aboutGithubLink')?.addEventListener('click', () => {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(GITHUB_URL).then(() => {
+                    showAlert('GitHub 仓库地址已复制到剪贴板', '提示');
+                }).catch(() => {
+                    fallbackCopyText(GITHUB_URL);
+                    showAlert('GitHub 仓库地址已复制到剪贴板', '提示');
+                });
+            } else {
+                fallbackCopyText(GITHUB_URL);
+                showAlert('GitHub 仓库地址已复制到剪贴板', '提示');
+            }
+        });
     }
 
     // 设置页面导航点击 — 仅通过侧边栏面板

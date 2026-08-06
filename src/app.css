@@ -902,7 +902,7 @@ body::-webkit-scrollbar {
 
 .input-area {
 	padding: 8px 10px;
-	background: var(--sidebar-bg);
+	background: var(--chat-bg);
 	box-shadow: 0 -1px 6px rgba(0,0,0,0.04);
 	flex-shrink: 0;
 }
@@ -2986,15 +2986,40 @@ body::-webkit-scrollbar {
     margin-bottom: 12px;
     background: var(--border);
 }
+.contacts-detail-header .detail-name-row {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	margin-bottom: 4px;
+	width: 100%;
+	max-width: 280px;
+	position: relative;
+}
+.contacts-detail-header .detail-name-center {
+	display: inline-flex;
+	align-items: center;
+	position: relative;
+}
 .contacts-detail-header .detail-name {
 	font-size: 18px;
 	font-weight: 600;
 	color: var(--text);
-	margin-bottom: 4px;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	gap: 6px;
+	text-align: center;
+}
+.contacts-detail-header .detail-title {
+	position: absolute;
+	white-space: nowrap;
+	left: 100%;
+	top: 50%;
+	transform: translateY(-50%);
+	margin-left: 8px;
+	font-size: 10px;
+	color: #333;
+	background: #e8e8e8;
+	padding: 0 6px;
+	border-radius: 4px;
+	line-height: 16px;
+	font-weight: 400;
 }
 .contacts-detail-header .detail-uid {
     font-size: 12px;
