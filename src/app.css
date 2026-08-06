@@ -1392,7 +1392,7 @@ body::-webkit-scrollbar {
 }
 
 .message.other.bare-image .msg-avatar {
-	grid-row: 1 / span 2;
+	grid-row: 2;
 	grid-column: 1;
 	margin-top: 2px;
 }
@@ -1408,15 +1408,24 @@ body::-webkit-scrollbar {
 	margin: 2px 0;
 }
 
+/* 无引用时图片和头像在同一行，有引用时图片移到引用块下方 */
 .message.other.bare-image img:not(.msg-avatar) {
 	grid-column: 2;
-	grid-row: 3;
+	grid-row: 2;
 	display: block;
 }
 
+.message.other.bare-image.has-quote img:not(.msg-avatar) {
+	grid-row: 3;
+}
+
 .message.other.bare-image .message-time {
-	grid-row: 4;
+	grid-row: 3;
 	grid-column: 2;
+}
+
+.message.other.bare-image.has-quote .message-time {
+	grid-row: 4;
 }
 
 /* 自己消息：引用块用蓝色 */
@@ -1427,38 +1436,6 @@ body::-webkit-scrollbar {
 
 .message.self .quote-block-image .quote-sender {
 	color: var(--bubble-self);
-}
-
-/* 对方 bare-image 消息：保持头像和昵称位置，引用块和图片在内容列 */
-.message.other.bare-image {
-	grid-template-rows: auto auto auto auto;
-}
-
-.message.other.bare-image .msg-avatar {
-	grid-row: 2;
-	grid-column: 1;
-}
-
-.message.other.bare-image .message-sender {
-	grid-row: 1;
-	grid-column: 2;
-}
-
-.message.other.bare-image .quote-block-image {
-	grid-column: 2;
-	grid-row: 2;
-	margin: 0;
-}
-
-.message.other.bare-image img:not(.msg-avatar) {
-	grid-column: 2;
-	grid-row: 3;
-	display: block;
-}
-
-.message.other.bare-image .message-time {
-	grid-row: 4;
-	grid-column: 2;
 }
 
 .quote-preview {

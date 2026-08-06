@@ -1011,6 +1011,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const contactList = document.getElementById('contactList');
     const chatHeader = document.getElementById('chatHeader');
     const messagesContainer = document.getElementById('messagesContainer');
+    // 底部锚点：保证清空/追加后始终位于容器末尾，避免 scrollHeight 在图片加载前估算不准
+    const scrollAnchor = document.createElement('div');
+    scrollAnchor.id = 'scroll-anchor';
+    scrollAnchor.style.cssText = 'width:100%;height:0;flex-shrink:0;';
+    messagesContainer.appendChild(scrollAnchor);
     const messageInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
     const moreBtn = document.getElementById('moreBtn');
@@ -3192,7 +3197,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 created_at: d.created_at,
             };
             appendMessage(msgObj, convKey, seenMsgIds[convKey]);
-            scrollToBottom();
+            scheduleAutoScroll();
             apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(withUidParam(fromUid)) });
         } else if (msg.type === 'group_message') {
             const d = msg.data || {};
@@ -3222,7 +3227,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 group_id: groupId,
             };
             appendMessage(msgObj, convKey, seenMsgIds[convKey]);
-            scrollToBottom();
+            scheduleAutoScroll();
             apiFetch('/v1/groups/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ group_id: groupId }) });
         } else if (msg.type === 'direct_recall') {
             const d = msg.data || {};
@@ -3606,6 +3611,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         // 恢复缓存的 DOM
         messagesContainer.appendChild(cached.fragment);
+        // 恢复底部锚点
+        if (messagesContainer.lastChild !== scrollAnchor) {
+            messagesContainer.appendChild(scrollAnchor);
+        }
         // 恢复滚动位置（同步设置，不依赖 rAF，避免与 switchConversation 中的 scrollToBottom 冲突）
         messagesContainer.scrollTop = cached.scrollTop;
         // 恢复状态
@@ -4002,6 +4011,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 qb.appendChild(qs);
                 qb.appendChild(qt);
                 msgDiv.appendChild(qb);
+                msgDiv.classList.add('has-quote');
             }
 
             msgDiv.appendChild(imgEl);
@@ -4356,6 +4366,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (msgTs && lastRenderedTs && (msgTs - lastRenderedTs) > 300) {
             const sep = createTimeSeparator(msgTs);
             messagesContainer.appendChild(sep);
+            if (messagesContainer.lastChild !== scrollAnchor) {
+                messagesContainer.appendChild(scrollAnchor);
+            }
         }
 
         // 尝试合并连续的同发送者纯文本消息（保留旧逻辑但禁用）
@@ -4405,6 +4418,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     
         messagesContainer.appendChild(msgDiv);
+        // 确保底部锚点始终在末尾，避免图片/长消息追加后锚点不在末尾导致滚动不到底
+        if (messagesContainer.lastChild !== scrollAnchor) {
+            messagesContainer.appendChild(scrollAnchor);
+        }
     
         currentSeen.add(msg.id);
         // 系统/撤回消息打断连消息链
@@ -4427,19 +4444,70 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
+    // 确保底部锚点始终在容器末尾（innerHTML='' 或缓存移除后需重新挂载）
+    function ensureScrollAnchor() {
+        if (!scrollAnchor.isConnected || scrollAnchor.parentNode !== messagesContainer) {
+            messagesContainer.appendChild(scrollAnchor);
+        } else if (messagesContainer.lastChild !== scrollAnchor) {
+            messagesContainer.appendChild(scrollAnchor);
+        }
+    }
+
+    // 新消息自动滚动：合并去抖，避免短时间大量消息时反复判断造成跳帧或"判断到一半已不在底部"
+    let _autoScrollTimer = null;
+    let _autoScrollForce = false;
+    function scheduleAutoScroll(force = false) {
+        if (force) _autoScrollForce = true;
+        if (_autoScrollTimer != null) return;
+        _autoScrollTimer = setTimeout(() => {
+            const f = _autoScrollForce;
+            _autoScrollForce = false;
+            _autoScrollTimer = null;
+            scrollToBottom(f);
+        }, 30);
+    }
+
     function scrollToBottom(force = false) {
+        ensureScrollAnchor();
         if (force) {
             // 强制滚动到底部（切换会话/发送消息后使用）
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            if (chatScrollbar) requestAnimationFrame(() => chatScrollbar.update());
+            // 先用 rAF 等布局稳定，再用锚点对齐（比 scrollHeight 更准确，不受图片加载影响）
+            requestAnimationFrame(() => {
+                ensureScrollAnchor();
+                try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'auto' }); } catch(e) {}
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                if (chatScrollbar) requestAnimationFrame(() => chatScrollbar.update());
+            });
+            // 长消息/图片加载可能延迟，再补一次兜底
+            setTimeout(() => {
+                ensureScrollAnchor();
+                try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'auto' }); } catch(e) {}
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                if (chatScrollbar) chatScrollbar.update();
+            }, 250);
             return;
         }
         // 只在用户已近底部时才自动滚动，避免强制拉到最下方
         const threshold = messagesContainer.clientHeight / 2;
         const atBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < threshold;
         if (atBottom) {
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            if (chatScrollbar) requestAnimationFrame(() => chatScrollbar.update());
+            requestAnimationFrame(() => {
+                ensureScrollAnchor();
+                try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'auto' }); } catch(e) {}
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                if (chatScrollbar) requestAnimationFrame(() => chatScrollbar.update());
+            });
+            setTimeout(() => {
+                // 再检查一次：图片/长消息加载后仍在底部附近则继续对齐
+                const t2 = messagesContainer.clientHeight / 2;
+                const at2 = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < t2;
+                if (at2) {
+                    ensureScrollAnchor();
+                    try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'auto' }); } catch(e) {}
+                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                    if (chatScrollbar) chatScrollbar.update();
+                }
+            }, 250);
         }
     }
 
@@ -5617,12 +5685,31 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const isMobile = () => window.innerWidth <= 768;
 
+    // transition 期间持续更新自绘滚动条位置，避免"跳走再跳回"
+    let _scrollbarRAF = null;
+    function animateScrollbarUpdate() {
+        if (!chatScrollbar) return;
+        if (_scrollbarRAF) cancelAnimationFrame(_scrollbarRAF);
+        const start = performance.now();
+        const tick = (now) => {
+            chatScrollbar.update();
+            if (now - start < 360) {
+                _scrollbarRAF = requestAnimationFrame(tick);
+            } else {
+                _scrollbarRAF = null;
+                chatScrollbar.update();
+            }
+        };
+        _scrollbarRAF = requestAnimationFrame(tick);
+    }
+
     function expandChat() {
         if (isMobile()) {
             chatArea.style.marginLeft = '0px';
         } else {
             chatArea.style.marginLeft = sidebar.classList.contains('collapsed') ? '0px' : '280px';
         }
+        animateScrollbarUpdate();
     }
 
     if (isMobile()) {
