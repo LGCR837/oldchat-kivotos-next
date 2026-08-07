@@ -6849,9 +6849,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     function removeCollectedEmoji(path) {
         saveCollectedEmojis(loadCollectedEmojis().filter(p => p !== path));
     }
-    function clearCollectedEmojis() {
-        saveCollectedEmojis([]);
-    }
 
     // 渲染收藏表情网格（输入框选择器与设置页共用）
     function renderCollectedEmojiGrid(container, onPick, onDelete) {
@@ -6913,9 +6910,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
                 sendMessage('', 'image', path);
                 picker.remove();
-            }, (path) => {
-                removeCollectedEmoji(path);
-                refresh();
             });
         };
         refresh();
@@ -7449,10 +7443,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const render = () => {
             const list = loadCollectedEmojis();
             const countEl = document.getElementById('favCount');
-            const clearBtn = document.getElementById('favClearAll');
             if (countEl) countEl.textContent = `共 ${list.length} 个表情`;
             const grid = document.getElementById('favEmojiGrid');
-            if (clearBtn) clearBtn.style.display = list.length ? '' : 'none';
             renderCollectedEmojiGrid(grid, (path) => {
                 if (!currentConv) {
                     showAlert('请先在聊天中打开一个会话');
@@ -7472,21 +7464,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 我的收藏
                 <span id="favCount" style="font-size:12px;color:var(--secondary-text);font-weight:normal;"></span>
             </h3>
-            <div style="margin:10px 0;">
-                <button class="btn" id="favClearAll" style="color:#ff6b6b;">全部清空</button>
-            </div>
             <div class="emoticon-grid" id="favEmojiGrid"></div>
         `;
         render();
 
         document.getElementById('favBack')?.addEventListener('click', () => renderSettingsPage('profile'));
-        document.getElementById('favClearAll')?.addEventListener('click', async () => {
-            if (!loadCollectedEmojis().length) { showAlert('暂无收藏的表情'); return; }
-            if (await showConfirm('确定清空全部收藏的表情吗？')) {
-                clearCollectedEmojis();
-                render();
-            }
-        });
     }
 
     // 设置页面导航点击 — 仅通过侧边栏面板
