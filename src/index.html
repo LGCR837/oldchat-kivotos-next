@@ -78,10 +78,10 @@
                     </div>
                 </div>
                 <div class="messages" id="messagesContainer"></div>
-                <button class="scroll-to-bottom-btn" id="scrollToBottomBtn" title="回到底部">
-                    <i class="fa-solid fa-angles-down"></i>
-                </button>
                 <div class="input-area" id="inputArea">
+                    <button class="scroll-to-bottom-btn" id="scrollToBottomBtn" title="回到底部">
+                        <i class="fa-solid fa-angles-down"></i>
+                    </button>
                     <div class="mention-popup" id="mentionPopup">
                         <input type="text" class="mention-search" id="mentionSearch" placeholder="搜索成员...">
                         <div class="mention-list" id="mentionList"></div>
@@ -93,13 +93,14 @@
                     <textarea id="messageInput" placeholder="输入消息..." rows="1"></textarea>
                     <div class="input-buttons">
                         <button id="nowPlayingBtn" class="btn" style="display:none;" title="跳转到正在播放的语音"><i class="fa-solid fa-music"></i></button>
+                        <div class="sync-indicator" id="syncIndicator" style="display:none;">同步中...</div>
+                        <div class="typing-indicator" id="typingIndicator" style="display:none;"></div>
+                        <div class="input-buttons-spacer"></div>
                         <button id="sendImageBtn" class="btn">图片</button>
                         <button id="emojiPlazaBtn" class="btn">表情</button>
                         <button id="moreBtn" class="btn">更多</button>
                         <button id="sendBtn" class="btn primary">发送</button>
                     </div>
-                    <div class="sync-indicator" id="syncIndicator" style="display:none;">同步中...</div>
-                    <div class="typing-indicator" id="typingIndicator" style="display:none;"></div>
                     <div class="more-menu" id="moreMenu">
                         <button id="sendFileBtn">上传文件</button>
                         <button id="sendUrlImageBtn">发送直链图片</button>

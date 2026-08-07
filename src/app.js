@@ -3840,9 +3840,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         typingIndicator.innerHTML = '';
         const avatar = document.createElement('img');
         avatar.className = 'typing-avatar';
-        const avatarUrl = user.avatar ? cachedResolveMediaUrl(user.avatar) : (lookupAvatar(user.uid) || 'assets/default-avatar.png');
-        avatar.src = avatarUrl;
+        let avatarUrl = user.avatar
+            ? cachedResolveMediaUrl(user.avatar)
+            : cachedResolveMediaUrl(lookupAvatar(user.uid) || 'assets/default-avatar.png');
+        avatar.src = avatarUrl || 'assets/default-avatar.png';
         avatar.alt = user.name || '';
+        avatar.onerror = () => { avatar.onerror = null; avatar.src = 'assets/default-avatar.png'; };
         typingIndicator.appendChild(avatar);
         const dots = document.createElement('span');
         dots.className = 'typing-dots';
