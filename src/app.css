@@ -1865,6 +1865,82 @@ body::-webkit-scrollbar {
 	background: var(--active)
 }
 
+/* 收藏表情（我的收藏） */
+.collected-emoji-item {
+	position: relative
+}
+
+.collected-emoji-del {
+	position: absolute;
+	top: -7px;
+	right: -7px;
+	width: 20px;
+	height: 20px;
+	border-radius: 50%;
+	background: #ff4757;
+	color: #fff;
+	border: 1px solid var(--bg);
+	font-size: 10px;
+	line-height: 18px;
+	text-align: center;
+	cursor: pointer;
+	display: none;
+	z-index: 2;
+	padding: 0;
+	box-sizing: border-box;
+}
+
+.collected-emoji-item:hover .collected-emoji-del {
+	display: block
+}
+
+.collected-emoji-del:hover {
+	background: #e0384c
+}
+
+.collected-emoji-picker {
+	bottom: 100px;
+	max-height: 360px
+}
+
+.collected-emoji-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 8px;
+	font-size: 13px;
+	color: var(--secondary-text)
+}
+
+.collected-emoji-manage {
+	border: 1px solid var(--border);
+	background: transparent;
+	color: var(--text);
+	border-radius: 4px;
+	padding: 2px 10px;
+	font-size: 12px;
+	cursor: pointer;
+	font-family: inherit;
+}
+
+.collected-emoji-manage:hover {
+	background: var(--hover);
+	border-color: #0078d4
+}
+
+.collected-emoji-empty {
+	text-align: center;
+	padding: 24px 12px;
+	color: var(--secondary-text);
+	font-size: 13px;
+	line-height: 1.8
+}
+
+#favBack {
+	padding: 4px 12px;
+	font-size: 12px
+}
+
 /* 自定义弹窗 */
 .custom-modal-overlay {
 	position: fixed;

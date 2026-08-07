@@ -3119,7 +3119,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     emojiPlazaBtn.addEventListener('click', () => {
-        // 表情按钮功能暂空，后续加入特定表情功能
+        showCollectedEmojiPicker();
     });
 
     const emojiPlazaMoreBtn = document.getElementById('emojiPlazaMoreBtn');
@@ -6376,10 +6376,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 <div class="context-menu-divider"></div>
                 <div class="context-menu-item" data-action="quote">引用</div>
             `;
-            // 图片消息额外增加"另存为"
+            // 图片消息额外增加"另存为"和"收藏为表情"
             const msgType = msgDiv.dataset.msgType;
             if (msgType === 'image') {
                 menuHtml += `<div class="context-menu-item" data-action="save-image">另存为</div>`;
+                menuHtml += `<div class="context-menu-item" data-action="collect-emoji">收藏为表情</div>`;
             }
             if (canRecall) {
                 menuHtml += `<div class="context-menu-item" data-action="recall" style="color:#ff6b6b;">撤回</div>`;
@@ -6493,6 +6494,17 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const chatImg = msgDiv.querySelector('.chat-image');
                     if (chatImg && chatImg.src) {
                         downloadImage(chatImg.src);
+                    }
+                } else if (action === 'collect-emoji') {
+                    // 收藏为表情：保存相对路径（如 /v1/uploads/media/xxx.jpg）
+                    const rawMsg = JSON.parse(msgDiv.dataset.rawBody || '{}');
+                    const mediaPath = rawMsg.media_url || '';
+                    if (!mediaPath) {
+                        showAlert('该图片没有可用的链接');
+                    } else if (!addCollectedEmoji(mediaPath)) {
+                        showAlert('该表情已在收藏中');
+                    } else {
+                        showAlert('已收藏为表情');
                     }
                 }
                 hideContextMenu();
@@ -6815,6 +6827,115 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
+    // ===== 收藏表情（我的收藏）=====
+    const COLLECTED_EMOJI_KEY = 'oc_collected_emojis';
+    function loadCollectedEmojis() {
+        try {
+            const raw = localStorage.getItem(COLLECTED_EMOJI_KEY);
+            const arr = raw ? JSON.parse(raw) : [];
+            return Array.isArray(arr) ? arr.filter(Boolean) : [];
+        } catch (e) { return []; }
+    }
+    function saveCollectedEmojis(list) {
+        try { localStorage.setItem(COLLECTED_EMOJI_KEY, JSON.stringify(list)); } catch (e) {}
+    }
+    function addCollectedEmoji(path) {
+        const list = loadCollectedEmojis();
+        if (list.includes(path)) return false;
+        list.push(path);
+        saveCollectedEmojis(list);
+        return true;
+    }
+    function removeCollectedEmoji(path) {
+        saveCollectedEmojis(loadCollectedEmojis().filter(p => p !== path));
+    }
+    function clearCollectedEmojis() {
+        saveCollectedEmojis([]);
+    }
+
+    // 渲染收藏表情网格（输入框选择器与设置页共用）
+    function renderCollectedEmojiGrid(container, onPick, onDelete) {
+        const list = loadCollectedEmojis();
+        container.innerHTML = '';
+        if (list.length === 0) {
+            container.innerHTML = '<div class="collected-emoji-empty">还没有收藏的表情<br>在图片消息上右键选择「收藏为表情」</div>';
+            return;
+        }
+        list.forEach(path => {
+            const item = document.createElement('div');
+            item.className = 'emoticon-item collected-emoji-item';
+            const img = document.createElement('img');
+            img.src = cachedResolveMediaUrl(path);
+            img.loading = 'lazy';
+            img.onerror = () => { img.style.visibility = 'hidden'; };
+            item.appendChild(img);
+            if (onPick) {
+                item.addEventListener('click', () => onPick(path));
+            }
+            if (onDelete) {
+                const delBtn = document.createElement('button');
+                delBtn.className = 'collected-emoji-del';
+                delBtn.title = '删除';
+                delBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+                delBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    onDelete(path);
+                });
+                item.appendChild(delBtn);
+            }
+            container.appendChild(item);
+        });
+    }
+
+    // 输入框「表情」按钮 → 我的收藏表情选择器
+    function showCollectedEmojiPicker() {
+        const existing = document.getElementById('collectedEmojiPicker');
+        if (existing) { existing.remove(); return; }
+
+        const picker = document.createElement('div');
+        picker.id = 'collectedEmojiPicker';
+        picker.className = 'emoticon-picker collected-emoji-picker';
+        picker.innerHTML = `
+            <div class="collected-emoji-header">
+                <span>我的收藏</span>
+                <button class="collected-emoji-manage" id="collectedEmojiManageBtn" title="在设置中管理">管理</button>
+            </div>
+            <div class="emoticon-grid" id="collectedEmojiGrid"></div>
+        `;
+        document.body.appendChild(picker);
+
+        const grid = document.getElementById('collectedEmojiGrid');
+        const refresh = () => {
+            renderCollectedEmojiGrid(grid, (path) => {
+                if (!currentConv) {
+                    showAlert('请先在聊天中打开一个会话');
+                    return;
+                }
+                sendMessage('', 'image', path);
+                picker.remove();
+            }, (path) => {
+                removeCollectedEmoji(path);
+                refresh();
+            });
+        };
+        refresh();
+
+        document.getElementById('collectedEmojiManageBtn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            picker.remove();
+            switchTab('settings');
+            renderSettingsFavorites();
+        });
+
+        const closeHandler = (e) => {
+            if (!picker.contains(e.target) && e.target !== emojiPlazaBtn && e.target !== emojiPlazaMoreBtn) {
+                picker.remove();
+                document.removeEventListener('click', closeHandler);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', closeHandler), 0);
+    }
+
     async function showEmoticonPicker() {
         const existing = document.getElementById('emoticonPicker');
         if (existing) existing.remove();
@@ -6987,6 +7108,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             renderSettingsCheckin();
         } else if (tab === 'about') {
             renderSettingsAbout();
+        } else if (tab === 'favorites') {
+            renderSettingsFavorites();
         }
     }
 
@@ -7030,7 +7153,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.getElementById('settingsEditProfile')?.addEventListener('click', () => openMyProfile());
         document.getElementById('settingsMyMoments')?.addEventListener('click', () => openSpacePanel(myUid));
         document.getElementById('settingsMyFavorites')?.addEventListener('click', () => {
-            showAlert('收藏功能开发中');
+            renderSettingsFavorites();
         });
         document.getElementById('settingsMyMusic')?.addEventListener('click', () => {
             switchTab('music');
@@ -7316,6 +7439,52 @@ document.addEventListener('DOMContentLoaded', async () => {
             } else {
                 fallbackCopyText(GITHUB_URL);
                 showAlert('GitHub 仓库地址已复制到剪贴板', '提示');
+            }
+        });
+    }
+
+    // 设置 → 我的收藏（与输入框表情选择器共用同一份 localStorage 数据）
+    function renderSettingsFavorites() {
+        currentSettingsTab = 'favorites';
+        const render = () => {
+            const list = loadCollectedEmojis();
+            const countEl = document.getElementById('favCount');
+            const clearBtn = document.getElementById('favClearAll');
+            if (countEl) countEl.textContent = `共 ${list.length} 个表情`;
+            const grid = document.getElementById('favEmojiGrid');
+            if (clearBtn) clearBtn.style.display = list.length ? '' : 'none';
+            renderCollectedEmojiGrid(grid, (path) => {
+                if (!currentConv) {
+                    showAlert('请先在聊天中打开一个会话');
+                    return;
+                }
+                sendMessage('', 'image', path);
+                showAlert('已发送');
+            }, (path) => {
+                removeCollectedEmoji(path);
+                render();
+            });
+        };
+
+        settingsContent.innerHTML = `
+            <h3 style="display:flex;align-items:center;gap:10px;">
+                <button class="btn" id="favBack" title="返回我的">返回</button>
+                我的收藏
+                <span id="favCount" style="font-size:12px;color:var(--secondary-text);font-weight:normal;"></span>
+            </h3>
+            <div style="margin:10px 0;">
+                <button class="btn" id="favClearAll" style="color:#ff6b6b;">全部清空</button>
+            </div>
+            <div class="emoticon-grid" id="favEmojiGrid"></div>
+        `;
+        render();
+
+        document.getElementById('favBack')?.addEventListener('click', () => renderSettingsPage('profile'));
+        document.getElementById('favClearAll')?.addEventListener('click', async () => {
+            if (!loadCollectedEmojis().length) { showAlert('暂无收藏的表情'); return; }
+            if (await showConfirm('确定清空全部收藏的表情吗？')) {
+                clearCollectedEmojis();
+                render();
             }
         });
     }
