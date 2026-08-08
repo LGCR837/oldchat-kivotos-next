@@ -3281,8 +3281,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         wsReconnectTimer = setTimeout(initWebSocket, delay);
     }
 
-    // Typing 状态
-    const typingUsers = new Map(); // convKey -> { uid, name, avatar, timer }
+    // Typing 状态（多用户支持）
+    const typingUsers = new Map(); // convKey -> Map(uid -> { name, avatar, timer })
     let typingSendTimer = null;
     let lastTypingSent = 0;
     const TYPING_THROTTLE = 3000; // 每 3 秒最多发送一次
@@ -3358,7 +3358,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 wsEncKey = null;
                 wsMacKey = null;
                 // 清除所有 typing 状态
-                typingUsers.forEach((entry) => clearTimeout(entry.timer));
+                typingUsers.forEach((userMap) => {
+                    userMap.forEach((entry) => clearTimeout(entry.timer));
+                });
                 typingUsers.clear();
                 if (typingIndicator) {
                     typingIndicator.style.display = 'none';
@@ -3827,51 +3829,90 @@ document.addEventListener('DOMContentLoaded', async () => {
     function showTypingIndicator(convKey, user, timeoutMs) {
         if (!typingIndicator) { console.log('[TYPING] indicator element not found'); return; }
         console.log('[TYPING] showTypingIndicator', convKey, user.name, 'timeout:', timeoutMs);
-        // 更新或添加用户到 typingUsers
-        if (typingUsers.has(convKey)) {
-            const existing = typingUsers.get(convKey);
-            clearTimeout(existing.timer);
+        // 确保该会话有 Map
+        if (!typingUsers.has(convKey)) {
+            typingUsers.set(convKey, new Map());
+        }
+        const userMap = typingUsers.get(convKey);
+        // 清除该用户的旧定时器
+        if (userMap.has(user.uid)) {
+            clearTimeout(userMap.get(user.uid).timer);
         }
         const timer = setTimeout(() => {
-            hideTypingIndicator(convKey);
+            hideTypingIndicator(convKey, user.uid);
         }, timeoutMs || 5000);
-        typingUsers.set(convKey, { ...user, timer });
-        // 渲染：只显示小头像 + 动态点
+        userMap.set(user.uid, { uid: user.uid, name: user.name, avatar: user.avatar, timer });
+        // 渲染所有头像
+        renderTypingAvatars(convKey);
+    }
+
+    function renderTypingAvatars(convKey) {
+        if (!typingIndicator) return;
+        const userMap = typingUsers.get(convKey);
+        if (!userMap || userMap.size === 0) {
+            typingIndicator.style.display = 'none';
+            typingIndicator.innerHTML = '';
+            return;
+        }
         typingIndicator.innerHTML = '';
-        const avatar = document.createElement('img');
-        avatar.className = 'typing-avatar';
-        let avatarUrl = user.avatar
-            ? cachedResolveMediaUrl(user.avatar)
-            : cachedResolveMediaUrl(lookupAvatar(user.uid) || 'assets/default-avatar.png');
-        avatar.src = avatarUrl || 'assets/default-avatar.png';
-        avatar.alt = user.name || '';
-        avatar.onerror = () => { avatar.onerror = null; avatar.src = 'assets/default-avatar.png'; };
-        typingIndicator.appendChild(avatar);
+        // 创建头像容器（重叠布局）
+        const container = document.createElement('div');
+        container.className = 'typing-avatars-container';
+        const users = Array.from(userMap.values());
+        const avatarCount = users.length;
+        // 计算容器宽度：第一个头像完全可见，后续每个偏移14px（挡住左边半个），再加一颗头像宽度
+        const containerWidth = 20 + (avatarCount - 1) * 14;
+        container.style.width = containerWidth + 'px';
+        container.style.height = '24px';
+        users.forEach((u, index) => {
+            const img = document.createElement('img');
+            img.className = 'typing-avatar';
+            let avatarUrl = u.avatar
+                ? cachedResolveMediaUrl(u.avatar)
+                : cachedResolveMediaUrl(lookupAvatar(u.uid) || 'assets/default-avatar.png');
+            img.src = avatarUrl || 'assets/default-avatar.png';
+            img.alt = u.name || '';
+            img.onerror = () => { img.onerror = null; img.src = 'assets/default-avatar.png'; };
+            img.style.left = (index * 14) + 'px'; // 每个头像向右偏移14px，右边挡住左边半个
+            img.style.zIndex = index + 1;
+            container.appendChild(img);
+        });
+        // 所有头像右侧的 ...
         const dots = document.createElement('span');
         dots.className = 'typing-dots';
+        dots.style.left = containerWidth + 'px';
         for (let i = 0; i < 3; i++) {
             const dot = document.createElement('span');
             dots.appendChild(dot);
         }
+        typingIndicator.appendChild(container);
         typingIndicator.appendChild(dots);
         typingIndicator.style.display = 'flex';
     }
 
-    function hideTypingIndicator(convKey) {
+    function hideTypingIndicator(convKey, removeUid) {
         if (!typingIndicator) return;
         if (convKey && typingUsers.has(convKey)) {
-            const entry = typingUsers.get(convKey);
-            clearTimeout(entry.timer);
-            typingUsers.delete(convKey);
+            const userMap = typingUsers.get(convKey);
+            if (removeUid && userMap.has(removeUid)) {
+                // 只移除指定用户
+                clearTimeout(userMap.get(removeUid).timer);
+                userMap.delete(removeUid);
+            } else if (!removeUid) {
+                // 没有指定 uid，移除整个会话
+                userMap.forEach((entry) => clearTimeout(entry.timer));
+                typingUsers.delete(convKey);
+                typingIndicator.style.display = 'none';
+                typingIndicator.innerHTML = '';
+                return;
+            }
         }
-        // 如果当前会话没有其他 typing 用户，隐藏指示器
-        if (!currentConv || !typingUsers.has(currentConv.key)) {
+        // 如果当前会话还有用户，重新渲染；否则隐藏
+        if (currentConv && typingUsers.has(currentConv.key) && typingUsers.get(currentConv.key).size > 0) {
+            renderTypingAvatars(currentConv.key);
+        } else {
             typingIndicator.style.display = 'none';
             typingIndicator.innerHTML = '';
-        } else {
-            // 还有其他用户，重新渲染
-            const entry = typingUsers.get(currentConv.key);
-            showTypingIndicator(currentConv.key, entry, 5000);
         }
     }
 
@@ -4572,7 +4613,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             expandChat();
         }
     
-        currentConv = { type, id, name, key: convKey };
+        // 私聊先查找 displayUid（旧 uid）用于 to_uid 参数
+        let displayUid = '';
+        if (type === 'direct') {
+            const friend = contacts.friends.find(f => f.uid === id || f.displayUid === id);
+            displayUid = friend ? (friend.displayUid || id) : id;
+        }
+        currentConv = { type, id, name, key: convKey, _sendToUid: displayUid || id };
 
         // 加载群成员（用于 @mention）
         if (type === 'group') {
@@ -5563,6 +5610,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function sendMessage(body, msgType = 'text', mediaUrl = null, thumbUrl = null, burnAfterSeconds = 0) {
         if (!currentConv) return;
 
+        // 私聊用 displayUid（旧 uid）作为 to_uid，避免 NCUID 不被服务器接受
+        if (currentConv.type === 'direct') {
+            const friend = contacts.friends.find(f => f.uid === currentConv.id || f.displayUid === currentConv.id);
+            if (friend && friend.displayUid) {
+                currentConv._sendToUid = friend.displayUid;
+            } else {
+                currentConv._sendToUid = currentConv.id;
+            }
+        }
+
         // 检测 @mention 并转换为 v2 格式
         const mentions = [];
         if (msgType === 'text' && currentConv.type === 'group') {
@@ -5607,7 +5664,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 msg_type: msgType,
                 media_url: mediaUrl || '',
                 thumb_url: thumbUrl || ''
-              }, toUidParam(currentConv.id));
+              }, { to_uid: currentConv._sendToUid || currentConv.id });
         if (burnAfterSeconds && burnAfterSeconds > 0) {
             payload.burn_after_seconds = burnAfterSeconds;
         }
@@ -5692,6 +5749,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         } else {
             // 发送失败，移除临时消息，将文本退回输入框
+            console.error('[SEND] 发送失败', lastError, 'payload:', JSON.stringify(payload));
             if (tempEl) tempEl.remove();
             seenMsgIds[currentConv.key]?.delete(tempId);
             // 将原始文本退回输入框
@@ -6077,7 +6135,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (currentConv.type === 'group') {
                     payload.group_id = currentConv.id;
                 } else {
-                    Object.assign(payload, toUidParam(currentConv.id));
+                    Object.assign(payload, { to_uid: currentConv._sendToUid || currentConv.id });
                 }
                 const res = await apiFetch('/v1/redpackets/send', {
                     method: 'POST',
@@ -6163,7 +6221,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             let sendPayload = currentConv.type === 'group'
                 ? { group_id: currentConv.id, body: '', msg_type: msgType, media_url: upData.url, thumb_url: upData.thumb_url || '' }
-                : Object.assign({ body: '', msg_type: msgType, media_url: upData.url, thumb_url: upData.thumb_url || '' }, toUidParam(currentConv.id));
+                : Object.assign({ body: '', msg_type: msgType, media_url: upData.url, thumb_url: upData.thumb_url || '' }, { to_uid: currentConv._sendToUid || currentConv.id });
             // 如果编辑框有引用，自动附加到图片/文件消息
             if (pendingQuote) {
                 sendPayload.body = JSON.stringify({ v: 2, text: '', quote: pendingQuote });

@@ -2190,11 +2190,21 @@ body::-webkit-scrollbar {
 .typing-indicator {
 	display: flex;
 	align-items: center;
-	gap: 4px;
 	font-size: 12px;
 	color: var(--text-secondary, #888);
 	pointer-events: none;
 	white-space: nowrap;
+	min-width: 0;
+	overflow: visible;
+	position: relative;
+	height: 24px;
+	line-height: 24px;
+}
+
+.typing-indicator .typing-avatars-container {
+	position: relative;
+	height: 24px;
+	flex-shrink: 0;
 }
 
 .typing-indicator .typing-avatar {
@@ -2203,15 +2213,21 @@ body::-webkit-scrollbar {
 	border-radius: 50%;
 	object-fit: cover;
 	background: var(--panel-bg);
-	border: 1px solid var(--border-color, #e0e0e0);
+	border: 1.5px solid var(--panel-bg);
 	flex-shrink: 0;
+	position: absolute;
+	top: 2px;
+	left: 0;
+	box-shadow: 0 0 0 1px var(--border-color, #e0e0e0);
 }
 
 .typing-indicator .typing-dots {
 	display: inline-flex;
 	align-items: center;
 	gap: 2px;
-	margin-left: 2px;
+	position: absolute;
+	top: 50%;
+	transform: translateY(-50%);
 }
 
 .typing-indicator .typing-dots span {
