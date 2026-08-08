@@ -1,6 +1,7 @@
-// ===== 运行模式检测（Tauri vs 浏览器） =====
-// 共用代码库：Tauri 桌面端走 plugin-http 直连后端，浏览器端走 Nginx 反代（或用户勾选直连）
-// 两种模式完全隔离：isTauri 判定仅在内存中，不写 localStorage，不污染浏览器侧配置
+// ===== Tauri 运行环境检测 =====
+// 本应用只支持 Tauri 桌面端：请求走 plugin-http 直连后端，自带跨域能力。
+// 此处的检测仅用于「Tauri API 是否可用」的守卫（注入失败时走降级路径），不再区分浏览器运行模式。
+// 判定结果仅存在于内存，不写 localStorage。
 function _detectIsTauri() {
     try {
         return !!(window.__TAURI__ !== undefined || window.__TAURI_INTERNALS__ !== undefined);
@@ -190,62 +191,98 @@ const IS_TAURI = _detectIsTauri();
     console.log('[Tauri] 已注册 Ctrl+Alt+Shift+F12 切换 DevTools');
 })();
 
-// ===== 运行模式对应的 API / WS / 媒体资源基地址 =====
-// Tauri 桌面端：固定走后端完整地址（plugin-http 自带跨域能力，不需要前端反代）
-// 浏览器端：默认走 Nginx 同源反代（oc_proxy_mode=on，默认），用户可切换为直连（oc_proxy_mode=off，需要后端支持 CORS）
+// ===== API / WS / 媒体资源基地址 =====
+// 固定走后端完整地址：plugin-http 自带跨域能力，不需要前端反代。
+// 用户可在「设置 → 服务器配置」中覆盖 Base URL / Media URL，保存在 localStorage。
 
 // 默认值（硬编码回退）
-const DEFAULT_BACKEND_ORIGIN = 'http://oc.mcl0.dpdns.org';
-const DEFAULT_MEDIA_ORIGIN   = 'http://60.205.94.101:8080';
-
-// 候选服务器列表（参考服务器发布的 client.md 约定）
-const BACKEND_URL_CANDIDATES = [
+// 默认候选（按优先级排序）
+// 普通内容：优先 oc.mcl0.dpdns.org（延迟最低），降级到 60.205.94.101
+const DEFAULT_BACKEND_CANDIDATES = [
     'http://oc.mcl0.dpdns.org',
     'https://oc.mcl0.dpdns.org',
-    'http://60.205.94.101:8080',
-    'http://60.205.94.101:8081',
-    'http://127.0.0.1:8080'
+    'http://60.205.94.101:8080'
 ];
-const MEDIA_URL_CANDIDATES = [
+// 媒体文件：优先 60.205.94.101:8080（源服务器，速度最快），降级到 oc.mcl0.dpdns.org
+const DEFAULT_MEDIA_CANDIDATES = [
     'http://60.205.94.101:8080',
-    'http://60.205.94.101:8081',
     'http://oc.mcl0.dpdns.org',
-    'https://oc.mcl0.dpdns.org',
-    'http://127.0.0.1:8080'
+    'https://oc.mcl0.dpdns.org'
 ];
 
-// 从 localStorage 读取用户自定义，没有则回退到默认
-function _getSavedBackendOrigin() {
-    try { return localStorage.getItem('oc_custom_base_url') || DEFAULT_BACKEND_ORIGIN; }
-    catch (e) { return DEFAULT_BACKEND_ORIGIN; }
+// 归一化候选项：统一存「裸 origin」，去掉结尾斜杠与用户误加的 /v1 后缀。
+// 请求时一律用 base + '/v1/xxx' 拼接，这里若残留 /v1 会拼成 /v1/v1/xxx 而 404。
+function _normalizeOrigin(s) {
+    let v = String(s || '').trim();
+    if (!v) return '';
+    v = v.replace(/\/+$/, '');          // 去掉结尾的 /
+    v = v.replace(/\/v1$/i, '');        // 去掉误加的 /v1
+    v = v.replace(/\/+$/, '');
+    return v;
 }
-function _getSavedMediaOrigin() {
-    try { return localStorage.getItem('oc_custom_media_url') || DEFAULT_MEDIA_ORIGIN; }
-    catch (e) { return DEFAULT_MEDIA_ORIGIN; }
+// 解析候选列表（空格/逗号分隔），为空时回退默认
+function _parseCandidates(raw, defaults) {
+    if (!raw) return defaults.slice();
+    const arr = String(raw).split(/[\s,]+/).map(_normalizeOrigin).filter(Boolean);
+    // 去重，保持原有优先级顺序
+    const seen = new Set();
+    const out = [];
+    for (const u of arr) { if (!seen.has(u)) { seen.add(u); out.push(u); } }
+    return out.length ? out : defaults.slice();
+}
+// 从 localStorage 读取用户自定义候选，没有则回退到默认
+function _getSavedBackendCandidates() {
+    try { return _parseCandidates(localStorage.getItem('oc_custom_base_url'), DEFAULT_BACKEND_CANDIDATES); }
+    catch (e) { return DEFAULT_BACKEND_CANDIDATES.slice(); }
+}
+function _getSavedMediaCandidates() {
+    try { return _parseCandidates(localStorage.getItem('oc_custom_media_url'), DEFAULT_MEDIA_CANDIDATES); }
+    catch (e) { return DEFAULT_MEDIA_CANDIDATES.slice(); }
 }
 
-let BACKEND_ORIGIN = _getSavedBackendOrigin();
-let MEDIA_ORIGIN   = _getSavedMediaOrigin();
+let BACKEND_CANDIDATES = _getSavedBackendCandidates();
+let MEDIA_CANDIDATES   = _getSavedMediaCandidates();
+let BACKEND_ORIGIN = BACKEND_CANDIDATES[0] || 'http://oc.mcl0.dpdns.org';
+let MEDIA_ORIGIN   = MEDIA_CANDIDATES[0] || 'http://60.205.94.101:8080';
 const BACKEND_HOST = (function() {
     try { return new URL(BACKEND_ORIGIN).host; } catch (e) { return 'oc.mcl0.dpdns.org'; }
 })();
 
-// 浏览器模式下：代理模式(默认 on) → 同源反代；off → 直连后端完整地址
-const _proxyOn = IS_TAURI ? false : (localStorage.getItem('oc_proxy_mode') !== 'off');
+// 一次性清理：移除已废弃的浏览器代理模式遗留配置
+try { localStorage.removeItem('oc_proxy_mode'); } catch (e) {}
 
-let API_BASE  = IS_TAURI ? (BACKEND_ORIGIN + '/v1') : (_proxyOn ? '/v1' : (BACKEND_ORIGIN + '/v1'));
-let WS_HOST   = IS_TAURI ? BACKEND_HOST : (_proxyOn ? window.location.host : BACKEND_HOST);
-let MEDIA_BASE = IS_TAURI ? MEDIA_ORIGIN : (_proxyOn ? MEDIA_ORIGIN : '');
+let API_BASE   = BACKEND_ORIGIN + '/v1';
+let WS_HOST    = BACKEND_HOST;
+let MEDIA_BASE = MEDIA_ORIGIN;
 
 // 供设置页更新配置后重新计算
 function refreshEndpoints() {
-    BACKEND_ORIGIN = _getSavedBackendOrigin();
-    MEDIA_ORIGIN   = _getSavedMediaOrigin();
+    BACKEND_CANDIDATES = _getSavedBackendCandidates();
+    MEDIA_CANDIDATES   = _getSavedMediaCandidates();
+    BACKEND_ORIGIN = BACKEND_CANDIDATES[0] || 'http://oc.mcl0.dpdns.org';
+    MEDIA_ORIGIN   = MEDIA_CANDIDATES[0] || 'http://60.205.94.101:8080';
     const host = (function() { try { return new URL(BACKEND_ORIGIN).host; } catch (e) { return BACKEND_HOST; } })();
-    WS_HOST   = IS_TAURI ? host : (_proxyOn ? window.location.host : host);
-    API_BASE  = IS_TAURI ? (BACKEND_ORIGIN + '/v1') : (_proxyOn ? '/v1' : (BACKEND_ORIGIN + '/v1'));
-    MEDIA_BASE = IS_TAURI ? MEDIA_ORIGIN : (_proxyOn ? MEDIA_ORIGIN : '');
+    WS_HOST    = host;
+    API_BASE   = BACKEND_ORIGIN + '/v1';
+    MEDIA_BASE = MEDIA_ORIGIN;
 }
+
+// 媒体图片加载失败 → 自动降级到下一个候选源（按 MEDIA_CANDIDATES 顺序）
+document.addEventListener('error', function(e) {
+    const img = e.target;
+    if (!img || img.tagName !== 'IMG') return;
+    const src = img.getAttribute('src') || '';
+    const tries = parseInt(img.dataset.mediaTries || '0', 10);
+    for (let i = tries; i < MEDIA_CANDIDATES.length - 1; i++) {
+        const base = MEDIA_CANDIDATES[i];
+        if (base && src.indexOf(base) === 0) {
+            img.dataset.mediaTries = String(i + 1);
+            img.src = MEDIA_CANDIDATES[i + 1] + src.slice(base.length);
+            e.stopPropagation();
+            return;
+        }
+    }
+}, true);
 
 function resolveMediaUrl(url) {
     if (!url) return url;
@@ -271,6 +308,18 @@ function escapeHtml(text) {
 
 function escapeRegExp(string) {
     return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// 通用防抖：连续触发时只在停止 wait 毫秒后执行最后一次（用于 @ 搜索等高频输入）
+function debounce(fn, wait) {
+    let timer = null;
+    return function (...args) {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+            timer = null;
+            fn.apply(this, args);
+        }, wait);
+    };
 }
 
 // ==================== 媒体文件永久缓存层 ====================
@@ -986,44 +1035,104 @@ function openImageViewer(src) {
 }
 
 // ==================== 认证 fetch 包装器 ====================
+// 并发去重：相同 GET 请求复用同一底层响应（克隆给各调用方），减少初始化期间冗余请求
+const _inflightGet = new Map();
+
 async function apiFetch(url, options = {}) {
-    const fullUrl = url.startsWith('/v1/') ? API_BASE + url.slice(3) : url;
+    const useCandidates = url.startsWith('/v1/');
     const token = localStorage.getItem('oc_access_token');
     options.headers = options.headers || {};
     options.headers['User-Agent'] = 'OldChatForKivotosNext';
     if (token) {
         options.headers['Authorization'] = 'Bearer ' + token;
     }
-    let res = await fetch(fullUrl, options);
-    if (res.status === 401) {
-        const refreshToken = localStorage.getItem('oc_refresh_token');
-        if (refreshToken) {
-            const refreshRes = await fetch(API_BASE + '/auth/refresh', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'User-Agent': 'OldChatForKivotosNext' },
-                body: JSON.stringify({ refresh_token: refreshToken })
-            });
-            if (refreshRes.ok) {
-                const data = await refreshRes.json();
-                localStorage.setItem('oc_access_token', data.access_token);
-                localStorage.setItem('oc_refresh_token', data.refresh_token || '');
-                if (data.user) localStorage.setItem('oc_user', JSON.stringify(data.user));
-                options.headers = options.headers || {};
-                options.headers['Authorization'] = 'Bearer ' + data.access_token;
-                res = await fetch(fullUrl, options);
-            } else {
-                localStorage.removeItem('oc_access_token');
-                localStorage.removeItem('oc_refresh_token');
-                localStorage.removeItem('oc_user');
-                window.location.href = 'login.html';
-                return;
+    const isGet = !options.method || String(options.method).toUpperCase() === 'GET';
+    if (useCandidates && isGet) {
+        const key = url + '|' + (token ? '1' : '0');
+        if (_inflightGet.has(key)) {
+            const p = _inflightGet.get(key);
+            try { return (await p).clone(); } catch (e) { /* clone 失败则重新请求 */ }
+        }
+        const p = _fetchWithCandidates(url, options);
+        _inflightGet.set(key, p);
+        try {
+            const res = await p;
+            if (!res) return res;
+            return res.clone();
+        } catch (e) {
+            throw e;
+        } finally {
+            _inflightGet.delete(key);
+        }
+    }
+    return _fetchWithCandidates(url, options);
+}
+
+// 按候选列表顺序请求：网络错误 / 5xx 自动降级到下一个候选
+async function _fetchWithCandidates(url, options) {
+    if (!url.startsWith('/v1/')) {
+        // 绝对地址（如媒体直链）不走候选降级
+        return await fetch(url, options);
+    }
+    // 注意：候选项存的是「裸 origin」（如 http://oc.mcl0.dpdns.org，不含 /v1）。
+    // url 本身已带 /v1 前缀（如 /v1/me），所以必须直接拼接，不能切掉 /v1，
+    // 否则会打到 /me 这种不存在的路由，后端返回纯文本 "404 page not found"，
+    // 前端 res.json() 就会抛 "Unexpected non-whitespace character after JSON at position 4"。
+    let lastErr;
+    for (let ci = 0; ci < BACKEND_CANDIDATES.length; ci++) {
+        const base = BACKEND_CANDIDATES[ci];
+        let res;
+        try {
+            res = await fetch(base + url, options);
+        } catch (e) {
+            lastErr = e;
+            continue;
+        }
+        // 5xx 视为服务端暂不可用，尝试下一个候选（先释放 body，避免流悬挂）
+        if (res.status >= 500) {
+            lastErr = new Error('HTTP ' + res.status);
+            try { if (res.body) res.body.cancel(); } catch (e) {}
+            continue;
+        }
+        // 诊断：路由不存在时后端返回纯文本 "404 page not found"，调用方 res.json() 会抛
+        // 一个非常难懂的 "Unexpected non-whitespace character after JSON at position 4"。
+        // 这里提前把真实 URL 打出来，避免再次出现无从下手的排查。
+        if (res.status === 404) {
+            const ct = (res.headers && res.headers.get && res.headers.get('content-type')) || '';
+            if (ct.indexOf('json') === -1) {
+                console.error('[apiFetch] 路由不存在（非 JSON 404），请检查 URL 拼接：' + base + url);
             }
-        } else {
+        }
+        if (res.status === 401) {
+            const refreshToken = localStorage.getItem('oc_refresh_token');
+            if (refreshToken) {
+                try {
+                    const refreshRes = await fetch(BACKEND_CANDIDATES[0] + '/v1/auth/refresh', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'User-Agent': 'OldChatForKivotosNext' },
+                        body: JSON.stringify({ refresh_token: refreshToken })
+                    });
+                    if (refreshRes.ok) {
+                        const data = await refreshRes.json();
+                        localStorage.setItem('oc_access_token', data.access_token);
+                        localStorage.setItem('oc_refresh_token', data.refresh_token || '');
+                        if (data.user) localStorage.setItem('oc_user', JSON.stringify(data.user));
+                        options.headers = options.headers || {};
+                        options.headers['Authorization'] = 'Bearer ' + data.access_token;
+                        return await fetch(base + url, options);
+                    }
+                } catch (e) { /* 忽略，走登出流程 */ }
+            }
+            localStorage.removeItem('oc_access_token');
+            localStorage.removeItem('oc_refresh_token');
+            localStorage.removeItem('oc_user');
             window.location.href = 'login.html';
             return;
         }
+        return res;
     }
-    return res;
+    if (lastErr) throw lastErr;
+    throw new Error('所有后端候选均不可用');
 }
 
 // ==================== 加密辅助模块（ECDH P-256 + AES-CBC） ====================
@@ -1074,10 +1183,24 @@ const Crypto = {
     },
 };
 
-// 认证检查：没有 token 直接跳转登录页
+// 认证检查：没有 token 直接跳转登录页（登录页会自动填充并提交，实现直观版自动登录）
 if (!localStorage.getItem('oc_access_token')) {
     window.location.href = 'login.html';
 }
+
+// ==================== 启动闪屏控制 ====================
+// 关闭启动闪屏（index.html 中的 #appSplash），淡出后从 DOM 移除，避免初始化期间白屏
+function hideAppSplash() {
+    try {
+        const s = document.getElementById('appSplash');
+        if (!s || s.dataset.hidden === '1') return;
+        s.dataset.hidden = '1';
+        s.classList.add('hide');
+        setTimeout(() => { if (s && s.parentNode) s.parentNode.removeChild(s); }, 400);
+    } catch (e) { /* 忽略 */ }
+}
+// 安全兜底：若初始化异常中断导致闪屏未被正常关闭，最多 20s 强制移除，绝不卡死在白屏
+setTimeout(hideAppSplash, 20000);
 
 // ===== 自定义弹窗（替代原生 alert/confirm） =====
 const modalOverlay = document.getElementById('customModalOverlay');
@@ -1258,13 +1381,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!fromUid) return false;
         return uidEq(fromUid, myUid) || uidEq(fromUid, myDisplayUid);
     }
-    // 构建私聊目标参数：服务端 to_uid 同时接受 uid/ncuid
+    // 构建加好友参数：ncuid 优先，旧 uid 降级（双写）
     function toUidParam(id) {
-        return { to_uid: id };
+        return { to_uid: id, friend_ncuid: id };
     }
-    // 构建私聊历史/已读参数：服务端 with_uid 同时接受 uid/ncuid
+    // 构建已读参数：ncuid 优先，旧 uid 降级（双写）
     function withUidParam(id) {
-        return { with_uid: id };
+        return { with_uid: id, with_ncuid: id };
     }
     // 构建用户资料查询参数：?uid= 不接受 ncuid，只传旧 uid
     // 如需要 ncuid 查询，用 ?ncuid= 参数
@@ -2687,7 +2810,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const r = await apiFetch('/v1/groups/invite', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ group_id: groupId, user_uid: uid })
+                        body: JSON.stringify({ group_id: groupId, user_uid: uid, user_ncuid: uid })
                     });
                     const d = await r.json();
                     if (d.error) { showAlert(d.error); return false; }
@@ -4996,6 +5119,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                             }
                         }
                         content = quoteHtml + (textBody ? `<div style="white-space: pre-wrap; word-break: break-word;">${textBody}</div>` : '') + nestedFileHtml;
+                    } else if (obj.v === 3 || (obj.buttons && Array.isArray(obj.buttons))) {
+                        // v3 按钮消息：文本 + 内联按钮（Telegram 风格）
+                        let textBody = escapeHtml(obj.text || '');
+                        textBody = textBody.replace(/\n/g, '<br>');
+                        const buttons = (obj.buttons || []).map(function (b) {
+                            const label = escapeHtml(b.text != null ? b.text : '');
+                            const action = escapeHtml(b.action || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+                            const data = escapeHtml(b.data != null ? b.data : '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+                            return '<button type="button" class="btn" data-btn-action="' + action + '" data-btn-data="' + data + '">' + label + '</button>';
+                        }).join('');
+                        content = (textBody ? '<div style="white-space: pre-wrap; word-break: break-word; margin-bottom:8px;">' + textBody + '</div>' : '') +
+                            '<div class="msg-buttons">' + buttons + '</div>';
                     } else {
                         body = escapeHtml(body);
                         body = body.replace(/\n/g, '<br>');
@@ -5109,6 +5244,29 @@ document.addEventListener('DOMContentLoaded', async () => {
         const bubble = document.createElement('div');
         bubble.className = 'message-bubble';
         bubble.innerHTML = content;
+        // v3 按钮消息：为内联按钮绑定点击事件
+        if (bubble) {
+            bubble.querySelectorAll('.msg-buttons .btn').forEach(function (btn) {
+                btn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    const action = btn.dataset.btnAction;
+                    const data = btn.dataset.btnData || '';
+                    if (action === 'open_url') {
+                        const tauriInvoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+                        if (tauriInvoke) {
+                            tauriInvoke('plugin:opener|open_url', { url: data }).catch(function () { window.open(data, '_blank'); });
+                        } else {
+                            window.open(data, '_blank');
+                        }
+                    } else {
+                        // send_text / reply_msg 等：作为文本消息发送到当前会话
+                        if (typeof sendMessage === 'function') {
+                            sendMessage(data, 'text');
+                        }
+                    }
+                });
+            });
+        }
         msgDiv.appendChild(bubble);
 
         const timeDiv = document.createElement('div');
@@ -5348,9 +5506,32 @@ document.addEventListener('DOMContentLoaded', async () => {
         const quotedId = quoteBlock.dataset.quotedId;
         if (!quotedId) return;
         const targetMsg = document.querySelector(`.message[data-msg-id="${CSS.escape(quotedId)}"]`);
-        if (!targetMsg) return;
-        targetMsg.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (targetMsg) {
+            targetMsg.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+        }
+        // 当前页没有该消息：滚动到顶部并向前加载历史（最多 2 页）查找
+        jumpToQuotedMessage(quotedId);
     });
+
+    // 引用跳转：当前页缺失时，向前加载历史最多 2 页，定位被引用消息
+    async function jumpToQuotedMessage(quotedId) {
+        const convKey = currentConv && currentConv.key;
+        if (!convKey) return;
+        for (let page = 0; page < 2; page++) {
+            const found = document.querySelector(`.message[data-msg-id="${CSS.escape(quotedId)}"]`);
+            if (found) { found.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
+            if (!convHasMore[convKey]) break;
+            // 触发顶部加载（复用现有滚动加载逻辑），等待本次加载完成
+            messagesContainer.scrollTop = 0;
+            messagesContainer.dispatchEvent(new Event('scroll'));
+            let guard = 0;
+            while (isLoadingMore && guard < 120) { await new Promise(r => setTimeout(r, 50)); guard++; }
+            await new Promise(r => setTimeout(r, 60));
+        }
+        const found = document.querySelector(`.message[data-msg-id="${CSS.escape(quotedId)}"]`);
+        if (found) found.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
 
     // 语音消息播放/暂停
     messagesContainer.addEventListener('click', function(e) {
@@ -5664,7 +5845,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 msg_type: msgType,
                 media_url: mediaUrl || '',
                 thumb_url: thumbUrl || ''
-              }, { to_uid: currentConv._sendToUid || currentConv.id });
+              }, { to_uid: currentConv._sendToUid || currentConv.id, to_ncuid: currentConv.id });
         if (burnAfterSeconds && burnAfterSeconds > 0) {
             payload.burn_after_seconds = burnAfterSeconds;
         }
@@ -5821,7 +6002,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         const textBefore = val.substring(0, cursorPos);
         const atMatch = textBefore.match(/@([^\u200B@]*)$/);
         if (atMatch && currentConv && currentConv.type === 'group') {
-            if (!mentionJustInserted) showMentionPopup(atMatch[1]);
+            if (!mentionJustInserted) {
+                // 首次打开弹窗立即渲染；输入中改为防抖，避免每敲一字重算并重建全列表
+                if (!mentionPopup.classList.contains('show')) {
+                    showMentionPopup(atMatch[1]);
+                } else {
+                    mentionSearch.value = atMatch[1];
+                    debouncedFilterMention(atMatch[1]);
+                }
+            }
         } else {
             hideMentionPopup();
         }
@@ -5859,12 +6048,23 @@ document.addEventListener('DOMContentLoaded', async () => {
             try {
                 const res = await apiFetch('/v1/groups/members?group_id=' + encodeURIComponent(groupId));
                 const data = await res.json();
-                const members = (data.members || []).map(m => ({
-                    uid: m.uid || '',
-                    ncuid: m.ncuid || getUid(m),
-                    name: m.display_name || m.username || getUid(m),
-                    avatar: m.avatar_url || ''
-                }));
+                const members = (data.members || []).map(m => {
+                    const name = m.display_name || m.username || getUid(m);
+                    // 预计算拼音（全拼 + 首字母），避免每次按键重算导致大群卡顿
+                    const _py = getPinyinInitials(name).toLowerCase();
+                    const _ini = name.split('').map(ch => {
+                        const p = pinyinMap[ch];
+                        return p ? p[0] : ch.toLowerCase();
+                    }).join('');
+                    return {
+                        uid: m.uid || '',
+                        ncuid: m.ncuid || getUid(m),
+                        name: name,
+                        avatar: m.avatar_url || '',
+                        _py: _py,
+                        _ini: _ini
+                    };
+                });
                 _refreshGroupThrottle.set(groupId, Date.now());
                 groupMembersCache.set(groupId, { members, ts: Date.now() });
                 // 如果当前会话刚好是这个群，同步更新 mentionMembers
@@ -5892,12 +6092,23 @@ document.addEventListener('DOMContentLoaded', async () => {
             const res = await apiFetch('/v1/groups/members?group_id=' + encodeURIComponent(groupId));
             const data = await res.json();
             // Go 返回 {members: [{uid, username, display_name, avatar_url, role, joined_at}]}
-            const members = (data.members || []).map(m => ({
-                uid: m.uid || '',           // 旧 uid
-                ncuid: m.ncuid || getUid(m), // ncuid（getUid 优先取 ncuid）
-                name: m.display_name || m.username || getUid(m),
-                avatar: m.avatar_url || ''
-            }));
+            const members = (data.members || []).map(m => {
+                const name = m.display_name || m.username || getUid(m);
+                // 预计算拼音（全拼 + 首字母），避免每次按键重算导致大群卡顿
+                const _py = getPinyinInitials(name).toLowerCase();
+                const _ini = name.split('').map(ch => {
+                    const p = pinyinMap[ch];
+                    return p ? p[0] : ch.toLowerCase();
+                }).join('');
+                return {
+                    uid: m.uid || '',            // 旧 uid
+                    ncuid: m.ncuid || getUid(m), // ncuid（getUid 优先取 ncuid）
+                    name: name,
+                    avatar: m.avatar_url || '',
+                    _py: _py,
+                    _ini: _ini
+                };
+            });
             groupMembers = members;
             mentionMembers = members;
             groupMembersCache.set(groupId, { members, ts: Date.now() });
@@ -5932,13 +6143,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         const filtered = mentionMembers.filter(m => {
             const nameLower = m.name.toLowerCase();
             if (nameLower.includes(lower)) return true;
-            if (m.uid.toLowerCase().includes(lower)) return true;
+            if (m.uid && m.uid.toLowerCase().includes(lower)) return true;
             if (m.ncuid && m.ncuid.toLowerCase().includes(lower)) return true;
-            // 全拼搜索
-            const pinyin = getPinyinInitials(m.name).toLowerCase();
+            // 全拼搜索（优先用预计算缓存，避免大群每键重算）
+            const pinyin = m._py || getPinyinInitials(m.name).toLowerCase();
             if (pinyin.includes(lower)) return true;
-            // 拼音首字母搜索（如 "lgcr" 匹配 "LGCR837-1"）
-            const initials = m.name.split('').map(ch => {
+            // 拼音首字母搜索（如 "lgcr" 匹配 "LGCR837-1"，优先用预计算缓存）
+            const initials = m._ini || m.name.split('').map(ch => {
                 const py = pinyinMap[ch];
                 return py ? py[0] : ch.toLowerCase();
             }).join('');
@@ -5948,6 +6159,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         mentionActiveIndex = 0;
         renderMentionList(filtered);
     }
+
+    // 防抖版：@ 输入过程中连续触发时只在停顿 140ms 后过滤一次，消除大群卡顿
+    const debouncedFilterMention = debounce(filterMentionList, 140);
 
     function renderMentionList(list) {
         mentionList.innerHTML = '';
@@ -5986,7 +6200,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     mentionSearch.addEventListener('input', function () {
-        filterMentionList(this.value);
+        debouncedFilterMention(this.value);
     });
 
     mentionSearch.addEventListener('keydown', function (e) {
@@ -6135,7 +6349,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (currentConv.type === 'group') {
                     payload.group_id = currentConv.id;
                 } else {
-                    Object.assign(payload, { to_uid: currentConv._sendToUid || currentConv.id });
+                    Object.assign(payload, { to_uid: currentConv._sendToUid || currentConv.id, to_ncuid: currentConv.id });
                 }
                 const res = await apiFetch('/v1/redpackets/send', {
                     method: 'POST',
@@ -6221,7 +6435,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             let sendPayload = currentConv.type === 'group'
                 ? { group_id: currentConv.id, body: '', msg_type: msgType, media_url: upData.url, thumb_url: upData.thumb_url || '' }
-                : Object.assign({ body: '', msg_type: msgType, media_url: upData.url, thumb_url: upData.thumb_url || '' }, { to_uid: currentConv._sendToUid || currentConv.id });
+                : Object.assign({ body: '', msg_type: msgType, media_url: upData.url, thumb_url: upData.thumb_url || '' }, { to_uid: currentConv._sendToUid || currentConv.id, to_ncuid: currentConv.id });
             // 如果编辑框有引用，自动附加到图片/文件消息
             if (pendingQuote) {
                 sendPayload.body = JSON.stringify({ v: 2, text: '', quote: pendingQuote });
@@ -6287,38 +6501,84 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 3. 接管所有其他区域的系统右键行为
         e.preventDefault();
 
-        // 联系人列表右键菜单
+        // 侧边栏列表右键菜单（按所属面板隔离，不复用聊天界面菜单）
         const contactItem = e.target.closest('.contact-item');
         if (contactItem) {
             e.preventDefault();
+            const panel = contactItem.closest('.sidebar-panel');
+            const panelName = panel ? panel.dataset.panel : 'chat';
             const convType = contactItem.dataset.type;
             const convId = contactItem.dataset.id;
             const convName = contactItem.dataset.name;
+
+            // 设置面板：导航项，无右键菜单
+            if (panelName === 'settings') { return; }
+
             const menu = document.createElement('div');
             menu.className = 'custom-context-menu';
             menu.style.left = e.clientX + 'px';
             menu.style.top = e.clientY + 'px';
+
             let menuHtml = '';
-            if (convType === 'group') {
-                menuHtml = '<div class="context-menu-item" data-action="group-manage">群聊管理</div>' +
-                    '<div class="context-menu-divider"></div>' +
-                    '<div class="context-menu-item" data-action="mark-read">全部已读</div>';
+            if (panelName === 'music') {
+                menuHtml = '<div class="context-menu-item" data-action="play">播放</div>' +
+                    '<div class="context-menu-item" data-action="copy-link">复制链接</div>';
+            } else if (panelName === 'contacts') {
+                if (convType === 'group') {
+                    menuHtml = '<div class="context-menu-item" data-action="send-msg">发消息</div>' +
+                        '<div class="context-menu-item" data-action="group-manage">群聊管理</div>' +
+                        '<div class="context-menu-divider"></div>' +
+                        '<div class="context-menu-item" data-action="copy-id">复制ID</div>';
+                } else {
+                    menuHtml = '<div class="context-menu-item" data-action="send-msg">发消息</div>' +
+                        '<div class="context-menu-item" data-action="profile">查看主页</div>' +
+                        '<div class="context-menu-divider"></div>' +
+                        '<div class="context-menu-item" data-action="copy-id">复制ID</div>';
+                }
             } else {
-                menuHtml = '<div class="context-menu-item" data-action="mark-read">全部已读</div>';
+                // chat 面板：会话级操作
+                if (convType === 'group') {
+                    menuHtml = '<div class="context-menu-item" data-action="group-manage">群聊管理</div>' +
+                        '<div class="context-menu-divider"></div>' +
+                        '<div class="context-menu-item" data-action="mark-read">全部已读</div>';
+                } else {
+                    menuHtml = '<div class="context-menu-item" data-action="mark-read">全部已读</div>';
+                }
             }
+
             menu.innerHTML = menuHtml;
             document.body.appendChild(menu);
             requestAnimationFrame(() => menu.classList.add('show'));
             contextMenu = menu;
+
             menu.addEventListener('click', (event) => {
                 const action = event.target.dataset.action;
                 if (action === 'group-manage') {
                     openGroupManagePanel(convId, convName);
                 } else if (action === 'mark-read') {
                     markAllRead(convType, convId);
+                } else if (action === 'send-msg') {
+                    switchConversation(convType, convId, convName);
+                    switchTab('chat');
+                } else if (action === 'profile') {
+                    openSpacePanel(convId);
+                } else if (action === 'copy-id') {
+                    const text = convId || '';
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(text).catch(() => fallbackCopyText(text));
+                    } else { fallbackCopyText(text); }
+                } else if (action === 'play') {
+                    const m = musicData.find(m => (m.id || '') === contactItem.dataset.musicId);
+                    if (m) playMusic(m);
+                } else if (action === 'copy-link') {
+                    const text = contactItem.dataset.musicUrl || '';
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(text).catch(() => fallbackCopyText(text));
+                    } else { fallbackCopyText(text); }
                 }
                 hideContextMenu();
             });
+
             const closeHandler = (ev) => {
                 if (!menu.contains(ev.target)) {
                     hideContextMenu();
@@ -6326,6 +6586,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             };
             setTimeout(() => document.addEventListener('click', closeHandler), 0);
+            return;
+        }
+
+        // 侧边栏非列表区域（头部/标签/空白）：隔离，不显示聊天面板菜单
+        if (e.target.closest('.sidebar')) {
+            e.preventDefault();
             return;
         }
         
@@ -7236,25 +7502,35 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <span class="value">${currentTheme === 'dark' ? '已开启' : '已关闭'} <i class="fa-solid fa-chevron-right"></i></span>
                 </div>
             </div>
-            ${IS_TAURI ? `
             <h3 style="margin-top:20px;">服务器配置</h3>
             <div class="settings-group">
-                <div class="settings-input-row">
-                    <label>Base URL</label>
-                    <input type="text" id="settingsBaseUrl" value="${escapeHtml(BACKEND_ORIGIN)}" placeholder="http://host1 http://host2 ..." style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;">
+                <div style="font-size:12px;color:var(--secondary-text);margin-bottom:6px;">API 地址（普通内容，按列表顺序降级）</div>
+                <div class="candidate-list" id="baseCandidateList"></div>
+                <div style="display:flex;gap:6px;margin-top:6px;">
+                    <input type="text" id="baseCandidateInput" placeholder="添加候选，如 http://host:8080" style="flex:1;min-width:0;padding:6px 8px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;">
+                    <button id="baseCandidateAdd" class="btn" style="padding:6px 12px;white-space:nowrap;">添加</button>
                 </div>
-                <div class="settings-input-row">
-                    <label>Media URL</label>
-                    <input type="text" id="settingsMediaUrl" value="${escapeHtml(MEDIA_ORIGIN)}" placeholder="http://host1 http://host2 ..." style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;">
+                <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
+                    <button class="candidate-quick" data-target="base" data-url="http://oc.mcl0.dpdns.org">+ oc.mcl0</button>
+                    <button class="candidate-quick" data-target="base" data-url="http://60.205.94.101:8080">+ 60.205</button>
+                    <button class="candidate-quick" data-target="base" data-url="https://oc.mcl0.dpdns.org">+ oc https</button>
                 </div>
-                <div class="settings-input-row">
-                    <label></label>
-                    <div style="display:flex;gap:8px;align-items:center;">
-                        <button id="settingsSaveUrls">保存并重载</button>
-                        <button id="settingsResetUrls" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border-color);background:transparent;color:var(--text);font-size:13px;cursor:pointer;font-family:inherit;">恢复默认</button>
-                    </div>
+                <div style="font-size:12px;color:var(--secondary-text);margin:14px 0 6px;">媒体地址（图片/音频，按列表顺序降级）</div>
+                <div class="candidate-list" id="mediaCandidateList"></div>
+                <div style="display:flex;gap:6px;margin-top:6px;">
+                    <input type="text" id="mediaCandidateInput" placeholder="添加候选，如 http://host:8080" style="flex:1;min-width:0;padding:6px 8px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;">
+                    <button id="mediaCandidateAdd" class="btn" style="padding:6px 12px;white-space:nowrap;">添加</button>
                 </div>
-            </div>` : ''}
+                <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
+                    <button class="candidate-quick" data-target="media" data-url="http://60.205.94.101:8080">+ 60.205</button>
+                    <button class="candidate-quick" data-target="media" data-url="http://oc.mcl0.dpdns.org">+ oc.mcl0</button>
+                    <button class="candidate-quick" data-target="media" data-url="https://oc.mcl0.dpdns.org">+ oc https</button>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:14px;align-items:center;">
+                    <button id="settingsSaveUrls">保存并重载</button>
+                    <button id="settingsResetUrls" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border-color);background:transparent;color:var(--text);font-size:13px;cursor:pointer;font-family:inherit;">恢复默认</button>
+                </div>
+            </div>
             <h3 style="margin-top:20px;">缓存管理</h3>
             <div class="settings-group">
                 <div class="settings-item" id="settingsClearMediaCache" style="color:#ff6b6b;">
@@ -7272,13 +7548,61 @@ document.addEventListener('DOMContentLoaded', async () => {
             applyTheme(newTheme);
             renderSettingsAppearance();
         });
-        if (IS_TAURI) {
-            const baseInput = document.getElementById('settingsBaseUrl');
-            const mediaInput = document.getElementById('settingsMediaUrl');
-            // 保存：取空格分割的第一个 URL 作为主地址
+        // 服务器配置：候选列表管理 / 保存 / 恢复默认
+        {
+            const baseCands = BACKEND_CANDIDATES.slice();
+            const mediaCands = MEDIA_CANDIDATES.slice();
+            const baseList = document.getElementById('baseCandidateList');
+            const mediaList = document.getElementById('mediaCandidateList');
+
+            function renderCands(listEl, arr) {
+                if (!listEl) return;
+                listEl.innerHTML = '';
+                if (arr.length === 0) {
+                    listEl.innerHTML = '<span style="font-size:12px;color:var(--secondary-text);">（无候选，将使用默认顺序）</span>';
+                    return;
+                }
+                arr.forEach((url, idx) => {
+                    const tag = document.createElement('span');
+                    tag.className = 'candidate-tag';
+                    const label = document.createElement('span');
+                    label.textContent = (idx === 0 ? '★ ' : '') + url;
+                    const x = document.createElement('i');
+                    x.className = 'fa-solid fa-xmark';
+                    x.style.cursor = 'pointer';
+                    x.style.marginLeft = '6px';
+                    x.addEventListener('click', () => { arr.splice(idx, 1); renderCands(listEl, arr); });
+                    tag.appendChild(label);
+                    tag.appendChild(x);
+                    listEl.appendChild(tag);
+                });
+            }
+            function addCand(arr, listEl, inputEl) {
+                const v = (inputEl && inputEl.value || '').trim();
+                if (!v) return;
+                if (!arr.includes(v)) arr.push(v);
+                if (inputEl) inputEl.value = '';
+                renderCands(listEl, arr);
+            }
+            renderCands(baseList, baseCands);
+            renderCands(mediaList, mediaCands);
+
+            document.getElementById('baseCandidateAdd')?.addEventListener('click', () => addCand(baseCands, baseList, document.getElementById('baseCandidateInput')));
+            document.getElementById('mediaCandidateAdd')?.addEventListener('click', () => addCand(mediaCands, mediaList, document.getElementById('mediaCandidateInput')));
+            document.getElementById('baseCandidateInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') addCand(baseCands, baseList, e.target); });
+            document.getElementById('mediaCandidateInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') addCand(mediaCands, mediaList, e.target); });
+            document.querySelectorAll('.candidate-quick').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const target = btn.dataset.target;
+                    const url = btn.dataset.url;
+                    if (target === 'base') { if (!baseCands.includes(url)) baseCands.push(url); renderCands(baseList, baseCands); }
+                    else { if (!mediaCands.includes(url)) mediaCands.push(url); renderCands(mediaList, mediaCands); }
+                });
+            });
+
             document.getElementById('settingsSaveUrls')?.addEventListener('click', () => {
-                const base = baseInput?.value?.trim().split(/\s+/)[0] || '';
-                const media = mediaInput?.value?.trim().split(/\s+/)[0] || '';
+                const base = baseCands.join(' ');
+                const media = mediaCands.join(' ');
                 if (base) localStorage.setItem('oc_custom_base_url', base);
                 else localStorage.removeItem('oc_custom_base_url');
                 if (media) localStorage.setItem('oc_custom_media_url', media);
@@ -7286,7 +7610,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 refreshEndpoints();
                 window.location.reload();
             });
-            // 恢复默认
             document.getElementById('settingsResetUrls')?.addEventListener('click', () => {
                 localStorage.removeItem('oc_custom_base_url');
                 localStorage.removeItem('oc_custom_media_url');
@@ -7471,7 +7794,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                 </div>
                 <div class="settings-item">
                     <span class="label">运行模式</span>
-                    <span class="value">${IS_TAURI ? 'Tauri 桌面端' : '浏览器 (Nginx)'}</span>
+                    <span class="value">Tauri 桌面端</span>
+                </div>
+                <div class="settings-item">
+                    <span class="label">系统环境</span>
+                    <span class="value" id="aboutOsInfo">检测中…</span>
+                </div>
+                <div class="settings-item">
+                    <span class="label">WebView</span>
+                    <span class="value" id="aboutWebviewInfo">检测中…</span>
                 </div>
                 <div class="settings-item">
                     <span class="label">后端地址</span>
@@ -7482,7 +7813,37 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <span class="value" style="color:var(--accent);text-decoration:underline;">${GITHUB_URL}</span>
                 </div>
             </div>
+            <div id="aboutEnvWarnings"></div>
         `;
+        // 环境信息来自 Rust 侧启动自检（env_report），含未阻断启动的非致命告警
+        (function loadEnvReport() {
+            const osEl = document.getElementById('aboutOsInfo');
+            const wvEl = document.getElementById('aboutWebviewInfo');
+            const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+            if (!invoke) {
+                if (osEl) osEl.textContent = '不可用';
+                if (wvEl) wvEl.textContent = '不可用';
+                return;
+            }
+            invoke('env_report').then(r => {
+                if (osEl) osEl.textContent = `${r.osVersion || r.os} · ${r.arch}`;
+                if (wvEl) wvEl.textContent = r.webview || '未知';
+                const box = document.getElementById('aboutEnvWarnings');
+                if (box && Array.isArray(r.warnings) && r.warnings.length) {
+                    box.innerHTML = '<h3 style="margin-top:20px;">环境提醒</h3><div class="settings-group">'
+                        + r.warnings.map(w => `
+                        <div class="settings-item" style="flex-direction:column;align-items:flex-start;gap:6px;">
+                            <span class="label" style="color:#e0a458;">⚠ ${escapeHtml(w.title)}</span>
+                            <span style="font-size:12px;color:var(--secondary-text);white-space:pre-wrap;line-height:1.6;">${escapeHtml(w.message)}</span>
+                        </div>`).join('')
+                        + '</div>';
+                }
+            }).catch(e => {
+                console.error('[about] env_report:', e);
+                if (osEl) osEl.textContent = '获取失败';
+                if (wvEl) wvEl.textContent = '获取失败';
+            });
+        })();
         document.getElementById('aboutGithubLink')?.addEventListener('click', () => {
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 navigator.clipboard.writeText(GITHUB_URL).then(() => {
@@ -7580,5 +7941,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (window.__MediaCache && typeof window.__MediaCache.init === 'function') {
         try { window.__MediaCache.init(); } catch (e) { console.error('[MediaCache]', e); }
     }
+
+    // 初始化完成：关闭启动闪屏（覆盖 app.js 解析/初始化期间的白屏）
+    hideAppSplash();
 
 });

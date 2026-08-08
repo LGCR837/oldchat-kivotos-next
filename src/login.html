@@ -207,10 +207,6 @@
                                 <input type="checkbox" id="rememberAccountCheckbox">
                                 <label for="rememberAccountCheckbox">记住账号</label>
                             </div>
-                            <div style="display:flex;align-items:center;gap:6px;">
-                                <input type="checkbox" id="proxyModeCheckbox" checked>
-                                <label for="proxyModeCheckbox">代理模式</label>
-                            </div>
                         </div>
                         <button type="submit">登录</button>
                     </form>
@@ -241,7 +237,7 @@
     </div>
     <script src="https://static.geetest.com/v4/gt4.js"></script>
     <script>
-        // ===== 运行模式检测（Tauri vs 浏览器） =====
+        // ===== Tauri 环境检测（仅用于判断 Tauri API 是否可用） =====
         var IS_TAURI = false;
         try {
             IS_TAURI = !!(window.__TAURI__ !== undefined || window.__TAURI_INTERNALS__ !== undefined);
@@ -249,7 +245,10 @@
         var BACKEND_ORIGIN = 'http://oc.mcl0.dpdns.org';
         try {
             var saved = localStorage.getItem('oc_custom_base_url');
-            if (saved) BACKEND_ORIGIN = saved;
+            if (saved) {
+                var firstCand = String(saved).split(/[\s,]+/)[0];
+                if (firstCand) BACKEND_ORIGIN = firstCand;
+            }
         } catch (e) {}
 
         // ===== Tauri 环境下替换 fetch 为 plugin-http invoke =====
@@ -424,20 +423,9 @@
             });
         }
 
-        // ===== 代理模式 / 运行模式分流 =====
-        var proxyCb = document.getElementById('proxyModeCheckbox');
-        if (IS_TAURI) {
-            if (proxyCb) { var wrapper = proxyCb.parentElement; if (wrapper) wrapper.style.display = 'none'; }
-        } else {
-            if (localStorage.getItem('oc_proxy_mode') === null) { localStorage.setItem('oc_proxy_mode', 'on'); }
-            if (proxyCb) {
-                proxyCb.checked = localStorage.getItem('oc_proxy_mode') !== 'off';
-                proxyCb.addEventListener('change', function() { localStorage.setItem('oc_proxy_mode', this.checked ? 'on' : 'off'); });
-            }
-        }
+        // ===== API 基地址：固定直连后端（plugin-http 自带跨域能力） =====
         function getApiBase() {
-            if (IS_TAURI) return BACKEND_ORIGIN;
-            return localStorage.getItem('oc_proxy_mode') !== 'off' ? '' : BACKEND_ORIGIN;
+            return BACKEND_ORIGIN;
         }
 
         // ===== 自动填充 =====
@@ -450,6 +438,24 @@
                 var cb = document.getElementById('rememberAccountCheckbox');
                 if (cb && savedId) cb.checked = true;
             } catch(e) {}
+        })();
+
+        // ===== 自动登录（直观版自动登录）=====
+        // 若已记住账号密码，登录页加载后自动提交登录（等效于自动点击登录按钮）
+        (function autoLogin() {
+            try {
+                var savedId = localStorage.getItem('savedIdentifier');
+                var savedPwd = localStorage.getItem('savedPassword');
+                if (savedId && savedPwd) {
+                    var form = document.getElementById('loginForm');
+                    if (form) {
+                        setTimeout(function() {
+                            if (form.requestSubmit) form.requestSubmit();
+                            else form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+                        }, 400);
+                    }
+                }
+            } catch (e) {}
         })();
 
         // ===== 登录 =====

@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OldChat For Kivotos Next — 桃信旧聊 · 桌面客户端</title>
+    <meta name="description" content="OldChat For Kivotos Next，基沃托斯特供版 OldChat 桌面客户端，俗称桃信旧聊。基于 Tauri v2 构建，MomoTalk 风格界面，支持 Windows 与 Linux。">
+    <meta name="theme-color" content="#4A9EFF">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- ===== Navbar ===== -->
+    <nav class="navbar">
+        <div class="container">
+            <a href="#" class="navbar-brand">OldChat For Kivotos Next</a>
+            <button class="mobile-toggle" id="mobileToggle" aria-label="菜单">
+                <span></span><span></span><span></span>
+            </button>
+            <ul class="navbar-links" id="navLinks">
+                <li><a href="#features">功能</a></li>
+                <li><a href="#start">发行版下载</a></li>
+                <li><a href="#about">关于</a></li>
+                <li><a href="https://github.com/LGCR837/oldchat-kivotos-next" target="_blank" rel="noopener">代码仓库</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- ===== Hero ===== -->
+    <section class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <div class="hero-badge">
+                    <span>✦</span> OldChat 基沃托斯特供版
+                </div>
+                <h1 class="hero-title animate-in">
+                    为 <span class="highlight">Sensei</span> 打造的<br>OldChat 特供版
+                </h1>
+                <p class="hero-subtitle animate-in">
+                    OldChat For Kivotos Next — 基沃托斯专属的 OldChat 客户端。<br>
+                    MomoTalk 界面风格，让每一位 Sensei 都能享受独特的聊天体验。
+                </p>
+                <div class="hero-actions animate-in">
+                    <a href="#start" rel="noopener" class="btn btn-secondary">开始使用</a>
+                    <a href="#start" rel="noopener" class="btn btn-secondary">下载客户端</a>
+                    <a href="https://github.com/LGCR837/oldchat-kivotos-next" target="_blank" rel="noopener" class="btn btn-secondary">代码仓库</a>
+                </div>
+                <div class="hero-stats animate-in">
+                    <div class="stat-item">
+                        <div class="stat-number">GPL-3.0</div>
+                        <div class="stat-label">开源许可</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number">Tauri</div>
+                        <div class="stat-label">技术栈</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number">Windows / Linux</div>
+                        <div class="stat-label">支持平台</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== Features ===== -->
+    <section class="section" id="features">
+        <div class="container">
+            <div class="section-header fade-in">
+                <span class="section-tag">Features</span>
+                <h2 class="section-title">特性一览</h2>
+                <p class="section-desc">为基沃托斯量身定制的功能，让聊天更贴近 Sensei 的日常。</p>
+            </div>
+            <div class="features-grid">
+                <div class="feature-card fade-in">
+                    <h3>桃信风格界面</h3>
+                    <p>延续《蔚蓝档案》中 MomoTalk 的界面风格，支持明暗主题切换，让 Sensei 仿佛置身于基沃托斯。</p>
+                </div>
+                <div class="feature-card fade-in">
+                    <h3>兼容 OldChat 新协议</h3>
+                    <p>适配 OldChat 全新的 NCUID 体系并向下兼容旧 uid，私聊、群聊、撤回、引用一应俱全。</p>
+                </div>
+                <div class="feature-card fade-in">
+                    <h3>原生窗口体验</h3>
+                    <p>无边框自定义标题栏、系统托盘常驻、消息桌面通知，还有启动环境自检兜底。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== Releases ===== -->
+    <section class="section" id="start">
+        <div class="container">
+            <div class="section-header fade-in">
+                <span class="section-tag">Releases</span>
+                <h2 class="section-title">所有发行版下载</h2>
+                <p class="section-desc">挑选与系统架构匹配的版本，下载即用，无需安装。</p>
+            </div>
+            <div class="release-masonry" id="releaseGrid">
+                <div class="release-card fade-in visible">
+                    <h3>正在加载</h3>
+                    <p class="release-desc">正在从服务器获取发行版列表，请稍候。</p>
+                </div>
+            </div>
+            <div class="start-links fade-in">
+                <a href="https://github.com/LGCR837/oldchat-kivotos-next" target="_blank" rel="noopener" class="btn btn-secondary">浏览源代码</a>
+                <a href="https://github.com/LGCR837/oldchat-kivotos-next/releases" target="_blank" rel="noopener" class="btn btn-secondary">GitHub Releases</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== About ===== -->
+    <section class="section" id="about">
+        <div class="container">
+            <div class="section-header fade-in">
+                <span class="section-tag">About</span>
+                <h2 class="section-title">关于项目</h2>
+                <p class="section-desc">了解 OldChat For Kivotos Next 背后的故事。</p>
+            </div>
+            <div class="about-grid">
+                <div class="feature-card fade-in" style="padding: 28px;">
+                    <h3 style="font-size: 1.05rem; font-weight: 600; margin-bottom: 10px;">项目介绍</h3>
+                    <p style="font-size: 0.88rem; color: var(--text-secondary); line-height: 1.65;">
+                         <strong>「OldChat For Kivotos Next」</strong>是专门为基沃托斯打造的第三方 OldChat 客户端，俗称 <strong>「桃信旧聊」</strong>。
+                        本作是初代网页版的全新一代重写：界面风格得以延续，底层则从 Web 应用彻底重构为 Tauri 原生桌面客户端，
+                        直连后端、免安装运行，使 Sensei 们也能在聊天中获得最好的体验。
+                    </p>
+                </div>
+                <div class="feature-card fade-in" style="padding: 28px;">
+                    <h3 style="font-size: 1.05rem; font-weight: 600; margin-bottom: 10px;">作者</h3>
+                    <p style="font-size: 0.88rem; color: var(--text-secondary); line-height: 1.65;">
+                        由 <strong>Aoharu Reverie</strong>（LGCR837）开发维护。<br>
+                        技术栈：前端 HTML + CSS + JS · 后端 Rust + Tauri v2 + JS
+                    </p>
+                </div>
+                <div class="feature-card fade-in" style="padding: 28px;">
+                    <h3 style="font-size: 1.05rem; font-weight: 600; margin-bottom: 10px;">许可</h3>
+                    <p style="font-size: 0.88rem; color: var(--text-secondary); line-height: 1.65;">
+                        本项目基于 <strong>GNU General Public License v3.0</strong> 开源。<br>
+                        所有商标归其各自所有者所有。
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== Quote ===== -->
+    <section class="section" style="padding: 40px 0 80px;">
+        <div class="container">
+            <div class="feature-card fade-in" style="text-align: center; padding: 40px 32px; max-width: 680px; margin: 0 auto;">
+                <p style="font-size: 1.1rem; font-style: italic; color: var(--text-secondary); line-height: 1.8; margin-bottom: 16px;">
+                    "吾等所盼乃七之哀叹，吾等所忆乃杰里科的古法。"
+                </p>
+                <p style="font-size: 0.85rem; color: var(--text-muted);">— Sensei，我们永远等你回来</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== Footer ===== -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-grid">
+                <div class="footer-brand">
+                    <h3>OldChat For Kivotos Next</h3>
+                    <p>OldChat For Kivotos Next — 基沃托斯特供版 OldChat 桌面客户端。为 Sensei 打造的专属聊天体验。</p>
+                </div>
+                <div class="footer-col">
+                    <h4>导航</h4>
+                    <a href="#features">功能</a>
+                    <a href="#start">发行版下载</a>
+                    <a href="#about">关于</a>
+                </div>
+                <div class="footer-col">
+                    <h4>链接</h4>
+                    <a href="https://github.com/LGCR837/oldchat-kivotos-next" target="_blank" rel="noopener">GitHub 仓库</a>
+                    <a href="https://github.com/LGCR837/oldchat-kivotos-next/releases" target="_blank" rel="noopener">所有发行版</a>
+                    <a href="http://oc.mcl0.dpdns.org/" target="_blank" rel="noopener">OldChat 官网</a>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2026 Aoharu Reverie. Licensed under GPL-3.0.</p>
+                <div class="footer-bottom-links">
+                    <a href="https://github.com/LGCR837/oldchat-kivotos-next" target="_blank" rel="noopener">Project · GitHub</a>
+                    <a href="http://oc.mcl0.dpdns.org/" target="_blank" rel="noopener">OldChat</a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>

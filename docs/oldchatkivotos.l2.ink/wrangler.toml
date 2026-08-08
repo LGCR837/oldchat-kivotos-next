@@ -1,0 +1,7 @@
+name = "oldchatkivotos"
+compatibility_date = "2026-08-01"
+pages_build_output_dir = "public"
+
+[[kv_namespaces]]
+binding = "RELEASES"
+id = "aa4480ecc24e44319db7720cd82c3ee6"

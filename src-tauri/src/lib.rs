@@ -1,4 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod preflight;
+
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -9,6 +11,24 @@ use tauri_plugin_dialog::{DialogExt, FilePath};
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
+}
+
+// 运行环境概览：供「设置 → 关于」展示，也便于用户反馈问题时提供环境信息。
+// warnings 是启动自检里未阻断启动的非致命项（如 Linux 缺托盘库）。
+#[tauri::command]
+fn env_report() -> serde_json::Value {
+    let warnings: Vec<serde_json::Value> = preflight::warnings()
+        .iter()
+        .map(|w| serde_json::json!({ "title": w.title, "message": w.message }))
+        .collect();
+
+    serde_json::json!({
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "osVersion": preflight::os_version_string(),
+        "webview": tauri::webview_version().unwrap_or_else(|_| "未知".to_string()),
+        "warnings": warnings,
+    })
 }
 
 // 切换 DevTools：前端在 Ctrl+Alt+Shift+F12 时调用
@@ -141,7 +161,13 @@ async fn save_image_data(app: tauri::AppHandle, data: Vec<u8>) -> Result<(), Str
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    // 启动自检：必须先于 Tauri 运行时初始化。
+    // WebView2 / WebKitGTK 缺失时 Tauri 的对话框插件自身也无法工作，
+    // 所以这一步用平台原生弹窗告知用户，发现致命问题会直接退出进程。
+    #[cfg(desktop)]
+    preflight::check();
+
+    let run_result = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())
@@ -155,7 +181,8 @@ pub fn run() {
             is_window_maximized,
             notify_new_message,
             save_image,
-            save_image_data
+            save_image_data,
+            env_report
         ])
         // 拦截窗口关闭请求：改为隐藏到托盘
         .on_window_event(|window, event| {
@@ -207,6 +234,16 @@ pub fn run() {
                 .build(app)?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+
+    // 自检放行后运行时仍然失败：多半是 WebView 组件损坏或被安全软件拦截。
+    // release 构建带 windows_subsystem="windows"（无控制台），直接 panic 用户
+    // 只会看到程序「闪一下就没了」，所以这里用原生弹窗兜底说明原因。
+    if let Err(e) = run_result {
+        #[cfg(desktop)]
+        preflight::report_runtime_failure(&e.to_string());
+        #[cfg(not(desktop))]
+        eprintln!("error while running tauri application: {e}");
+        std::process::exit(1);
+    }
 }

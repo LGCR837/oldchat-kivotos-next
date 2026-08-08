@@ -698,16 +698,16 @@ body::-webkit-scrollbar {
 
 /* 连消息样式 */
 .message.consecutive {
-	margin-top: -1px;
-	margin-bottom: 0;
+	margin-top: 0;
+	margin-bottom: 2px;
 }
 
 .message.consecutive-first {
-	margin-bottom: 0;
+	margin-bottom: 2px;
 }
 
 .message.consecutive-last {
-	margin-bottom: 4px;
+	margin-bottom: 2px;
 }
 
 .message.consecutive .msg-avatar,
@@ -2876,6 +2876,42 @@ body::-webkit-scrollbar {
     margin-bottom: 16px;
     overflow: hidden;
 }
+.candidate-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.candidate-tag {
+    display: inline-flex;
+    align-items: center;
+    max-width: 100%;
+    padding: 4px 10px;
+    border-radius: 14px;
+    background: var(--input-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text);
+    font-size: 12px;
+    font-family: inherit;
+}
+.candidate-tag span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.candidate-quick {
+    padding: 4px 10px;
+    border-radius: 14px;
+    border: 1px dashed var(--border-color);
+    background: transparent;
+    color: var(--secondary-text);
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+}
+.candidate-quick:hover {
+    color: var(--text);
+    border-color: var(--border);
+}
 .settings-item {
     display: flex;
     align-items: center;
@@ -3128,4 +3164,30 @@ body::-webkit-scrollbar {
 .contacts-detail-actions {
     display: flex;
     gap: 10px;
+}
+
+/* ========== v3 消息内联按钮（独立样式） ========== */
+.msg-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+.msg-buttons .btn {
+    padding: 6px 14px;
+    border: 1.5px solid transparent;
+    background: transparent;
+    color: #fff;
+    cursor: pointer;
+    border-radius: 8px;
+    font-size: 0.84rem;
+    line-height: 1.4;
+    font-family: inherit;
+    transition: border-color 0.2s ease, transform 0.1s ease;
+}
+.msg-buttons .btn:hover {
+    border-color: rgba(255, 255, 255, 0.85);
+}
+.msg-buttons .btn:active {
+    transform: scale(0.98);
 }

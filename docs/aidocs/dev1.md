@@ -63,22 +63,21 @@ oldchat-kivotos-next-app/
 ├── src-tauri/                        # Tauri Rust 后端
 │   ├── src/
 │   │   ├── main.rs                   # 入口
-│   │   └── lib.rs                    # Tauri 命令定义（~230行）
+│   │   ├── lib.rs                    # Tauri 命令定义（~260行）
+│   │   └── preflight.rs              # 启动期环境自检（WebView2/WebKitGTK 等）
 │   ├── capabilities/
 │   │   └── default.json              # 权限配置（HTTP 白名单等）
 │   ├── icons/                        # 各平台图标
 │   ├── Cargo.toml                    # Rust 依赖配置
 │   └── tauri.conf.json                # Tauri 应用配置
-├── conf/
-│   ├── nginx.conf                    # Nginx 反代配置（浏览器模式用）
-│   └── mime.types
 ├── oldchat-docs-20260801/            # 原版 Android 客户端逆向文档
 │   ├── mcl0/                         # 后端 API 文档
 │   └── nx/                           # Android 客户端架构文档
-├── config.json                       # 开发服务器配置
-├── package.json                      # 前端 npm 配置
-└── run.bat                           # Windows 一键启动脚本
+└── package.json                      # 前端 npm 配置
 ```
+
+> 历史遗留的浏览器模式（Nginx 反代）基础设施 `conf/`、`nginx.exe`、`run.bat`、`config.json`、`logs/`、`temp/`
+> 已于 2026-08-08 全部移除，仓库不再包含任何 Nginx 相关内容。
 
 ### 2.1 关键文件说明
 
@@ -88,7 +87,8 @@ oldchat-kivotos-next-app/
 | `src/app.css` | 3032 | **全部样式**，包括浅色/深色主题 |
 | `src/index.html` | ~300 | 主界面 HTML 结构 |
 | `src/login.html` | ~200 | 登录/注册页 HTML 结构 |
-| `src-tauri/src/lib.rs` | ~230 | Rust 命令、Tauri 插件注册、窗口事件处理 |
+| `src-tauri/src/lib.rs` | ~260 | Rust 命令、Tauri 插件注册、窗口事件处理 |
+| `src-tauri/src/preflight.rs` | ~570 | 启动期环境自检与原生弹窗（见 4.7） |
 | `src-tauri/capabilities/default.json` | ~20 | Tauri 权限白名单配置 |
 
 ---
@@ -136,18 +136,33 @@ npm run tauri dev
 
 ### 4.1 运行模式检测
 
-项目同时支持两种运行模式，通过 `_detectIsTauri()` 检测：
+项目**只支持 Tauri 桌面端**一种运行模式。`_detectIsTauri()` 保留下来，但语义已从「区分运行模式」收窄为「Tauri API 是否可用」的守卫：
 
 ```javascript
 const IS_TAURI = !!(window.__TAURI__ !== undefined || window.__TAURI_INTERNALS__ !== undefined);
 ```
 
-| 模式 | 检测方式 | HTTP 请求 |
-|------|----------|-----------|
-| Tauri 桌面端 | `__TAURI__` 存在 | 走 `tauri-plugin-http`（无 CORS） |
-| 浏览器模式（已废弃） | `__TAURI__` 不存在 | 走 Nginx 反代（`config.json` 配置） |
+| 用途 | 位置 | 说明 |
+|------|------|------|
+| fetch 重写守卫 | `app.js` / `login.html` 的 `initTauri()` | 注入成功才把 `fetch` 换成 `plugin-http` |
+| 图片保存 | `downloadImage()` | Tauri 走 Rust `save_image`/`save_image_data`，否则降级 `webDownloadImage()` |
+| 音乐页窗口按钮 | 三大金刚键绑定 | 需要 `invoke` 才绑定最小化/最大化/关闭 |
+| 新消息通知 | `notifyNewMessage()` | 仅 Tauri 生效 |
 
-> ⚠️ **注意**：浏览器模式（Nginx 反代）已废弃，但相关代码保留未动，请勿修改。
+端点地址固定直连后端，不存在同源反代分支：
+
+```javascript
+let API_BASE   = BACKEND_ORIGIN + '/v1';
+let WS_HOST    = BACKEND_HOST;
+let MEDIA_BASE = MEDIA_ORIGIN;
+```
+
+`BACKEND_ORIGIN` / `MEDIA_ORIGIN` 可在「设置 → 服务器配置」中覆盖，分别存于 localStorage 的
+`oc_custom_base_url` / `oc_custom_media_url`，修改后调用 `refreshEndpoints()` 并重载页面。
+
+> ⚠️ **已移除**：浏览器模式（Nginx 反代）相关代码与基础设施已于 2026-08-08 彻底清理，
+> 包括 `_proxyOn`、`oc_proxy_mode`、登录页「代理模式」复选框、`getApiBase()` 的反代分支。
+> 新代码请勿再引入同源反代假设。
 
 ### 4.2 单文件架构
 
@@ -219,6 +234,54 @@ const pendingProfileFetches = new Map(); // 并发去重锁
 - 失败最多重试 2 次（间隔 15s）
 - `fetchUserProfile(uid, ncuid, forceRefresh)` 支持双参数查询
 
+### 4.7 启动期环境自检（preflight）
+
+`src-tauri/src/preflight.rs`，在 `run()` 里 **先于 `tauri::Builder`** 执行。
+
+> **为什么不用 `tauri-plugin-dialog`**：该插件依赖 Tauri 运行时（Windows 依赖 WebView2、
+> Linux 依赖 GTK）。而自检要处理的恰恰是「WebView2 没装」这类场景 —— 此时插件自己也起不来。
+> 所以只能用 Win32 `MessageBoxW` / `zenity` 这类不依赖 WebView 的原生机制。
+
+**分级**
+
+| 级别 | 行为 |
+|------|------|
+| `Fatal` | 弹原生窗口 + 引导 → `exit(1)`，不进入 Tauri |
+| `Warn` | 写 stderr + 缓存，由 `env_report` 交给「设置 → 关于」页展示，不打断启动 |
+
+**检测项**
+
+| 平台 | 项目 | 级别 | 说明 |
+|------|------|------|------|
+| Windows | WebView2 运行时 | Fatal | `webview_version()` + 注册表 `pv` 双保险；弹窗带「前往下载」按钮直达微软官网 |
+| Windows | 系统版本 | Fatal / Warn | build < 10240 阻断；< 17763 仅提醒（圆角/亚克力不可用） |
+| Linux | 图形环境 | Fatal | `DISPLAY` / `WAYLAND_DISPLAY` 皆空时提示改用 `ssh -X` |
+| Linux | WebKitGTK | Fatal | 按 `/etc/os-release` 给出对应发行版的 `apt`/`dnf`/`pacman`/`zypper` 安装命令 |
+| Linux | AppIndicator | Warn | 缺失则托盘不可用；**因为本程序关闭 = 隐藏到托盘，文案必须提示窗口会找不回来** |
+| 通用 | 数据目录可写 | Warn | 探测 `%APPDATA%` / `$XDG_DATA_HOME` 实际写入 |
+
+**两个已知的误报陷阱（改代码时勿踩）**
+
+1. **WebView2 固定版本部署**：企业环境用 `WEBVIEW2_BROWSER_EXECUTABLE_FOLDER` 指定运行时目录，
+   既不写注册表也不响应运行时探测。该变量非空时**必须直接豁免**，否则会把内网用户误判成「没装」。
+2. **Linux so 检测的实际覆盖面有限**：WebKitGTK 缺失时进程通常在动态链接阶段就挂了，根本到不了
+   `main`。这条检测只覆盖延迟绑定 / AppImage 等仍能进 `main` 的场景，属于尽力而为。
+
+**自测入口**（不必真的破坏环境）
+
+```bash
+# 强制预览指定弹窗后退出，可用值：webview2 / webkit / display / runtime
+OLDCHAT_PREFLIGHT_DEMO=webview2 ./oldchat-kivotos-next-app      # Linux
+set OLDCHAT_PREFLIGHT_DEMO=webview2 && oldchat-kivotos-next-app.exe   # Windows
+```
+
+**兼容性自动修复**：检测到 NVIDIA 专有驱动时自动设置 `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+（规避 WebKitGTK 在 N 卡上的白屏问题），仅在用户未显式设置该变量时生效。
+
+**兜底**：自检放行后 `Builder::run()` 仍返回 `Err`（WebView 损坏 / 被安全软件拦截）时，
+调用 `report_runtime_failure()` 弹原生窗口说明原因 —— release 构建带 `windows_subsystem="windows"`，
+直接 panic 的话用户只会看到「程序闪一下就没了」。
+
 ---
 
 ## 五、关键 API 与数据模型
@@ -277,6 +340,7 @@ function uidEq(a, b) {
 2. **主界面搭建**：侧边栏（聊天/联系人/音乐/设置四 Tab）+ 聊天区域布局
 3. **后端对接**：通过逆向 Android 客户端文档，对接 API
 4. **WebView 与浏览器双模式**：实现 Tauri 原生 HTTP + 浏览器 Nginx 反代的双模式
+   *（历史记录：浏览器模式已于 2026-08-08 移除，现仅保留 Tauri 单模式）*
 
 ### 第二阶段：核心功能实现
 
@@ -394,6 +458,7 @@ function uidEq(a, b) {
 | `notify_new_message` | 新消息通知 | 托盘通知/任务栏闪烁 |
 | `save_image` | 通过 URL 下载图片 + 保存对话框 | HTTP URL 专用 |
 | `save_image_data` | 直接保存二进制数据 | blob URL 转数据后使用 |
+| `env_report` | 返回系统/WebView 版本与自检告警 | 设置 → 关于 页展示 |
 
 ---
 
@@ -418,19 +483,10 @@ npm run tauri dev
 | 查看前端 console | DevTools Console 面板 |
 | 查看 Rust 日志 | 终端输出 |
 
-### 10.3 浏览器模式（已废弃）
+### 10.3 关于纯浏览器调试
 
-> ⚠️ **注意**：浏览器模式（Nginx 反代）已废弃，以下内容仅作参考，相关代码保留未动。
-
-如果想用浏览器调试前端（不用 Tauri）：
-
-```bash
-# 启动一个简单的 HTTP 服务器
-npx http-server src/ -p 8080
-# 然后需要 Nginx 反代后端（参考 conf/nginx.conf）
-```
-
-注意：浏览器模式下 WebSocket 需要 Nginx 配置反代，且无 `plugin-http` 功能。
+**不再支持。** 前端强依赖 `tauri-plugin-http`（绕过 CORS）与 Rust 侧命令（图片保存、窗口控制、
+系统通知），脱离 Tauri 外壳无法正常工作。调试一律使用 `npm run tauri dev` + `Ctrl+Alt+Shift+F12`。
 
 ---
 
