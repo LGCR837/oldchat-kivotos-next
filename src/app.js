@@ -16,17 +16,9 @@ const IS_TAURI = _detectIsTauri();
                    (window.__TAURI_INTERNALS__?.invoke);
     if (!invoke) return;
 
-    // 关键：保存原生 fetch，IPC 请求（http://ipc.localhost/）必须走原生，否则无限递归
-    const nativeFetch = window.fetch.bind(window);
-    function isIpcUrl(input) {
-        const url = typeof input === 'string' ? input : (input && input.url) || '';
-        return url.indexOf('ipc.localhost') !== -1 || url.indexOf('tauri://') === 0;
-    }
-
-    window.fetch = async function (input, init) {
-        // IPC 请求直接走原生 fetch，不经过 plugin-http
-        if (isIpcUrl(input)) return nativeFetch(input, init);
-
+    // 后端 API / 媒体直链走 plugin-http（见 IIFE 外的顶层 tauriHttpFetch 包装）。
+    // 关键：不再全局重写 window.fetch，否则本地资源（如 app.css 主题元数据）也会被 plugin-http 拦截。
+    window.__tauriHttpFetchImpl = async function (input, init) {
         init = init || {};
         const req = new Request(input, init);
         const t0 = performance.now();
@@ -118,7 +110,7 @@ const IS_TAURI = _detectIsTauri();
             throw err;
         }
     };
-    console.log('[Tauri] fetch 已替换为 plugin:http invoke，直连后端：' + 'http://oc.mcl0.dpdns.org');
+    // 注：不再全局重写 window.fetch。后端请求统一通过 IIFE 外的顶层 tauriHttpFetch() 调用本实现。
 
     // 标记 Tauri 环境（CSS 据此启用圆角阴影、三大金刚键、拖动区域）
     document.body.classList.add('tauri-env');
@@ -168,6 +160,8 @@ const IS_TAURI = _detectIsTauri();
     bindWinControls('contacts');
     bindWinControls('settings');
     bindWinControls('musicWin');
+    bindWinControls('discover');
+    bindWinControls('courtWin');
 
     // 监听窗口尺寸变化（拖动边缘最大化 / 系统快捷键还原等场景）
     window.addEventListener('resize', syncMaximizeState);
@@ -190,6 +184,17 @@ const IS_TAURI = _detectIsTauri();
     });
     console.log('[Tauri] 已注册 Ctrl+Alt+Shift+F12 切换 DevTools');
 })();
+
+// ===== 后端 API / 媒体直链专用：封装 plugin-http invoke =====
+// 仅此函数走 Tauri 的 http 插件（绕过 CORS、受 capabilities 白名单 scope 约束）。
+// 普通 fetch（本地资源、同源资源，如读 app.css 主题元数据）一律走浏览器原生 window.fetch，
+// 不再被全局劫持，避免本地资源被 plugin-http 的 scope 拦截。
+async function tauriHttpFetch(input, init) {
+    if (typeof window.__tauriHttpFetchImpl === 'function') {
+        return window.__tauriHttpFetchImpl(input, init);
+    }
+    return window.fetch(input, init);
+}
 
 // ===== API / WS / 媒体资源基地址 =====
 // 固定走后端完整地址：plugin-http 自带跨域能力，不需要前端反代。
@@ -686,7 +691,7 @@ function webDownloadImage(src) {
     }
 
     function fetchAndSave(imgUrl) {
-        fetch(imgUrl)
+        tauriHttpFetch(imgUrl)
             .then(function(res) { return res.blob(); })
             .then(function(blob) { saveBlob(blob); })
             .catch(function() { fallbackDownload(imgUrl); });
@@ -1072,7 +1077,7 @@ async function apiFetch(url, options = {}) {
 async function _fetchWithCandidates(url, options) {
     if (!url.startsWith('/v1/')) {
         // 绝对地址（如媒体直链）不走候选降级
-        return await fetch(url, options);
+        return await tauriHttpFetch(url, options);
     }
     // 注意：候选项存的是「裸 origin」（如 http://oc.mcl0.dpdns.org，不含 /v1）。
     // url 本身已带 /v1 前缀（如 /v1/me），所以必须直接拼接，不能切掉 /v1，
@@ -1083,7 +1088,7 @@ async function _fetchWithCandidates(url, options) {
         const base = BACKEND_CANDIDATES[ci];
         let res;
         try {
-            res = await fetch(base + url, options);
+            res = await tauriHttpFetch(base + url, options);
         } catch (e) {
             lastErr = e;
             continue;
@@ -1107,7 +1112,7 @@ async function _fetchWithCandidates(url, options) {
             const refreshToken = localStorage.getItem('oc_refresh_token');
             if (refreshToken) {
                 try {
-                    const refreshRes = await fetch(BACKEND_CANDIDATES[0] + '/v1/auth/refresh', {
+                    const refreshRes = await tauriHttpFetch(BACKEND_CANDIDATES[0] + '/v1/auth/refresh', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'User-Agent': 'OldChatForKivotosNext' },
                         body: JSON.stringify({ refresh_token: refreshToken })
@@ -1119,7 +1124,7 @@ async function _fetchWithCandidates(url, options) {
                         if (data.user) localStorage.setItem('oc_user', JSON.stringify(data.user));
                         options.headers = options.headers || {};
                         options.headers['Authorization'] = 'Bearer ' + data.access_token;
-                        return await fetch(base + url, options);
+                        return await tauriHttpFetch(base + url, options);
                     }
                 } catch (e) { /* 忽略，走登出流程 */ }
             }
@@ -1464,32 +1469,56 @@ document.addEventListener('DOMContentLoaded', async () => {
     const mainPanels = document.querySelectorAll('.chat-area > .main-panel');
 
     function switchTab(tabName) {
-        const targetBtn = sidebarTabs.querySelector(`.tab-btn[data-tab="${tabName}"]`);
-        if (!targetBtn || targetBtn.classList.contains('active')) return;
-        const index = Array.from(tabBtns).indexOf(targetBtn);
-        if (index < 0) return;
+        if (!sidebarPanelsTrack) return;
 
-        // 切换选项卡按钮高亮
-        tabBtns.forEach(b => b.classList.remove('active'));
-        targetBtn.classList.add('active');
+        // 按目标面板在轨道中的真实位置滑动（与选项卡按钮数量解耦，
+        // 这样隐藏的「音乐」面板也能通过发现页跳转进入）
+        const panelsArr = Array.from(sidebarPanels);
+        const panelIndex = panelsArr.findIndex(p => p.dataset.panel === tabName);
+        if (panelIndex < 0) return;
+        const total = panelsArr.length;
+        const step = 100 / total;
 
         // 侧边栏面板左右滑动
-        if (sidebarPanelsTrack) {
-            sidebarPanelsTrack.style.transform = `translateX(-${index * 25}%)`;
-        }
+        sidebarPanelsTrack.style.transform = `translateX(-${panelIndex * step}%)`;
         sidebarPanels.forEach(p => p.classList.toggle('active', p.dataset.panel === tabName));
 
         // 右侧主面板淡入淡出
         mainPanels.forEach(p => p.classList.toggle('active', p.dataset.panel === tabName));
+
+        // 选项卡高亮：音乐/公开法庭是从「发现」进入的子页，保持「发现」高亮
+        let highlightTab = tabName;
+        if (tabName === 'music') highlightTab = 'discover';
+        if (tabName === 'court') highlightTab = 'discover';
+        if (sidebarTabs) {
+            sidebarTabs.querySelectorAll('.tab-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.tab === highlightTab);
+            });
+        }
 
         // 切换到音乐面板时加载列表（仅首次）
         if (tabName === 'music' && !musicLoaded) {
             loadMusicList();
         }
 
+        // 切换到公开法庭面板时加载案件列表（仅首次）
+        if (tabName === 'court' && !courtLoaded) {
+            loadCourtCases();
+        }
+
         // 切换到设置面板时渲染设置页面
         if (tabName === 'settings') {
             renderSettingsPage(currentSettingsTab || 'profile');
+        }
+
+        // 回到发现页落地页：清空右侧内容、恢复空状态提示
+        if (tabName === 'discover') {
+            resetDiscoverMain();
+        }
+
+        // 离开发现页：清除发现页左面板板块项的高亮（进入发现页时不清除）
+        if (tabName !== 'discover') {
+            document.querySelectorAll('.sidebar-panel[data-panel="discover"] .contact-item').forEach(ci => ci.classList.remove('active'));
         }
     }
 
@@ -1900,7 +1929,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             // 使用 resolveMediaUrl 转换URL（与音频、封面相同的逻辑）
             const fullUrl = cachedResolveMediaUrl(lyricsUrl);
-            const res = await fetch(fullUrl);
+            const res = await tauriHttpFetch(fullUrl);
             if (!res.ok) throw new Error('HTTP ' + res.status);
             const lrcText = await res.text();
             
@@ -2073,7 +2102,62 @@ document.addEventListener('DOMContentLoaded', async () => {
             spScrollbar.mount(overlay);
         }
 
+        // 动态卡片交错瀑布流：将 #spMomentsMasonry 内的卡片按「最短列」重新排列（横向交错）
+        let spMasonryCards = null;
+        let spLayoutRAF = null;
+        function layoutSpMasonry() {
+            const cont = scroll.querySelector('#spMomentsMasonry');
+            if (!cont) return;
+            let cards = spMasonryCards;
+            if (!cards) { cards = Array.from(cont.children); spMasonryCards = cards; }
+            if (!cards.length) return;
+            // 先回收卡片到 cont（清除上一次生成的列容器），保证可重复布局
+            const frag = document.createDocumentFragment();
+            cards.forEach(c => frag.appendChild(c));
+            cont.innerHTML = '';
+            cont.appendChild(frag);
+            const gap = 10;
+            const width = cont.clientWidth || 600;
+            let cols = Math.max(2, Math.floor((width + gap) / (260 + gap)));
+            if (cols > 4) cols = 4;
+            cont.style.display = 'flex';
+            cont.style.gap = gap + 'px';
+            cont.style.alignItems = 'flex-start';
+            const colEls = [], colH = [];
+            for (let i = 0; i < cols; i++) {
+                const col = document.createElement('div');
+                col.style.flex = '1 1 0';
+                col.style.minWidth = '0';
+                col.style.display = 'flex';
+                col.style.flexDirection = 'column';
+                col.style.gap = gap + 'px';
+                cont.appendChild(col);
+                colEls.push(col);
+                colH.push(0);
+            }
+            // 保持原始顺序，依次放入当前最矮的列，形成横向交错瀑布流
+            cards.forEach(card => {
+                let min = 0;
+                for (let i = 1; i < cols; i++) if (colH[i] < colH[min]) min = i;
+                colEls[min].appendChild(card);
+                colH[min] += card.offsetHeight + gap;
+            });
+        }
+        function scheduleSpLayout() {
+            if (spLayoutRAF) cancelAnimationFrame(spLayoutRAF);
+            spLayoutRAF = requestAnimationFrame(() => { spLayoutRAF = null; layoutSpMasonry(); });
+        }
+        // 窗口缩放时：重排瀑布流 + 更新自绘滚动条位置，避免错位
+        function onSpResize() {
+            scheduleSpLayout();
+            if (spScrollbar) spScrollbar.update();
+        }
+        window.addEventListener('resize', onSpResize);
+
         function closePanel() {
+            window.removeEventListener('resize', onSpResize);
+            if (spLayoutRAF) cancelAnimationFrame(spLayoutRAF);
+            spMasonryCards = null;
             if (spScrollbar) { spScrollbar.destroy(); spScrollbar = null; }
             overlay.remove();
         }
@@ -2190,10 +2274,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                     return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
                 }
 
+                spMasonryCards = null;
                 let momentsHtml = '<div style="text-align:center;padding:40px;color:#999;">暂无动态</div>';
                 const mom = momentsData.moments || [];
                 if (mom.length > 0) {
-                    momentsHtml = '<div style="padding:0 16px 20px;column-count:3;column-gap:10px;max-width:960px;margin:0 auto;">';
+                    momentsHtml = '<div id="spMomentsMasonry" style="padding:0 16px 20px;max-width:960px;margin:0 auto;">';
                     mom.forEach(m => {
                         // image_url 可能是单个 URL 或 JSON 字符串数组
                         let mediaUrls = [];
@@ -2216,7 +2301,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             });
                             media += '</div>';
                         }
-                        momentsHtml += '<div style="background:var(--panel-bg);border-radius:12px;padding:14px 16px;border:1px solid var(--border-color);break-inside:avoid;margin-bottom:10px;" data-moment-id="' + (m.id || '') + '">' +
+                        momentsHtml += '<div style="background:var(--panel-bg);border-radius:12px;padding:14px 16px;border:1px solid var(--border-color);" data-moment-id="' + (m.id || '') + '">' +
                             '<div style="font-size:11px;color:var(--secondary-text);margin-bottom:6px;">' + fmtTs(m.created_at) + '</div>' +
                             '<div style="font-size:14px;color:var(--text);line-height:1.6;white-space:pre-wrap;word-break:break-word;">' + (m.body || '') + '</div>' +
                             media +
@@ -2266,6 +2351,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 // 内容渲染后更新自绘滚动条
                 if (spScrollbar) requestAnimationFrame(() => spScrollbar.update());
 
+                // 动态卡片：JS 横向交错瀑布流布局（窗口缩放 / 图片加载后自动重排）
+                layoutSpMasonry();
+                scroll.querySelectorAll('#spMomentsMasonry img').forEach(img => {
+                    img.addEventListener('load', scheduleSpLayout);
+                    img.addEventListener('error', scheduleSpLayout);
+                });
+
                 // 点赞和评论事件
                 scroll.querySelectorAll('.sp-like-btn').forEach(btn => {
                     btn.addEventListener('click', async (e) => {
@@ -2306,6 +2398,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                         if (!momentId) return;
                         openMomentCommentsPanel(momentId, btn);
                     });
+                });
+                // 评论数校正：服务端 moments/user 未必填充 comment_count，逐个回查真实数量
+                scroll.querySelectorAll('.sp-comment-btn').forEach(async (btn) => {
+                    const momentId = btn.dataset.momentId;
+                    if (!momentId) return;
+                    const cur = parseInt((btn.textContent || '').replace(/\D/g, '')) || 0;
+                    if (cur > 0) return; // 已有非零计数则信任之
+                    try {
+                        const res = await apiFetch('/v1/moments/comments?moment_id=' + encodeURIComponent(momentId));
+                        const data = await res.json();
+                        const n = (data.comments || []).length;
+                        if (n > 0) btn.innerHTML = '<i class="fa-solid fa-comment"></i> ' + n;
+                    } catch (e) {}
                 });
 
                 window.spMsg = function() {
@@ -3263,7 +3368,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 主题切换
     function applyTheme(theme) {
-        document.documentElement.setAttribute('data-theme', theme);
+        document.documentElement.setAttribute('data-theme-mode', theme);
         localStorage.setItem('theme', theme);
         // 更新图标
         const icon = themeToggleBtn.querySelector('i');
@@ -3279,9 +3384,379 @@ document.addEventListener('DOMContentLoaded', async () => {
     applyTheme(savedTheme);
 
     themeToggleBtn.addEventListener('click', () => {
-        const current = document.documentElement.getAttribute('data-theme') || 'light';
+        const current = document.documentElement.getAttribute('data-theme-mode') || 'light';
         applyTheme(current === 'dark' ? 'light' : 'dark');
     });
+
+    // ===== 多主题系统（自定义 .css 主题）=====
+    // 主题 = 注入到 <style id="active-theme"> 的一段 CSS（含 :root/[data-theme-mode=light] 与 [data-theme-mode=dark] 两套变量）。
+    // 默认主题 = app.css 自身（即不注入任何覆盖）。深度/浅度由 data-theme-mode 控制，与主题正交。
+    let USER_THEME_LIST = [];   // 用户主题元数据数组（含 css）
+    let USER_THEMES = {};        // id -> css 映射，供即时注入
+    let BUILTIN_THEME_META = null;  // 从 app.css 头部 @theme 注释解析出的内置默认主题元数据
+
+    // ===== 插件系统 =====
+    // 插件 = 用户放入 <app_config_dir>/plugins/ 的任意 .js 文件；启用状态存 localStorage。
+    // 启动时读取插件列表，对「已启用」的插件用间接 eval 在全局作用域执行（行为接近 <script>），
+    // 插件可访问 window 上的所有客户端全局接口（app.js 均为 window.xxx）。
+    let USER_PLUGIN_LIST = [];   // 用户插件元数据数组
+    let PLUGIN_ENABLED = {};     // id -> true/false（localStorage 'oc_plugin_states' 持久化）
+
+    function getInvoke() {
+        return (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
+            (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) || null;
+    }
+
+    function loadPluginStates() {
+        try { PLUGIN_ENABLED = JSON.parse(localStorage.getItem('oc_plugin_states') || '{}') || {}; }
+        catch (e) { PLUGIN_ENABLED = {}; }
+    }
+
+    function savePluginStates() {
+        try { localStorage.setItem('oc_plugin_states', JSON.stringify(PLUGIN_ENABLED)); } catch (e) {}
+    }
+
+    // 读取并执行单个插件源码（(0,eval) 间接执行 → 全局作用域，顶层 var/function 进全局）
+    async function loadPlugin(id) {
+        const invoke = getInvoke();
+        if (!invoke) return;
+        try {
+            const src = await invoke('read_plugin_source', { id });
+            if (!src) return;
+            (0, eval)(src);
+            console.log('[plugin] loaded:', id);
+        } catch (e) {
+            console.error('[plugin] failed to load ' + id + ':', e);
+        }
+    }
+
+    // 从后端读取已安装插件；未记录过状态的插件默认启用；随后执行全部已启用插件（启动时调用）
+    async function refreshUserPlugins() {
+        if (!IS_TAURI) return;
+        const invoke = getInvoke();
+        if (!invoke) return;
+        try {
+            const list = await invoke('list_user_plugins');
+            USER_PLUGIN_LIST = Array.isArray(list) ? list : [];
+            loadPluginStates();
+            // 新插件（首次出现）默认启用：添加即生效
+            let changed = false;
+            USER_PLUGIN_LIST.forEach(p => {
+                if (PLUGIN_ENABLED[p.id] === undefined) { PLUGIN_ENABLED[p.id] = true; changed = true; }
+            });
+            if (changed) savePluginStates();
+            for (const p of USER_PLUGIN_LIST) {
+                if (PLUGIN_ENABLED[p.id]) await loadPlugin(p.id);
+            }
+        } catch (e) {
+            console.error('[plugin] refreshUserPlugins failed:', e);
+        }
+    }
+
+    // 开关插件：启用 → 立即执行；禁用 → JS 副作用无法撤销，询问后刷新应用生效
+    async function togglePlugin(id, enabled) {
+        PLUGIN_ENABLED[id] = !!enabled;
+        savePluginStates();
+        if (enabled) {
+            await loadPlugin(id);
+            renderSettingsPlugins();
+            showAlert('插件已启用');
+        } else {
+            renderSettingsPlugins();
+            const ok = await showConfirm('禁用插件「' + id + '」后，需要重新加载界面才能完全移除其效果，是否现在刷新？');
+            if (ok) location.reload();
+        }
+    }
+
+    // ===== 内置主题：ModernBlock（现代化的纯黑白 neo-brutalist 主题）=====
+    const MODERN_BLOCK_CSS = `
+/*
+ * @theme id: modern-block
+ * @theme name: ModernBlock
+ * @theme description: 现代化的黑白主题
+ * @theme author: Aoharu Reverie
+ * @theme version: 1.0.0
+ * @theme framework: v1
+ */
+
+/* 1) 调色板：复用 app.css 的语义变量，仅重映射为纯黑白。
+      不触碰任何布局/结构，因此右侧面板等与默认主题渲染路径完全一致，不会变空白。 */
+:root, [data-theme-mode="light"] {
+  --bg: #ffffff;
+  --sidebar-bg: #ffffff;
+  --chat-bg: #ffffff;
+  --header-bg: #ffffff;       /* 顶栏与下方同色（白底黑字） */
+  --text: #000000;
+  --secondary-text: #555555;
+  --border: #000000;
+  --hover: #efefef;
+  --active: #e0e0e0;
+  --shadow: none;
+  --msg-other-bg: #f0f0f0;
+  --bubble-other: #f0f0f0;   /* 对面消息：浅灰底 */
+  --bubble-self: #000000;    /* 自己消息：黑底 */
+  --accent: #000000;
+  --accent-dark: #333333;
+  --header-height: 46px;
+  --link-other: #000000;
+  --link-self: #ffffff;
+  --scrollbar-thumb: rgba(0,0,0,0.3);
+  --scrollbar-thumb-hover: rgba(0,0,0,0.5);
+  --rp-grad-start: #000000;
+  --rp-grad-end: #333333;
+  --panel-bg: #ffffff;
+  --border-color: #000000;
+  --input-bg: #ffffff;
+  --title-bg: #000000;
+  --title-text: #ffffff;
+  --on-accent: #ffffff;       /* 自己气泡（黑底）之上的文字 */
+  --link: #000000;
+  --link-hover: #555555;
+  --danger: #000000;
+  --muted: #777777;
+  --surface-2: #f0f0f0;
+  --overlay: rgba(0,0,0,0.5);
+}
+[data-theme-mode="dark"] {
+  --bg: #000000;
+  --sidebar-bg: #000000;
+  --chat-bg: #000000;
+  --header-bg: #000000;       /* 顶栏与下方同色（黑底白字） */
+  --text: #ffffff;
+  --secondary-text: #aaaaaa;
+  --border: #ffffff;
+  --hover: #1a1a1a;
+  --active: #2a2a2a;
+  --shadow: none;
+  --msg-other-bg: #1c1c1c;
+  --bubble-other: #1c1c1c;   /* 深灰底 */
+  --bubble-self: #ffffff;     /* 自己消息：白底 */
+  --accent: #ffffff;
+  --accent-dark: #cccccc;
+  --header-height: 46px;
+  --link-other: #ffffff;
+  --link-self: #000000;
+  --scrollbar-thumb: rgba(255,255,255,0.3);
+  --scrollbar-thumb-hover: rgba(255,255,255,0.5);
+  --rp-grad-start: #ffffff;
+  --rp-grad-end: #cccccc;
+  --panel-bg: #000000;
+  --border-color: #ffffff;
+  --input-bg: #000000;
+  --title-bg: #ffffff;
+  --title-text: #000000;
+  --on-accent: #000000;       /* 自己气泡（白底）之上的文字 */
+  --link: #ffffff;
+  --link-hover: #cccccc;
+  --danger: #ffffff;
+  --muted: #888888;
+  --surface-2: #1c1c1c;
+  --overlay: rgba(0,0,0,0.6);
+}
+
+/* 2) 纯直角：去除所有圆角（仅 border-radius，不动布局） */
+* { border-radius: 0 !important; }
+
+/* 2b) 字体：去掉 zyyt 艺术字，改用系统非衬线（排除 Font Awesome 图标类，避免图标变“口”） */
+*:not(.fa-solid):not(.fa-regular):not(.fa-brands):not(.fa):not(.fas):not(.far):not(.fab):not(.fa-classic) {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "微软雅黑", sans-serif !important;
+}
+
+/* 3) 气泡：自己黑底白字（保留硬黑边）、对面浅/深灰底黑/白字（无边框），去三角形伪类。
+      背景直接走 app.css 的 var(--bubble-self/other)，不 blanket 覆盖其它层。 */
+.message.self .message-bubble:not(.no-frame) {
+  background-color: var(--bubble-self) !important;
+  color: var(--on-accent) !important;
+  border: 2px solid var(--border) !important;
+}
+.message.other .message-bubble:not(.no-frame) {
+  background-color: var(--bubble-other) !important;
+  color: var(--text) !important;
+}
+.message-bubble::before,
+.message-bubble::after,
+.message-bubble.no-frame::before { display: none !important; }
+
+/* 4) 顶栏：与下方同色，所有文字/图标跟随主题文字色（不再硬编码白，浅色下也清晰可读） */
+.chat-header {
+  background: var(--header-bg) !important;
+  color: var(--text) !important;
+}
+.chat-header .chat-title,
+.chat-header .chat-status,
+.chat-header .chat-subtitle { color: var(--text) !important; }
+.chat-header .icon-btn,
+.chat-header .header-menu-btn,
+.chat-header .win-ctrl-btn,
+.chat-header button {
+  color: var(--text) !important;
+  background: transparent !important;
+}
+.chat-header .icon-btn:hover,
+.chat-header .header-menu-btn:hover,
+.chat-header .win-ctrl-btn:hover {
+  background: var(--hover) !important;
+  color: var(--text) !important;
+}
+
+/* 4b) 所有窗口控制按钮（min/close 等）跟随主题文字色，避免浅色下白底白字看不见 */
+.win-ctrl-btn { color: var(--text) !important; background: transparent !important; }
+.win-ctrl-btn:hover { background: var(--hover) !important; color: var(--text) !important; }
+
+/* 4b2) 侧边栏头部：用户名/图标跟随主题文字色（app.css:165 硬编码 #fff，浅色下白底白字） */
+.sidebar-header .user-info,
+.sidebar-header .icon-btn { color: var(--text) !important; }
+.sidebar-header .icon-btn:hover { background: var(--hover) !important; }
+
+/* 4c) Typing 头像：去掉 app.css 的 1px 黑色描边（box-shadow 环，由 --border-color 变黑） */
+.typing-indicator .typing-avatar { box-shadow: none !important; }
+
+/* 4d) 二级面板标题栏 + 实心按钮（用户主页/音乐/法庭/添加好友/群管理/好友面板）：
+      app.css(.gm-header/.mp-header) 与内联样式均硬编码 color:#fff，浅色下白底白字。
+      用 !important 压过内联样式，文字/图标跟随 --text（背景已是 --header-bg）。 */
+div[style*="background:var(--header-bg)"] { color: var(--text) !important; }
+div[style*="background:var(--header-bg)"] *,
+button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
+.gm-header, .mp-header,
+.gm-header *, .mp-header * { color: var(--text) !important; }
+
+/* 5) 按钮：逐字复刻官网下载页 neo-brutalist——静止无阴影，hover 左上偏移留 3px 黑影并反色，active 复原，0.12s 快速过渡 */
+.btn {
+  display: inline-block;
+  padding: 10px 18px;
+  border: 2px solid #000;
+  background: #fff;
+  color: #000;
+  font-weight: 700;
+  text-decoration: none;
+  margin: 6px 6px 6px 0;
+  border-radius: 0;
+  white-space: nowrap;
+  box-shadow: 0 0 0 #000;
+  transition: transform .12s ease, box-shadow .12s ease, background-color .12s ease, color .12s ease;
+}
+.btn:hover {
+  background: #000;
+  color: #fff;
+  transform: translate(-3px, -3px);
+  box-shadow: 3px 3px 0 #000;
+}
+.btn:active {
+  background: #fff;
+  color: #000;
+  transform: translate(0, 0);
+  box-shadow: 0 0 0 #000;
+}
+.btn:focus-visible {
+  background: #000;
+  color: #fff;
+  outline: none;
+}
+/* 主按钮：常态实心黑底白字，hover 反色白底黑字 + 白色残影（残影跟随按钮自身颜色），active 复原 */
+.btn.primary {
+  background: #000;
+  color: #fff;
+}
+.btn.primary:hover {
+  background: #fff;
+  color: #000;
+  transform: translate(-3px, -3px);
+  box-shadow: 3px 3px 0 #fff;
+}
+.btn.primary:active {
+  background: #000;
+  color: #fff;
+  transform: translate(0, 0);
+  box-shadow: 0 0 0 #000;
+}
+`;
+
+    const BUILTIN_THEMES = {
+        'modern-block': {
+            id: 'modern-block',
+            name: 'ModernBlock',
+            description: '现代化的黑白主题',
+            author: 'Aoharu Reverie',
+            version: '1.0.0',
+            framework: 'v1',
+            builtin: true,
+            css: MODERN_BLOCK_CSS
+        }
+    };
+
+    // 解析 @theme 注释元数据（与 parseThemeMeta 同规则，但此处不依赖设置块作用域）
+    function parseBuiltinMeta(css) {
+        const meta = { id: 'default', name: '', description: '', author: '', version: '', framework: 'v1' };
+        const re = /@theme\s+(\w+)\s*:\s*(.*)/;
+        for (const raw of (css || '').split('\n')) {
+            const s = raw.trim().replace(/^\*\s?/, '').trim();
+            const m = s.match(re);
+            if (m && m[1] in meta) meta[m[1]] = m[2].trim();
+        }
+        return meta;
+    }
+
+    // 启动时 fetch 当前 app.css 文本，取出默认主题的显示名称/简介，使在头部 @theme 处修改即可生效
+    async function loadBuiltinThemeMeta() {
+        try {
+            const link = document.querySelector('link[rel="stylesheet"][href$="app.css"]')
+                      || document.querySelector('link[href$="app.css"]');
+            const href = link ? link.href : (location.pathname.endsWith('/') ? 'app.css' : './app.css');
+            const res = await fetch(href, { cache: 'no-cache' });
+            if (!res.ok) return;
+            const text = await res.text();
+            BUILTIN_THEME_META = parseBuiltinMeta(text);
+        } catch (e) {
+            console.warn('[theme] loadBuiltinThemeMeta failed:', e);
+        }
+    }
+
+    function injectThemeStyle(css) {
+        let el = document.getElementById('active-theme');
+        if (!el) {
+            el = document.createElement('style');
+            el.id = 'active-theme';
+            document.head.appendChild(el);
+        }
+        el.textContent = css;
+    }
+
+    function clearThemeStyle() {
+        const el = document.getElementById('active-theme');
+        if (el) el.remove();
+    }
+
+    // 应用某个主题：default 清除覆盖回退 app.css；内置/用户主题注入其 CSS
+    function applyThemeById(id) {
+        localStorage.setItem('themeId', id);
+        if (id === 'default') { clearThemeStyle(); return; }
+        const css = USER_THEMES[id] || (BUILTIN_THEMES[id] && BUILTIN_THEMES[id].css);
+        if (css) injectThemeStyle(css);
+        else clearThemeStyle();
+    }
+
+    // 从后端读取已安装用户主题并还原上次选择
+    async function refreshUserThemes() {
+        if (!IS_TAURI) return;
+        const invoke = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
+            (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);
+        if (!invoke) return;
+        try {
+            const list = await invoke('list_user_themes');
+            USER_THEME_LIST = Array.isArray(list) ? list : [];
+            USER_THEMES = {};
+            USER_THEME_LIST.forEach(t => { if (t && t.css) USER_THEMES[t.id] = t.css; });
+            const saved = localStorage.getItem('themeId') || 'default';
+            if (saved !== 'default') applyThemeById(saved);
+        } catch (e) {
+            console.error('[theme] refreshUserThemes failed:', e);
+        }
+    }
+
+    // 启动即还原（在 applyTheme 设置好 data-theme-mode 之后）
+    refreshUserThemes();
+    loadBuiltinThemeMeta();   // 读取 app.css 头部的 @theme 名称/简介，供设置页显示
+    refreshUserPlugins();     // 启动加载已启用的用户插件
 
     async function loadContacts() {
         try {
@@ -5244,6 +5719,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const bubble = document.createElement('div');
         bubble.className = 'message-bubble';
         bubble.innerHTML = content;
+        // 红包消息不显示气泡外框（去掉背景/内边距/小箭头），仅保留红包卡片本身
+        if (bubble.querySelector('.red-packet-card')) {
+            bubble.classList.add('no-frame');
+        }
         // v3 按钮消息：为内联按钮绑定点击事件
         if (bubble) {
             bubble.querySelectorAll('.msg-buttons .btn').forEach(function (btn) {
@@ -5718,7 +6197,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         var cached = voiceVisCache[url];
         if (!cached) {
             try {
-                var resp = await fetch(url);
+                var resp = await tauriHttpFetch(url);
                 var buf = await resp.arrayBuffer();
                 var decoded = await voiceVisCtx.decodeAudioData(buf);
                 cached = { data: decoded.getChannelData(0), sampleRate: decoded.sampleRate };
@@ -6511,8 +6990,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             const convId = contactItem.dataset.id;
             const convName = contactItem.dataset.name;
 
-            // 设置面板：导航项，无右键菜单
-            if (panelName === 'settings') { return; }
+            // 设置 / 发现面板：导航项，无右键菜单
+            if (panelName === 'settings' || panelName === 'discover') { return; }
 
             const menu = document.createElement('div');
             menu.className = 'custom-context-menu';
@@ -7425,12 +7904,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             renderSettingsProfile();
         } else if (tab === 'appearance') {
             renderSettingsAppearance();
-        } else if (tab === 'checkin') {
-            renderSettingsCheckin();
         } else if (tab === 'about') {
             renderSettingsAbout();
         } else if (tab === 'favorites') {
             renderSettingsFavorites();
+        } else if (tab === 'theme') {
+            renderSettingsTheme();
+        } else if (tab === 'plugin') {
+            renderSettingsPlugins();
         }
     }
 
@@ -7504,7 +7985,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             </div>
             <h3 style="margin-top:20px;">服务器配置</h3>
             <div class="settings-group">
-                <div style="font-size:12px;color:var(--secondary-text);margin-bottom:6px;">API 地址（普通内容，按列表顺序降级）</div>
+                <div style="font-size:12px;color:var(--secondary-text);margin-bottom:6px;">API 地址（普通内容，按列表顺序降级；<span style="color:var(--text);">★ 为首选地址，最先尝试</span>）</div>
                 <div class="candidate-list" id="baseCandidateList"></div>
                 <div style="display:flex;gap:6px;margin-top:6px;">
                     <input type="text" id="baseCandidateInput" placeholder="添加候选，如 http://host:8080" style="flex:1;min-width:0;padding:6px 8px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;">
@@ -7515,7 +7996,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <button class="candidate-quick" data-target="base" data-url="http://60.205.94.101:8080">+ 60.205</button>
                     <button class="candidate-quick" data-target="base" data-url="https://oc.mcl0.dpdns.org">+ oc https</button>
                 </div>
-                <div style="font-size:12px;color:var(--secondary-text);margin:14px 0 6px;">媒体地址（图片/音频，按列表顺序降级）</div>
+                <div style="font-size:12px;color:var(--secondary-text);margin:14px 0 6px;">媒体地址（图片/音频，按列表顺序降级；<span style="color:var(--text);">★ 为首选地址，最先尝试</span>）</div>
                 <div class="candidate-list" id="mediaCandidateList"></div>
                 <div style="display:flex;gap:6px;margin-top:6px;">
                     <input type="text" id="mediaCandidateInput" placeholder="添加候选，如 http://host:8080" style="flex:1;min-width:0;padding:6px 8px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;">
@@ -7527,7 +8008,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     <button class="candidate-quick" data-target="media" data-url="https://oc.mcl0.dpdns.org">+ oc https</button>
                 </div>
                 <div style="display:flex;gap:8px;margin-top:14px;align-items:center;">
-                    <button id="settingsSaveUrls">保存并重载</button>
+                    <button id="settingsSaveUrls" class="btn primary">保存并重载</button>
                     <button id="settingsResetUrls" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border-color);background:transparent;color:var(--text);font-size:13px;cursor:pointer;font-family:inherit;">恢复默认</button>
                 </div>
             </div>
@@ -7567,6 +8048,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     tag.className = 'candidate-tag';
                     const label = document.createElement('span');
                     label.textContent = (idx === 0 ? '★ ' : '') + url;
+                    label.title = (idx === 0 ? '首选地址（最先尝试，失败后降级到下一个）' : '');
                     const x = document.createElement('i');
                     x.className = 'fa-solid fa-xmark';
                     x.style.cursor = 'pointer';
@@ -7659,20 +8141,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    async function renderSettingsCheckin() {
-        settingsContent.innerHTML = '<h3>签到墙</h3><div style="text-align:center;padding:20px;color:var(--secondary-text);">加载中...</div>';
+    async function renderCheckin(target) {
+        target = target || settingsContent;
+        target.innerHTML = '<h3>签到墙</h3><div style="text-align:center;padding:20px;color:var(--secondary-text);">加载中...</div>';
         try {
             let wallData = {};
             try {
                 const wallRes = await apiFetch('/v1/me/checkin/wall?limit=50');
                 if (wallRes.status === 404) {
-                    settingsContent.innerHTML = '<h3>签到墙</h3><div style="text-align:center;padding:60px 20px;color:var(--secondary-text);"><i class="fa-solid fa-hammer" style="font-size:32px;margin-bottom:12px;display:block;"></i>功能建设中，敬请期待</div>';
+                    target.innerHTML = '<h3>签到墙</h3><div style="text-align:center;padding:60px 20px;color:var(--secondary-text);"><i class="fa-solid fa-hammer" style="font-size:32px;margin-bottom:12px;display:block;"></i>功能建设中，敬请期待</div>';
                     return;
                 }
                 const wallText = await wallRes.text();
                 try { wallData = JSON.parse(wallText); } catch (e) { console.warn('[checkin] wall not JSON:', wallText.slice(0, 100)); }
             } catch (e) {
-                settingsContent.innerHTML = '<h3>签到墙</h3><div style="text-align:center;padding:60px 20px;color:var(--secondary-text);"><i class="fa-solid fa-hammer" style="font-size:32px;margin-bottom:12px;display:block;"></i>功能建设中，敬请期待</div>';
+                target.innerHTML = '<h3>签到墙</h3><div style="text-align:center;padding:60px 20px;color:var(--secondary-text);"><i class="fa-solid fa-hammer" style="font-size:32px;margin-bottom:12px;display:block;"></i>功能建设中，敬请期待</div>';
                 return;
             }
 
@@ -7720,7 +8203,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 html += `</div></div>`;
             });
             html += '</div>';
-            settingsContent.innerHTML = html;
+            target.innerHTML = html;
 
             // 签到按钮
             document.getElementById('checkinDoBtn')?.addEventListener('click', async () => {
@@ -7730,7 +8213,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     let data = {};
                     try { data = JSON.parse(text); } catch (e) {}
                     if (data.error) { showAlert(data.error); return; }
-                    renderSettingsCheckin();
+                    renderCheckin(target);
                 } catch (e) { showAlert('签到失败'); }
             });
 
@@ -7746,12 +8229,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                     });
                     const data = await res.json().catch(() => ({}));
                     if (data.error) { showAlert(data.error); return; }
-                    renderSettingsCheckin();
+                    renderCheckin(target);
                 } catch (e) { showAlert('留言失败'); }
             });
 
             // 点赞
-            settingsContent.querySelectorAll('.sp-c-like').forEach(btn => {
+            target.querySelectorAll('.sp-c-like').forEach(btn => {
                 btn.addEventListener('click', async () => {
                     const id = btn.dataset.id;
                     if (!id) return;
@@ -7764,13 +8247,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                         });
                         const data = await res.json().catch(() => ({}));
                         if (data.error) { showAlert(data.error); return; }
-                        renderSettingsCheckin();
+                        renderCheckin(target);
                     } catch (e) { console.error(e); }
                 });
             });
 
             // 评论
-            settingsContent.querySelectorAll('.sp-c-comment').forEach(btn => {
+            target.querySelectorAll('.sp-c-comment').forEach(btn => {
                 btn.addEventListener('click', async () => {
                     const id = btn.dataset.id;
                     if (!id) return;
@@ -7779,7 +8262,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
         } catch (e) {
             console.error('[checkin]', e);
-            settingsContent.innerHTML = '<h3>签到墙</h3><div style="text-align:center;padding:20px;color:var(--secondary-text);">加载失败</div>';
+            target.innerHTML = '<h3>签到墙</h3><div style="text-align:center;padding:20px;color:var(--secondary-text);">加载失败</div>';
         }
     }
 
@@ -7811,6 +8294,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 <div class="settings-item" style="cursor:pointer;" id="aboutGithubLink">
                     <span class="label">GitHub 仓库</span>
                     <span class="value" style="color:var(--accent);text-decoration:underline;">${GITHUB_URL}</span>
+                </div>
+                <div class="settings-item" style="cursor:pointer;" id="aboutSiteLink">
+                    <span class="label">官方网站</span>
+                    <span class="value" style="color:var(--accent);text-decoration:underline;">oldchatkivotos.l2.ink</span>
                 </div>
             </div>
             <div id="aboutEnvWarnings"></div>
@@ -7857,6 +8344,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                 showAlert('GitHub 仓库地址已复制到剪贴板', '提示');
             }
         });
+        document.getElementById('aboutSiteLink')?.addEventListener('click', () => {
+            const url = 'https://oldchatkivotos.l2.ink';
+            if (IS_TAURI && tauriInvoke) {
+                tauriInvoke('plugin:opener|open_url', { url }).catch(() => { window.open(url, '_blank'); });
+            } else {
+                window.open(url, '_blank');
+            }
+        });
     }
 
     // 设置 → 我的收藏（与输入框表情选择器共用同一份 localStorage 数据）
@@ -7893,6 +8388,309 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.getElementById('favBack')?.addEventListener('click', () => renderSettingsPage('profile'));
     }
 
+    // ===== 主题设置页 =====
+    function parseThemeMeta(css) {
+        const meta = { id: '', name: '', description: '', author: '', version: '', framework: '' };
+        const lines = (css || '').split('\n');
+        const re = /@theme\s+(\w+)\s*:\s*(.*)/;
+        for (const raw of lines) {
+            const s = raw.trim().replace(/^\*\s?/, '').trim();
+            const m = s.match(re);
+            if (m && m[1] in meta) meta[m[1]] = m[2].trim();
+        }
+        return meta;
+    }
+
+    function renderSettingsTheme() {
+        const savedId = localStorage.getItem('themeId') || 'default';
+        const bm = BUILTIN_THEME_META || {};
+        const builtin = {
+            id: 'default',
+            name: bm.name || '默认主题',
+            description: bm.description || 'OldChat For Kivotos Next 内置默认主题。',
+            author: bm.author || '',
+            version: bm.version || '',
+            framework: bm.framework || 'v1',
+            builtin: true
+        };
+        const all = [builtin]
+            .concat(Object.values(BUILTIN_THEMES))
+            .concat(Array.isArray(USER_THEME_LIST) ? USER_THEME_LIST : []);
+
+        settingsContent.innerHTML =
+            '<h3>主题</h3>' +
+            '<div class="settings-group" style="margin-bottom:14px;">' +
+                '<button id="themeUploadBtn" class="btn primary" style="width:100%;">上传主题（.css 文件）</button>' +
+            '</div>' +
+            '<div id="themeList">加载中...</div>' +
+            '<div class="settings-group" style="margin-top:14px;">' +
+                '<button id="themeResetBtn" style="display:inline-block!important;width:100%;padding:10px;border:1px solid var(--border-color);background:var(--panel-bg);color:var(--text);border-radius:8px;cursor:pointer;font-family:inherit;font-size:13px;">恢复默认主题</button>' +
+            '</div>';
+
+        document.getElementById('themeUploadBtn')?.addEventListener('click', uploadTheme);
+        document.getElementById('themeResetBtn')?.addEventListener('click', () => {
+            applyThemeById('default');
+            renderSettingsTheme();
+        });
+
+        renderThemeList(all, savedId);
+    }
+
+    function renderThemeList(all, savedId) {
+        const listEl = document.getElementById('themeList');
+        if (!listEl) return;
+        if (!all || all.length === 0) { listEl.textContent = '（暂无主题）'; return; }
+        listEl.innerHTML = '';
+        all.forEach(t => {
+            const active = (t.id === savedId);
+            const card = document.createElement('div');
+            card.className = 'settings-item';
+            card.style.flexDirection = 'column';
+            card.style.alignItems = 'stretch';
+            card.style.gap = '6px';
+            card.style.padding = '12px 14px';
+            card.style.border = active ? '1px solid var(--accent)' : '1px solid var(--border-color)';
+            card.style.borderRadius = '8px';
+            card.style.marginBottom = '8px';
+            card.style.background = active ? 'var(--surface-2)' : 'var(--panel-bg)';
+
+            const titleRow = document.createElement('div');
+            titleRow.style.display = 'flex';
+            titleRow.style.justifyContent = 'space-between';
+            titleRow.style.alignItems = 'center';
+            const title = document.createElement('div');
+            title.style.fontWeight = '600';
+            title.style.color = 'var(--text)';
+            title.textContent = (t.name || t.id) + (active ? ' ✓' : '');
+            titleRow.appendChild(title);
+            const metaLine = document.createElement('div');
+            metaLine.style.fontSize = '11px';
+            metaLine.style.color = 'var(--secondary-text)';
+            const bits = [];
+            if (t.author) bits.push('作者 ' + t.author);
+            if (t.framework) bits.push('框架 ' + t.framework);
+            metaLine.textContent = bits.join(' · ');
+            titleRow.appendChild(metaLine);
+            card.appendChild(titleRow);
+
+            if (t.description) {
+                const desc = document.createElement('div');
+                desc.style.fontSize = '12px';
+                desc.style.color = 'var(--secondary-text)';
+                desc.style.lineHeight = '1.5';
+                desc.textContent = t.description;
+                card.appendChild(desc);
+            }
+
+            const btnRow = document.createElement('div');
+            btnRow.style.display = 'flex';
+            btnRow.style.gap = '8px';
+            btnRow.style.marginTop = '4px';
+
+            const applyBtn = document.createElement('button');
+            applyBtn.className = 'btn';
+            applyBtn.style.padding = '6px 14px';
+            applyBtn.style.whiteSpace = 'nowrap';
+            applyBtn.textContent = active ? '已应用' : '应用';
+            applyBtn.disabled = active;
+            applyBtn.style.opacity = active ? '0.6' : '1';
+            applyBtn.addEventListener('click', () => { applyThemeById(t.id); renderSettingsTheme(); });
+            btnRow.appendChild(applyBtn);
+
+            if (!t.builtin) {
+                const delBtn = document.createElement('button');
+                delBtn.className = 'btn';
+                delBtn.style.padding = '6px 14px';
+                delBtn.style.whiteSpace = 'nowrap';
+                delBtn.style.color = 'var(--danger)';
+                delBtn.textContent = '删除';
+                delBtn.addEventListener('click', () => deleteTheme(t.id));
+                btnRow.appendChild(delBtn);
+            }
+            card.appendChild(btnRow);
+
+            listEl.appendChild(card);
+        });
+    }
+
+    async function uploadTheme() {
+        if (!IS_TAURI) {
+            showAlert('主题上传仅在桌面客户端（Tauri）中可用。');
+            return;
+        }
+        const invoke = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
+            (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);
+        if (!invoke) { showAlert('当前环境不支持主题上传。'); return; }
+        let meta;
+        try {
+            meta = await invoke('import_theme');
+        } catch (e) {
+            if (('' + e).indexOf('未选择') >= 0) return; // 用户取消
+            showAlert('导入失败：' + e);
+            return;
+        }
+        if (!Array.isArray(USER_THEME_LIST)) USER_THEME_LIST = [];
+        const i = USER_THEME_LIST.findIndex(x => x.id === meta.id);
+        if (i >= 0) USER_THEME_LIST[i] = meta; else USER_THEME_LIST.push(meta);
+        if (meta.css) USER_THEMES[meta.id] = meta.css;
+        showAlert('已导入主题「' + (meta.name || meta.id) + '」');
+        renderSettingsTheme();
+    }
+
+    async function deleteTheme(id) {
+        if (!(await showConfirm('确定删除主题「' + id + '」？此操作不可撤销。'))) return;
+        const invoke = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
+            (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);
+        if (!invoke) return;
+        try {
+            await invoke('delete_user_theme', { id });
+            USER_THEME_LIST = (USER_THEME_LIST || []).filter(x => x.id !== id);
+            delete USER_THEMES[id];
+            if ((localStorage.getItem('themeId') || 'default') === id) applyThemeById('default');
+            renderSettingsTheme();
+        } catch (e) {
+            showAlert('删除失败：' + e);
+        }
+    }
+
+    // ===== 设置 → 插件：列表（元数据 + 启用开关）/ 添加 / 删除 =====
+    function renderSettingsPlugins() {
+        const all = Array.isArray(USER_PLUGIN_LIST) ? USER_PLUGIN_LIST : [];
+
+        settingsContent.innerHTML =
+            '<h3>插件</h3>' +
+            '<div style="font-size:12px;color:var(--secondary-text);margin-bottom:12px;line-height:1.6;">' +
+                '插件是任意 JavaScript 文件，启动时自动加载已启用的插件，可调用客户端的全局接口（window.*）。' +
+                '插件代码在客户端本地执行，请仅添加可信的脚本。' +
+            '</div>' +
+            '<div class="settings-group" style="margin-bottom:14px;">' +
+                '<button id="pluginUploadBtn" class="btn primary" style="width:100%;">添加插件（.js 文件）</button>' +
+            '</div>' +
+            '<div id="pluginList">加载中...</div>';
+
+        document.getElementById('pluginUploadBtn')?.addEventListener('click', uploadPlugin);
+
+        const listEl = document.getElementById('pluginList');
+        if (!all.length) { listEl.textContent = '（暂无插件）'; return; }
+        listEl.innerHTML = '';
+
+        all.forEach(p => {
+            const enabled = !!PLUGIN_ENABLED[p.id];
+            const card = document.createElement('div');
+            card.className = 'settings-item';
+            card.style.flexDirection = 'column';
+            card.style.alignItems = 'stretch';
+            card.style.gap = '6px';
+            card.style.padding = '12px 14px';
+            card.style.border = '1px solid var(--border-color)';
+            card.style.borderRadius = '8px';
+            card.style.marginBottom = '8px';
+            card.style.background = 'var(--panel-bg)';
+
+            // 标题行：名称 + 启用开关
+            const titleRow = document.createElement('div');
+            titleRow.style.display = 'flex';
+            titleRow.style.justifyContent = 'space-between';
+            titleRow.style.alignItems = 'center';
+            const title = document.createElement('div');
+            title.style.fontWeight = '600';
+            title.style.color = 'var(--text)';
+            title.textContent = p.name || p.id;
+            titleRow.appendChild(title);
+            const toggle = document.createElement('label');
+            toggle.style.display = 'inline-flex';
+            toggle.style.alignItems = 'center';
+            toggle.style.gap = '6px';
+            toggle.style.fontSize = '12px';
+            toggle.style.color = 'var(--secondary-text)';
+            toggle.style.cursor = 'pointer';
+            toggle.style.userSelect = 'none';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = enabled;
+            cb.style.cursor = 'pointer';
+            cb.style.accentColor = 'var(--accent)';
+            cb.addEventListener('change', () => togglePlugin(p.id, cb.checked));
+            toggle.appendChild(cb);
+            toggle.appendChild(document.createTextNode(enabled ? '已启用' : '已停用'));
+            titleRow.appendChild(toggle);
+            card.appendChild(titleRow);
+
+            if (p.description) {
+                const desc = document.createElement('div');
+                desc.style.fontSize = '12px';
+                desc.style.color = 'var(--secondary-text)';
+                desc.style.lineHeight = '1.5';
+                desc.textContent = p.description;
+                card.appendChild(desc);
+            }
+
+            const metaRow = document.createElement('div');
+            metaRow.style.fontSize = '11px';
+            metaRow.style.color = 'var(--secondary-text)';
+            const bits = [];
+            if (p.author) bits.push('作者 ' + p.author);
+            if (p.version) bits.push('版本 ' + p.version);
+            if (p.id) bits.push('ID ' + p.id);
+            metaRow.textContent = bits.join(' · ');
+            card.appendChild(metaRow);
+
+            const btnRow = document.createElement('div');
+            btnRow.style.display = 'flex';
+            btnRow.style.gap = '8px';
+            btnRow.style.marginTop = '4px';
+            const delBtn = document.createElement('button');
+            delBtn.className = 'btn';
+            delBtn.style.padding = '6px 14px';
+            delBtn.style.whiteSpace = 'nowrap';
+            delBtn.style.color = 'var(--danger)';
+            delBtn.textContent = '删除插件';
+            delBtn.addEventListener('click', () => deletePlugin(p.id));
+            btnRow.appendChild(delBtn);
+            card.appendChild(btnRow);
+
+            listEl.appendChild(card);
+        });
+    }
+
+    async function uploadPlugin() {
+        if (!IS_TAURI) { showAlert('插件仅在桌面客户端（Tauri）中可用。'); return; }
+        const invoke = getInvoke();
+        if (!invoke) { showAlert('当前环境不支持插件。'); return; }
+        let meta;
+        try {
+            meta = await invoke('import_plugin');
+        } catch (e) {
+            if (('' + e).indexOf('未选择') >= 0) return; // 用户取消
+            showAlert('导入失败：' + e);
+            return;
+        }
+        if (!Array.isArray(USER_PLUGIN_LIST)) USER_PLUGIN_LIST = [];
+        const i = USER_PLUGIN_LIST.findIndex(x => x.id === meta.id);
+        if (i >= 0) USER_PLUGIN_LIST[i] = meta; else USER_PLUGIN_LIST.push(meta);
+        // 新插件默认启用并立即加载
+        PLUGIN_ENABLED[meta.id] = true;
+        savePluginStates();
+        await loadPlugin(meta.id);
+        showAlert('已添加插件「' + (meta.name || meta.id) + '」并启用');
+        renderSettingsPlugins();
+    }
+
+    async function deletePlugin(id) {
+        if (!(await showConfirm('确定删除插件「' + id + '」？此操作不可撤销。'))) return;
+        const invoke = getInvoke();
+        if (!invoke) return;
+        try {
+            await invoke('delete_user_plugin', { id });
+            USER_PLUGIN_LIST = (USER_PLUGIN_LIST || []).filter(x => x.id !== id);
+            delete PLUGIN_ENABLED[id];
+            savePluginStates();
+            renderSettingsPlugins();
+        } catch (e) {
+            showAlert('删除失败：' + e);
+        }
+    }
+
     // 设置页面导航点击 — 仅通过侧边栏面板
     document.querySelector('.sidebar-panel[data-panel="settings"]')?.addEventListener('click', (e) => {
         const item = e.target.closest('[data-settings]');
@@ -7905,6 +8703,218 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     // 默认渲染
     renderSettingsPage('profile');
+
+    // 发现页侧边栏（启动器）：点击板块项进入对应区域
+    // - 音乐广场：跳转到隐藏的音乐面板（从右进入）
+    // - 签到墙：在发现页右侧直接渲染，不新开页面
+    document.querySelector('.sidebar-panel[data-panel="discover"]')?.addEventListener('click', (e) => {
+        const item = e.target.closest('.contact-item[data-discover]');
+        if (!item) return;
+        document.querySelectorAll('.sidebar-panel[data-panel="discover"] .contact-item').forEach(ci => ci.classList.remove('active'));
+        item.classList.add('active');
+        const target = item.dataset.discover;
+        if (target === 'checkin') {
+            const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
+            if (main) {
+                main.classList.add('discover-has-content');
+                renderCheckin(main);
+            }
+        } else if (target) {
+            switchTab(target);
+        }
+    });
+
+    // 发现页右侧容器：渲染内容时切换为可滚动布局，回到发现落地页时恢复空状态
+    function resetDiscoverMain() {
+        const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
+        if (!main) return;
+        main.classList.remove('discover-has-content');
+        main.innerHTML = '<div class="discover-empty"><i class="fa-solid fa-compass"></i><p>从左侧选择一个板块开始探索</p></div>';
+    }
+
+    // ===== 公开法庭（入口在发现页，左侧案件列表 + 右侧案件详情） =====
+    const courtCaseList = document.getElementById('courtCaseList');
+    const courtDetail = document.getElementById('courtDetail');
+    let courtLoaded = false;
+    let courtCurrentId = null;
+
+    // 从多个候选字段名中取第一个非空值（兼容不同版本后端字段命名，含蛇形/中文）
+    function courtPick(obj, names) {
+        if (!obj || typeof obj !== 'object') return '';
+        for (const n of names) {
+            const v = obj[n];
+            if (v !== undefined && v !== null && v !== '') return v;
+        }
+        return '';
+    }
+
+    // 从响应里找出案件数组：兼容 {cases:[]} / {data:{list:[]}} / {data:[]} / 直接数组 / {code:0,data:{...}}
+    function courtExtractList(obj) {
+        if (Array.isArray(obj)) return obj;
+        if (obj && typeof obj === 'object') {
+            for (const k of ['cases', 'items', 'list', 'records', 'results', 'data']) {
+                if (Array.isArray(obj[k])) return obj[k];
+            }
+            if (obj.data && typeof obj.data === 'object') return courtExtractList(obj.data);
+            // 退一步：返回第一个非空数组值
+            for (const k of Object.keys(obj)) {
+                if (Array.isArray(obj[k]) && obj[k].length) return obj[k];
+            }
+        }
+        return [];
+    }
+
+    function courtCaseId(c) {
+        return String(courtPick(c, ['id', 'case_id', 'caseId', 'cid', 'caseID', '案件id']) || '');
+    }
+
+    function createCourtCaseItem(c) {
+        const id = courtCaseId(c);
+        const title = courtPick(c, ['title', 'name', 'case_title', 'subject', 'topic', '标题', '案件标题']) || '未命名案件';
+        const sub = courtPick(c, ['description', 'summary', 'brief', 'content', 'intro', '简介', '摘要']) ||
+            [courtPick(c, ['plaintiff', 'accuser', 'prosecutor', '原告', '公诉人']),
+             courtPick(c, ['defendant', 'accused', 'respondent', '被告'])]
+                .filter(Boolean).join(' 诉 ');
+        const div = document.createElement('div');
+        div.className = 'contact-item court-case-item';
+        div.dataset.courtId = id;
+        div.innerHTML = `<div class="contact-info"><div class="name">${escapeHtml(title)}</div>${sub ? `<div class="uid">${escapeHtml(String(sub).slice(0, 60))}</div>` : ''}</div>`;
+        div.addEventListener('click', () => {
+            if (courtCaseList) courtCaseList.querySelectorAll('.court-case-item').forEach(i => i.classList.remove('active'));
+            div.classList.add('active');
+            renderCourtCase(id);
+        });
+        return div;
+    }
+
+    async function loadCourtCases() {
+        if (!courtCaseList) return;
+        courtCaseList.innerHTML = '<div class="court-loading">加载中...</div>';
+        try {
+            const res = await apiFetch('/v1/public-court/cases');
+            const data = await res.json();
+            const items = courtExtractList(data);
+            courtCaseList.innerHTML = '';
+            if (items.length === 0) {
+                // 服务端可能返回了包裹结构但无案件，或确实为空；把原始响应留底便于核对字段
+                const dump = (data && typeof data === 'object')
+                    ? '<details class="court-raw"><summary>原始响应（无案件）</summary><pre>' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre></details>'
+                    : '';
+                courtCaseList.innerHTML = '<div class="court-loading">暂无案件</div>' + dump;
+            } else {
+                items.forEach(c => courtCaseList.appendChild(createCourtCaseItem(c)));
+            }
+            courtLoaded = true;
+        } catch (e) {
+            console.error('[court] load cases failed:', e);
+            courtCaseList.innerHTML = '<div class="court-error">加载失败，请稍后重试</div>';
+        }
+    }
+
+    async function renderCourtCase(id) {
+        if (!courtDetail || !id) return;
+        courtCurrentId = id;
+        courtDetail.innerHTML = '<div class="court-loading">加载中...</div>';
+        try {
+            const res = await apiFetch('/v1/public-court/cases/' + encodeURIComponent(id));
+            let c = await res.json();
+            // 兼容 {code:0, data:{...}} / [{...}] 包裹
+            if (c && c.data && typeof c.data === 'object' && !Array.isArray(c.data)) c = c.data;
+            if (Array.isArray(c)) c = c[0] || {};
+            const title = courtPick(c, ['title', 'name', 'case_title', 'subject', 'topic', '标题', '案件标题']) || '未命名案件';
+            const content = courtPick(c, ['content', 'description', 'body', 'detail', 'text', 'intro', '简介', '摘要', '事实', '案情']) || '';
+            const status = courtPick(c, ['status', 'state', '状态', '进展']) || '';
+            const createdAt = courtPick(c, ['created_at', 'createdAt', 'time', 'publish_time', 'created_time', '添加时间']);
+            const plaintiff = courtPick(c, ['plaintiff', 'accuser', 'prosecutor', '原告', '公诉人']);
+            const defendant = courtPick(c, ['defendant', 'accused', 'respondent', '被告']);
+            const votes = courtExtractList(c.votes || c.vote_list || c.voteList || []);
+            const statements = courtExtractList(c.statements || c.statement_list || []);
+            const discussions = courtExtractList(c.discussions || c.discussion_list || c.comments || []);
+
+            let html = `<div class="court-case-title">${escapeHtml(title)}</div>`;
+            const meta = [];
+            if (status) meta.push(`<span class="meta-item">状态：<b>${escapeHtml(status)}</b></span>`);
+            if (plaintiff) meta.push(`<span class="meta-item">原告：<b>${escapeHtml(plaintiff)}</b></span>`);
+            if (defendant) meta.push(`<span class="meta-item">被告：<b>${escapeHtml(defendant)}</b></span>`);
+            if (createdAt) meta.push(`<span class="meta-item">时间：<b>${escapeHtml(String(createdAt))}</b></span>`);
+            if (meta.length) html += `<div class="court-case-meta">${meta.join('')}</div>`;
+            if (content) html += `<div class="court-case-content">${escapeHtml(content)}</div>`;
+
+            // 投票
+            html += `<div class="court-vote-bar"><span class="vote-count">现有 ${votes.length} 票</span></div>`;
+            html += `<div class="court-actions">
+                <button class="btn primary" id="courtVoteBtn">投票</button>
+                <button class="btn" id="courtStatementBtn">发表陈词</button>
+                <button class="btn" id="courtDiscussionBtn">参与讨论</button>
+            </div>`;
+
+            if (statements.length) {
+                html += `<div class="court-section-title">陈词</div>`;
+                statements.forEach(s => {
+                    const who = courtPick(s, ['user_name', 'username', 'name', 'author', 'uid', 'ncuid', '用户', '作者']);
+                    const text = courtPick(s, ['content', 'text', 'statement', 'body', '内容', '陈词']);
+                    html += `<div class="court-statement">${who ? `<span class="who">${escapeHtml(who)}：</span>` : ''}${escapeHtml(text)}</div>`;
+                });
+            }
+            if (discussions.length) {
+                html += `<div class="court-section-title">讨论</div>`;
+                discussions.forEach(d => {
+                    const who = courtPick(d, ['user_name', 'username', 'name', 'author', 'uid', 'ncuid', '用户', '作者']);
+                    const text = courtPick(d, ['content', 'text', 'message', 'body', '内容', '讨论']);
+                    html += `<div class="court-discussion">${who ? `<span class="who">${escapeHtml(who)}：</span>` : ''}${escapeHtml(text)}</div>`;
+                });
+            }
+
+            // 兜底：若标题/内容/原告/被告/投票/陈词/讨论 全部为空（字段名没对上），原样显示 JSON 便于核对
+            const hasAny = title !== '未命名案件' || content || plaintiff || defendant || votes.length || statements.length || discussions.length;
+            if (!hasAny) {
+                html += `<details class="court-raw"><summary>未能识别案件字段，显示原始响应</summary><pre>${escapeHtml(JSON.stringify(c, null, 2))}</pre></details>`;
+            }
+
+            courtDetail.innerHTML = html;
+
+            // 投票
+            const voteBtn = courtDetail.querySelector('#courtVoteBtn');
+            if (voteBtn) voteBtn.addEventListener('click', async () => {
+                try {
+                    const r = await apiFetch('/v1/public-court/cases/' + encodeURIComponent(id) + '/vote', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
+                    });
+                    if (r.ok) { showAlert('投票成功', '提示'); renderCourtCase(id); }
+                    else showAlert('投票失败', '提示');
+                } catch (e) { showAlert('投票失败：' + e.message, '提示'); }
+            });
+            // 发表陈词
+            const stmtBtn = courtDetail.querySelector('#courtStatementBtn');
+            if (stmtBtn) stmtBtn.addEventListener('click', async () => {
+                const text = window.prompt('请输入陈词内容：');
+                if (!text) return;
+                try {
+                    const r = await apiFetch('/v1/public-court/cases/' + encodeURIComponent(id) + '/statement', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: text })
+                    });
+                    if (r.ok) { showAlert('陈词已提交', '提示'); renderCourtCase(id); }
+                    else showAlert('提交失败', '提示');
+                } catch (e) { showAlert('提交失败：' + e.message, '提示'); }
+            });
+            // 参与讨论
+            const discBtn = courtDetail.querySelector('#courtDiscussionBtn');
+            if (discBtn) discBtn.addEventListener('click', async () => {
+                const text = window.prompt('请输入讨论内容：');
+                if (!text) return;
+                try {
+                    const r = await apiFetch('/v1/public-court/cases/' + encodeURIComponent(id) + '/discussion', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: text })
+                    });
+                    if (r.ok) { showAlert('讨论已发布', '提示'); renderCourtCase(id); }
+                    else showAlert('发布失败', '提示');
+                } catch (e) { showAlert('发布失败：' + e.message, '提示'); }
+            });
+        } catch (e) {
+            console.error('[court] load case detail failed:', e);
+            courtDetail.innerHTML = '<div class="court-error">加载失败，请稍后重试</div>';
+        }
+    }
 
     // ===== @ 提及点击跳转 =====
     messagesContainer.addEventListener('click', (e) => {

@@ -32,6 +32,11 @@ Tauri v2 跨平台桌面 IM 客户端，连接 OldChat 即时通讯后端（原�
 5. **CDN 节流**：`files.mcl0.dpdns.org` 是付费 CDN，腐竹要求第三方客户端尽量少用，优先用 60.205.94.101:8080（头像）。
 6. **新增资源域名**必须在 `src-tauri/capabilities/default.json` 的 http:default.allow 白名单中添加，否则 plugin-http 拒绝。
 7. **启动自检 `src-tauri/src/preflight.rs`**（2026-08-08 起）：在 `tauri::Builder` **之前**跑，检测 WebView2/WebKitGTK/图形环境/托盘依赖/数据目录。**绝不能改用 tauri-plugin-dialog 报错**——它自己就依赖 WebView2/GTK；必须用 Win32 `MessageBoxW` 与 Linux 的 zenity 降级链。两处误报陷阱务必保留：`WEBVIEW2_BROWSER_EXECUTABLE_FOLDER` 非空要豁免（企业固定版本部署）；Linux so 检测只是尽力而为（缺库通常在动态链接期就挂了）。自测：`OLDCHAT_PREFLIGHT_DEMO=webview2|webkit|display|runtime`。
+8. **多主题系统（2026-08-09 起，已落地设置选项卡+上传）**：深浅模式轴用 HTML 属性 `data-theme-mode`（值 `light` / `dark`），由 `src/app.js` 的 `applyTheme()` 经 `document.documentElement.setAttribute('data-theme-mode', mode)` 设置；CSS 用 `:root, [data-theme-mode="light"]`（浅）与 `[data-theme-mode="dark"]`（深）声明变量。**默认主题 = `src/app.css` 自身**（顶部带 `@theme` 元数据注释：id/name/description/author[可空]/version[可空]/framework:v1）。所有颜色走语义变量（`--bg/--text/--accent/--link/--danger/--muted/--surface-2/--overlay/...`）；**用户主题 = 单文件纯 .css，宽松模式允许任意 CSS**（不强制仅变量），主题不写 dark 块则深色回退默认。
+   - **应用机制**：主题只是往 `<head>` 末注入 `<style id="active-theme">` 覆盖变量（default/未知 id 则移除该 style 回退 app.css）。主题与深浅轴**正交**——主题 CSS 自带浅/深两套块，由 `data-theme-mode` 属性自动切换。
+   - **存储（系统用户文件夹，无需 fs 插件）**：`src-tauri/src/lib.rs` 用既有 `tauri-plugin-dialog` + `std::fs` + `app.path().app_config_dir()` 写入 `<app_config_dir>/themes/<id>.css`。Win `%APPDATA%/aoharureverie.oldchat.kivotosnextapp/themes/`；Linux `~/.config/aoharureverie.oldchat.kivotosnextapp/themes/`。
+   - **Rust 命令（已注册）**：`import_theme`（文件框选 .css→解析→写盘→返回元数据含 css）、`list_user_themes`（扫 themes/ 返回元数据数组含 css）、`delete_user_theme(id)`。`parse_theme_meta` 逐行解析 ` @theme key: value`（去 `*` 前缀），`sanitize_theme_id` 仅留字母数字 `-_`。
+   - **前端入口**：设置导航 `data-settings="theme"`（我的/通用/主题/关于）→ `renderSettingsTheme()`；引擎 `applyThemeById`/`injectThemeStyle`/`refreshUserThemes`（启动即 `invoke('list_user_themes')` 还原 `localStorage.themeId`）。改任何颜色优先加语义变量、勿硬编码。
 
 ## 后端地址
 - API 根：`http://oc.mcl0.dpdns.org/v1`（Go 实现）
@@ -43,7 +48,15 @@ Tauri v2 跨平台桌面 IM 客户端，连接 OldChat 即时通讯后端（原�
 - 开发：`npm run tauri dev`（Rust 增量编译；前端 Ctrl+R 刷新；capabilities/tauri.conf 修改需重启）
 - DevTools：Ctrl+Alt+Shift+F12
 - 纯浏览器调试**不再支持**（强依赖 plugin-http 与 Rust 命令），一律用 `npm run tauri dev`
-- Rust 命令：greet, toggle_devtools, minimize_window, toggle_maximize_window, close_window(隐藏到托盘), is_window_maximized, notify_new_message, save_image, save_image_data, env_report(系统/WebView版本+自检告警)
+- Rust 命令：greet, toggle_devtools, minimize_window, toggle_maximize_window, close_window(隐藏到托盘), is_window_maximized, notify_new_message, save_image, save_image_data, env_report(系统/WebView版本+自检告警), import_theme, list_user_themes, delete_user_theme(多主题系统：用户 .css 主题导入/列表/删除，存 app_config_dir/themes/), import_plugin, list_user_plugins, read_plugin_source, delete_user_plugin(插件系统：任意 .js 插件导入/列表/读源码/删除，存 app_config_dir/plugins/，元数据解析 @plugin 头注释)
+
+## 插件系统（2026-08-09 新增）
+- 用户插件 = 任意 .js 文件，存 `<app_config_dir>/plugins/<id>.js`（Rust 命令管理）
+- 启用状态存 localStorage `oc_plugin_states`（JSON：id→bool）；**新导入插件默认启用**
+- 启动 `refreshUserPlugins()`（紧随 refreshUserThemes）读取列表，对启用者 `loadPlugin(id)`：invoke `read_plugin_source` 取源码 → **`(0,eval)(src)` 间接 eval 全局作用域执行**（行为接近 <script>，顶层 var/function 进全局，可访问 window.* 客户端全局接口），try/catch 隔离插件错误
+- 开关：启用→立即 eval；禁用→JS 副作用无法撤销，showConfirm 后 `location.reload()` 生效
+- 设置→插件选项卡：列表（名称/简介/作者·版本·ID/启用 checkbox/删除）+「添加插件」按钮（导入即启用即加载）
+- 元数据格式：文件头 `/* @plugin name: xxx */`（支持 description/author/version/id），缺省 id=文件名去 .js
 
 ## 已知限制 / 待办
 - 单文件维护难、无类型系统、无单元测试、无打包优化、仅 Windows 测试、无自动更新

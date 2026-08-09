@@ -159,6 +159,265 @@ async fn save_image_data(app: tauri::AppHandle, data: Vec<u8>) -> Result<(), Str
     save_with_dialog(&app, &data)
 }
 
+// ===== 多主题系统（用户上传自定义 .css 主题）=====
+// 主题文件存入「系统用户文件夹」：各平台的 App 配置目录下的 themes/ 子目录
+//   Windows: %APPDATA%/<identifier>/themes
+//   Linux  : $XDG_CONFIG_HOME/<identifier>/themes  (通常 ~/.config/<identifier>/themes)
+// 解析纯 CSS 顶部 ` * @theme key: value` 注释作为元数据。
+
+// 取 themes 目录（自动创建），失败返回 String 错误
+fn themes_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let base = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("获取配置目录失败: {}", e))?;
+    let dir = base.join("themes");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建主题目录失败: {}", e))?;
+    Ok(dir)
+}
+
+// 解析 @theme 元数据（不依赖 regex，逐行处理）
+fn parse_theme_meta(css: &str) -> serde_json::Value {
+    let mut meta = serde_json::json!({
+        "id": "",
+        "name": "",
+        "description": "",
+        "author": "",
+        "version": "",
+        "framework": ""
+    });
+    for line in css.lines() {
+        let s = line.trim().trim_start_matches('*').trim();
+        if let Some(rest) = s.strip_prefix("@theme") {
+            if let Some((k, v)) = rest.split_once(':') {
+                let k = k.trim();
+                let v = v.trim();
+                if let Some(key) = meta.get_mut(k) {
+                    *key = serde_json::Value::String(v.to_string());
+                }
+            }
+        }
+    }
+    meta
+}
+
+// 把任意 id 清洗为安全的文件名片段
+fn sanitize_theme_id(id: &str) -> String {
+    let safe: String = id
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    if safe.is_empty() { "theme".to_string() } else { safe }
+}
+
+// 原生文件选择框挑选 .css → 解析元数据 → 写入 themes/<id>.css → 返回元数据（含 css）
+#[tauri::command]
+fn import_theme(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter("CSS 主题文件", &["css"])
+        .blocking_pick_file();
+    let path = match picked {
+        Some(FilePath::Path(p)) => p,
+        _ => return Err("未选择文件".into()),
+    };
+    let css = std::fs::read_to_string(&path).map_err(|e| format!("读取主题文件失败: {}", e))?;
+
+    let mut meta = parse_theme_meta(&css);
+    let fallback_id = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("theme")
+        .to_string();
+    let raw_id = if meta["id"].as_str().unwrap_or("").is_empty() {
+        fallback_id
+    } else {
+        meta["id"].as_str().unwrap().to_string()
+    };
+    let safe = sanitize_theme_id(&raw_id);
+
+    let dir = themes_dir(&app)?;
+    std::fs::write(dir.join(format!("{}.css", safe)), &css)
+        .map_err(|e| format!("写入主题失败: {}", e))?;
+
+    meta["id"] = serde_json::Value::String(safe);
+    meta["css"] = serde_json::Value::String(css);
+    Ok(meta)
+}
+
+// 列出已安装的用户主题（含完整 css 供前端直接注入）
+#[tauri::command]
+fn list_user_themes(app: tauri::AppHandle) -> Vec<serde_json::Value> {
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    if let Ok(dir) = themes_dir(&app) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("css") {
+                    if let Ok(css) = std::fs::read_to_string(&path) {
+                        let mut meta = parse_theme_meta(&css);
+                        let stem = path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if meta["id"].as_str().unwrap_or("").is_empty() {
+                            meta["id"] = serde_json::Value::String(stem.clone());
+                        }
+                        meta["css"] = serde_json::Value::String(css);
+                        out.push(meta);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+// 删除用户主题
+#[tauri::command]
+fn delete_user_theme(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let safe = sanitize_theme_id(&id);
+    let dir = themes_dir(&app)?;
+    let path = dir.join(format!("{}.css", safe));
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| format!("删除失败: {}", e))?;
+    }
+    Ok(())
+}
+
+// ===== 插件系统（用户添加任意 .js 插件）=====
+// 插件文件存入「系统用户文件夹」：<app_config_dir>/plugins/
+//   Windows: %APPDATA%/<identifier>/plugins
+//   Linux  : $XDG_CONFIG_HOME/<identifier>/plugins (通常 ~/.config/<identifier>/plugins)
+// 元数据解析文件头 `/* @plugin key: value */` 或 `// @plugin key: value` 注释。
+// 说明：sanitize_theme_id 的清洗规则（字母数字/中划线/下划线）对插件 id 同样适用，直接复用。
+
+// 取 plugins 目录（自动创建），失败返回 String 错误
+fn plugins_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let base = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("获取配置目录失败: {}", e))?;
+    let dir = base.join("plugins");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建插件目录失败: {}", e))?;
+    Ok(dir)
+}
+
+// 解析 @plugin 元数据（兼容块注释 * 行首与 // 行注释）
+fn parse_plugin_meta(src: &str) -> serde_json::Value {
+    let mut meta = serde_json::json!({
+        "id": "",
+        "name": "",
+        "description": "",
+        "author": "",
+        "version": ""
+    });
+    for line in src.lines() {
+        let s = line
+            .trim()
+            .trim_start_matches('*')
+            .trim()
+            .trim_start_matches("//")
+            .trim();
+        if let Some(rest) = s.strip_prefix("@plugin") {
+            if let Some((k, v)) = rest.split_once(':') {
+                let k = k.trim();
+                let v = v.trim();
+                if let Some(key) = meta.get_mut(k) {
+                    *key = serde_json::Value::String(v.to_string());
+                }
+            }
+        }
+    }
+    meta
+}
+
+// 原生文件选择框挑选 .js → 解析元数据 → 写入 plugins/<id>.js → 返回元数据
+#[tauri::command]
+fn import_plugin(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter("JavaScript 插件", &["js"])
+        .blocking_pick_file();
+    let path = match picked {
+        Some(FilePath::Path(p)) => p,
+        _ => return Err("未选择文件".into()),
+    };
+    let src = std::fs::read_to_string(&path).map_err(|e| format!("读取插件文件失败: {}", e))?;
+
+    let mut meta = parse_plugin_meta(&src);
+    let fallback_id = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("plugin")
+        .to_string();
+    let raw_id = if meta["id"].as_str().unwrap_or("").is_empty() {
+        fallback_id
+    } else {
+        meta["id"].as_str().unwrap().to_string()
+    };
+    let safe = sanitize_theme_id(&raw_id);
+
+    let dir = plugins_dir(&app)?;
+    std::fs::write(dir.join(format!("{}.js", safe)), &src)
+        .map_err(|e| format!("写入插件失败: {}", e))?;
+
+    meta["id"] = serde_json::Value::String(safe);
+    Ok(meta)
+}
+
+// 列出已安装插件（含元数据，不含源码——源码由 read_plugin_source 按需读取）
+#[tauri::command]
+fn list_user_plugins(app: tauri::AppHandle) -> Vec<serde_json::Value> {
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    if let Ok(dir) = plugins_dir(&app) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("js") {
+                    if let Ok(src) = std::fs::read_to_string(&path) {
+                        let mut meta = parse_plugin_meta(&src);
+                        let stem = path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if meta["id"].as_str().unwrap_or("").is_empty() {
+                            meta["id"] = serde_json::Value::String(stem.clone());
+                        }
+                        out.push(meta);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+// 读取插件源码（启动加载 / 启用时执行用）
+#[tauri::command]
+fn read_plugin_source(app: tauri::AppHandle, id: String) -> Result<String, String> {
+    let safe = sanitize_theme_id(&id);
+    let dir = plugins_dir(&app)?;
+    let path = dir.join(format!("{}.js", safe));
+    std::fs::read_to_string(&path).map_err(|e| format!("读取插件失败: {}", e))
+}
+
+// 删除插件
+#[tauri::command]
+fn delete_user_plugin(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let safe = sanitize_theme_id(&id);
+    let dir = plugins_dir(&app)?;
+    let path = dir.join(format!("{}.js", safe));
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| format!("删除失败: {}", e))?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 启动自检：必须先于 Tauri 运行时初始化。
@@ -182,7 +441,14 @@ pub fn run() {
             notify_new_message,
             save_image,
             save_image_data,
-            env_report
+            env_report,
+            import_theme,
+            list_user_themes,
+            delete_user_theme,
+            import_plugin,
+            list_user_plugins,
+            read_plugin_source,
+            delete_user_plugin
         ])
         // 拦截窗口关闭请求：改为隐藏到托盘
         .on_window_event(|window, event| {

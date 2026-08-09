@@ -162,16 +162,16 @@
         }
         .geetest-status.passed { display: block; background: #f0fff4; color: #2d8a4e; }
         .geetest-status.failed { display: block; background: #fff0f0; color: #c23d3d; }
-        [data-theme="dark"] .login-header { background: #16213e; }
-        [data-theme="dark"] .login-card-top h1 { color: #8aa0b8; }
-        [data-theme="dark"] .tab { color: #a0a0a0; }
-        [data-theme="dark"] .tab.active { color: #e0e0e0; border-bottom-color: #8aa0b8; }
-        [data-theme="dark"] .login-card button[type="submit"] { background: #8aa0b8; }
-        [data-theme="dark"] .login-card button[type="submit"]:hover { background: #7a90a8; }
-        [data-theme="dark"] .msg-error { background: #3a1a1a; color: #ff6b6b; }
-        [data-theme="dark"] .msg-success { background: #1a3a1a; color: #6bff6b; }
-        [data-theme="dark"] .geetest-status.passed { background: #1a3a1a; color: #6bff6b; }
-        [data-theme="dark"] .geetest-status.failed { background: #3a1a1a; color: #ff6b6b; }
+        [data-theme-mode="dark"] .login-header { background: #16213e; }
+        [data-theme-mode="dark"] .login-card-top h1 { color: #8aa0b8; }
+        [data-theme-mode="dark"] .tab { color: #a0a0a0; }
+        [data-theme-mode="dark"] .tab.active { color: #e0e0e0; border-bottom-color: #8aa0b8; }
+        [data-theme-mode="dark"] .login-card button[type="submit"] { background: #8aa0b8; }
+        [data-theme-mode="dark"] .login-card button[type="submit"]:hover { background: #7a90a8; }
+        [data-theme-mode="dark"] .msg-error { background: #3a1a1a; color: #ff6b6b; }
+        [data-theme-mode="dark"] .msg-success { background: #1a3a1a; color: #6bff6b; }
+        [data-theme-mode="dark"] .geetest-status.passed { background: #1a3a1a; color: #6bff6b; }
+        [data-theme-mode="dark"] .geetest-status.failed { background: #3a1a1a; color: #ff6b6b; }
         body { display: flex; flex-direction: column; }
     </style>
 </head>
@@ -339,7 +339,7 @@
         // 主题初始化
         (function() {
             var theme = localStorage.getItem('theme') || 'light';
-            document.documentElement.setAttribute('data-theme', theme);
+            document.documentElement.setAttribute('data-theme-mode', theme);
         })();
 
         // ===== Tab 切换 =====

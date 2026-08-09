@@ -1,4 +1,13 @@
-:root {
+/*
+ * @theme id: default
+ * @theme name: MomoTalk Pink
+ * @theme description: OldChat For Kivotos Next 内置的 MomoTalk 风格主题
+ * @theme author:
+ * @theme version:
+ * @theme framework: v1
+ */
+
+:root, [data-theme-mode="light"] {
 	--bg: #f4f7f8;
 	--sidebar-bg: #f4f7f8;
 	--chat-bg: #f4f7f8;
@@ -25,10 +34,17 @@
 	--border-color: #e1e1e1;
 	--input-bg: #ffffff;
 	--title-bg: #e8e8e8;
-	--title-text: #333
+	--title-text: #333;
+	--on-accent: #ffffff;
+	--link: #0078d4;
+	--link-hover: #b8daff;
+	--danger: #ff4757;
+	--muted: #888;
+	--surface-2: #f0f0f0;
+	--overlay: rgba(0,0,0,0.5)
 }
 
-[data-theme="dark"] {
+[data-theme-mode="dark"] {
 	--bg: #1a1a2e;
 	--sidebar-bg: #16213e;
 	--chat-bg: #1a1a2e;
@@ -52,7 +68,14 @@
 	--border-color: #2a2a4a;
 	--input-bg: #1a1a2e;
 	--title-bg: #3a3a5a;
-	--title-text: #ccc
+	--title-text: #ccc;
+	--on-accent: #ffffff;
+	--link: #5ba3e6;
+	--link-hover: #5ba3e6;
+	--danger: #ff6b6b;
+	--muted: #888;
+	--surface-2: #2a2a4a;
+	--overlay: rgba(0,0,0,0.6)
 }
 
 body, .sidebar, .chat-area, .messages, .input-area, .contact-list, .chat-header, .sidebar-header, .message-bubble, .message-time, .contact-item, .more-menu, .custom-context-menu, .emoticon-picker {
@@ -221,7 +244,7 @@ body::-webkit-scrollbar {
 	font-weight: 500
 }
 
-[data-theme="dark"] .contact-item.active {
+[data-theme-mode="dark"] .contact-item.active {
 	background: rgba(255,255,255,0.12);
 }
 
@@ -296,7 +319,7 @@ body::-webkit-scrollbar {
 	min-width: 20px;
 	height: 20px;
 	padding: 0 6px;
-	background: #fa94a6;
+	background: var(--accent);
 	color: #fff;
 	font-size: 11px;
 	font-weight: 500;
@@ -384,12 +407,12 @@ body::-webkit-scrollbar {
 .sidebar-panels-track {
 	display: flex;
 	height: 100%;
-	width: 400%;
+	width: 600%;
 	transition: transform 0.3s ease;
 }
 
 .sidebar-panel {
-	width: 25%;
+	width: 16.6667%;
 	flex-shrink: 0;
 	height: 100%;
 	display: flex;
@@ -822,6 +845,16 @@ body::-webkit-scrollbar {
     left: -7px;
     border-right-color: var(--bubble-other);
     border-left: 0;
+}
+
+/* 红包消息：去掉气泡外框（背景/内边距/小箭头），只显示红包卡片本身 */
+.message-bubble.no-frame {
+    background: transparent !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+}
+.message-bubble.no-frame::before {
+    display: none !important;
 }
 
 .message.self .message-bubble::before {
@@ -1440,7 +1473,7 @@ body::-webkit-scrollbar {
 	border-left: 3px solid var(--accent);
 	padding: 4px 8px;
 	margin: 5px 0;
-	background: #f0f0f0;
+	background: var(--surface-2);
 	font-size: 13px;
 	color: var(--accent);
 	cursor: pointer;
@@ -1543,22 +1576,22 @@ body::-webkit-scrollbar {
 }
 
 .quote-preview .icon-btn:hover {
-	color: #d00
+	color: var(--danger)
 }
 
 .mention-highlight {
-	color: #0078d4;
+	color: var(--link);
 	font-weight: 500;
 	cursor: pointer;
 	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
 }
 
 .message.self .mention-highlight {
-	color: #b8daff;
+	color: var(--link-hover);
 }
 
 .message.other .mention-highlight {
-	color: #0078d4;
+	color: var(--link);
 }
 
 .message.self .mention-highlight:hover {
@@ -1566,7 +1599,7 @@ body::-webkit-scrollbar {
 }
 
 .message.other .mention-highlight:hover {
-	color: #5ba3e6;
+	color: var(--link-hover);
 }
 
 .message.other .quote-block {
@@ -1574,7 +1607,7 @@ body::-webkit-scrollbar {
 }
 
 .message.self .quote-block {
-	border-left: 3px solid #b8daff
+	border-left: 3px solid var(--link-hover)
 }
 
 .message.other .message-bubble a {
@@ -1869,7 +1902,7 @@ body::-webkit-scrollbar {
 }
 
 .emoticon-item:hover {
-	border-color: #0078d4;
+	border-color: var(--link);
 	background: var(--active)
 }
 
@@ -1885,7 +1918,7 @@ body::-webkit-scrollbar {
 	width: 20px;
 	height: 20px;
 	border-radius: 50%;
-	background: #ff4757;
+	background: var(--danger);
 	color: #fff;
 	border: none;
 	font-size: 10px;
@@ -1903,7 +1936,7 @@ body::-webkit-scrollbar {
 }
 
 .collected-emoji-del:hover {
-	background: #e0384c
+	background: var(--danger)
 }
 
 .collected-emoji-picker {
@@ -1939,7 +1972,7 @@ body::-webkit-scrollbar {
 
 .collected-emoji-manage:hover {
 	background: var(--hover);
-	border-color: #0078d4
+	border-color: var(--link)
 }
 
 .collected-emoji-empty {
@@ -2110,7 +2143,7 @@ body::-webkit-scrollbar {
 }
 
 .theme-check {
-	color: #0078d4
+	color: var(--link)
 }
 
 .mention-popup {
@@ -2183,7 +2216,7 @@ body::-webkit-scrollbar {
 
 .sync-indicator {
 	font-size: 12px;
-	color: var(--text-secondary, #888);
+	color: var(--text-secondary, var(--muted));
 	opacity: 0.8;
 	pointer-events: none;
 	white-space: nowrap;
@@ -2194,7 +2227,7 @@ body::-webkit-scrollbar {
 	display: flex;
 	align-items: center;
 	font-size: 12px;
-	color: var(--text-secondary, #888);
+	color: var(--text-secondary, var(--muted));
 	pointer-events: none;
 	white-space: nowrap;
 	min-width: 0;
@@ -2237,7 +2270,7 @@ body::-webkit-scrollbar {
 	width: 4px;
 	height: 4px;
 	border-radius: 50%;
-	background: var(--text-secondary, #888);
+	background: var(--text-secondary, var(--muted));
 	animation: typingDot 1.4s ease-in-out infinite;
 }
 
@@ -2469,7 +2502,7 @@ body::-webkit-scrollbar {
     padding: 10px;
     border-radius: 20px;
     border: none;
-    background: #ff6b6b;
+    background: var(--danger);
     color: #fff;
     font-size: 15px;
     cursor: pointer;
@@ -3036,11 +3069,12 @@ body::-webkit-scrollbar {
     cursor: not-allowed;
 }
 .checkin-card {
-    background: var(--chat-bg);
+    background: #ffffff;
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 14px 16px;
     margin-bottom: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
 .checkin-card .checkin-user {
     display: flex;
@@ -3057,15 +3091,15 @@ body::-webkit-scrollbar {
 .checkin-card .checkin-user .name {
     font-size: 13px;
     font-weight: 500;
-    color: var(--text);
+    color: #1f1f1f;
 }
 .checkin-card .checkin-user .time {
     font-size: 11px;
-    color: var(--secondary-text);
+    color: var(--muted);
 }
 .checkin-card .checkin-body {
     font-size: 14px;
-    color: var(--text);
+    color: #333333;
     line-height: 1.5;
 }
 .checkin-card .checkin-actions {
@@ -3076,7 +3110,7 @@ body::-webkit-scrollbar {
 .checkin-card .checkin-action-btn {
     background: none;
     border: none;
-    color: var(--secondary-text);
+    color: var(--muted);
     font-size: 12px;
     cursor: pointer;
     display: flex;
@@ -3087,7 +3121,7 @@ body::-webkit-scrollbar {
     color: var(--accent);
 }
 .checkin-card .checkin-action-btn.liked {
-    color: #ff4757;
+    color: var(--danger);
 }
 
 /* ===== 联系人主面板 ===== */
@@ -3193,4 +3227,203 @@ body::-webkit-scrollbar {
 }
 .msg-buttons .btn:active {
     transform: scale(0.98);
+}
+
+/* ========== 发现页 ========== */
+.discover-list {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    padding: 8px 0;
+}
+
+.discover-list .msg-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+}
+
+.discover-main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.discover-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    color: var(--secondary-text);
+    opacity: 0.7;
+}
+
+.discover-empty i {
+    font-size: 56px;
+    margin-bottom: 16px;
+    color: var(--blue-600);
+}
+
+.discover-empty p {
+    font-size: 14px;
+    color: var(--secondary-text);
+}
+
+/* 发现页右侧渲染实际内容（如签到墙）时，切换为可滚动布局 */
+.discover-main.discover-has-content {
+    display: block;
+    align-items: stretch;
+    justify-content: flex-start;
+    overflow-y: auto;
+    padding: 20px;
+    text-align: left;
+}
+
+/* ===== 公开法庭页面 ===== */
+.court-detail {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 20px 24px;
+}
+.court-raw {
+    margin-top: 16px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--chat-bg);
+}
+.court-raw > summary {
+    cursor: pointer;
+    padding: 8px 12px;
+    font-size: 13px;
+    color: var(--secondary-text);
+}
+.court-raw > pre {
+    margin: 0;
+    padding: 12px;
+    max-height: 320px;
+    overflow: auto;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--text);
+    border-top: 1px solid var(--border-color);
+}
+.court-detail-empty {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--secondary-text);
+}
+.court-case-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0 0 10px;
+    line-height: 1.35;
+}
+.court-case-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    margin-bottom: 16px;
+    font-size: 12px;
+    color: var(--secondary-text);
+}
+.court-case-meta .meta-item b {
+    color: var(--text);
+    font-weight: 500;
+}
+.court-case-content {
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--chat-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 18px;
+}
+.court-section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 18px 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+}
+.court-statement {
+    border-left: 3px solid var(--blue-600);
+    background: var(--chat-bg);
+    border-radius: 0 8px 8px 0;
+    padding: 10px 14px;
+    margin-bottom: 10px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);
+}
+.court-statement .who {
+    font-weight: 600;
+    color: var(--blue-600);
+    margin-right: 6px;
+}
+.court-discussion {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 10px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);
+    background: var(--bg);
+}
+.court-discussion .who {
+    font-weight: 600;
+    color: var(--text);
+    margin-right: 6px;
+}
+.court-vote-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 10px 0 18px;
+    flex-wrap: wrap;
+}
+.court-vote-bar .vote-count {
+    font-size: 13px;
+    color: var(--secondary-text);
+}
+.court-actions {
+    display: flex;
+    gap: 10px;
+    margin: 14px 0;
+    flex-wrap: wrap;
+}
+.court-actions .btn {
+    padding: 6px 16px;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: var(--chat-bg);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+}
+.court-actions .btn.primary {
+    background: var(--blue-600);
+    color: #fff;
+    border-color: var(--blue-600);
+}
+.court-loading, .court-error {
+    padding: 20px;
+    text-align: center;
+    color: var(--secondary-text);
 }

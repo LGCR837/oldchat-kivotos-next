@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme-mode="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -27,7 +27,7 @@
         .app-splash-text {
             font-size: 14px; color: var(--secondary-text, #888); letter-spacing: 0.5px;
         }
-        [data-theme="dark"] .app-splash { background: #16213e; }
+        [data-theme-mode="dark"] .app-splash { background: #16213e; }
     </style>
 </head>
 <body>
@@ -47,7 +47,7 @@
             <div class="sidebar-tabs" id="sidebarTabs">
                 <button class="tab-btn active" data-tab="chat" title="聊天"><i class="fa-solid fa-comment"></i></button>
                 <button class="tab-btn" data-tab="contacts" title="联系人"><i class="fa-solid fa-user"></i></button>
-                <button class="tab-btn" data-tab="music" title="音乐"><i class="fa-solid fa-music"></i></button>
+                <button class="tab-btn" data-tab="discover" title="发现"><i class="fa-solid fa-compass"></i></button>
                 <button class="tab-btn" data-tab="settings" title="设置"><i class="fa-solid fa-gear"></i></button>
             </div>
             <div class="sidebar-panels">
@@ -72,6 +72,31 @@
                         <div id="contactsFriendList" class="contact-list"></div>
                     </div>
                 </div>
+                    <div class="sidebar-panel" data-panel="discover">
+                        <div class="discover-list" id="discoverList">
+                            <div class="contact-item" data-discover="music" style="cursor:pointer;">
+                                <div class="msg-avatar" style="background:rgba(74,158,255,0.15);color:var(--blue-600);"><i class="fa-solid fa-music"></i></div>
+                                <div class="contact-info"><div class="name">音乐广场</div></div>
+                            </div>
+                            <div class="contact-item" data-discover="checkin" style="cursor:pointer;">
+                                <div class="msg-avatar" style="background:rgba(74,158,255,0.15);color:var(--blue-600);"><i class="fa-solid fa-calendar-check"></i></div>
+                                <div class="contact-info"><div class="name">签到墙</div></div>
+                            </div>
+                            <div class="contact-item" data-discover="court" style="cursor:pointer;">
+                                <div class="msg-avatar" style="background:rgba(74,158,255,0.15);color:var(--blue-600);"><i class="fa-solid fa-gavel"></i></div>
+                                <div class="contact-info"><div class="name">公开法庭</div></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sidebar-panel" data-panel="settings">
+                        <div class="contact-list" style="padding:8px 0;">
+                            <div class="contact-item active" data-settings="profile" style="cursor:pointer;"><div class="contact-info"><div class="name">我的</div></div></div>
+                            <div class="contact-item" data-settings="appearance" style="cursor:pointer;"><div class="contact-info"><div class="name">通用</div></div></div>
+                            <div class="contact-item" data-settings="theme" style="cursor:pointer;"><div class="contact-info"><div class="name">主题</div></div></div>
+                            <div class="contact-item" data-settings="plugin" style="cursor:pointer;"><div class="contact-info"><div class="name">插件</div></div></div>
+                            <div class="contact-item" data-settings="about" style="cursor:pointer;"><div class="contact-info"><div class="name">关于</div></div></div>
+                        </div>
+                    </div>
                     <div class="sidebar-panel" data-panel="music">
                         <div class="music-tabs" id="musicTabs">
                             <button class="music-tab-btn active" data-music-tab="plaza">广场</button>
@@ -80,13 +105,8 @@
                         </div>
                         <div class="contact-list" id="musicList"></div>
                     </div>
-                    <div class="sidebar-panel" data-panel="settings">
-                        <div class="contact-list" style="padding:8px 0;">
-                            <div class="contact-item active" data-settings="profile" style="cursor:pointer;"><div class="contact-info"><div class="name">我的</div></div></div>
-                            <div class="contact-item" data-settings="appearance" style="cursor:pointer;"><div class="contact-info"><div class="name">通用</div></div></div>
-                            <div class="contact-item" data-settings="checkin" style="cursor:pointer;"><div class="contact-info"><div class="name">签到墙</div></div></div>
-                            <div class="contact-item" data-settings="about" style="cursor:pointer;"><div class="contact-info"><div class="name">关于</div></div></div>
-                        </div>
+                    <div class="sidebar-panel" data-panel="court">
+                        <div class="contact-list" id="courtCaseList"></div>
                     </div>
                 </div>
             </div>
@@ -183,6 +203,42 @@
                 </div>
                 <div class="settings-layout">
                     <div class="settings-content" id="settingsContent"></div>
+                </div>
+            </div>
+            <div class="main-panel" data-panel="discover">
+                <div class="chat-header">
+                    <span class="chat-title">发现</span>
+                    <div class="header-right">
+                        <div class="window-controls" id="discoverWinControls">
+                            <button class="win-ctrl-btn" id="discoverWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
+                            <button class="win-ctrl-btn" id="discoverWinMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
+                            <button class="win-ctrl-btn" id="discoverWinCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+                        </div>
+                    </div>
+                </div>
+                <div class="discover-main">
+                    <div class="discover-empty">
+                        <i class="fa-solid fa-compass"></i>
+                        <p>从左侧选择一个板块开始探索</p>
+                    </div>
+                </div>
+            </div>
+            <div class="main-panel" data-panel="court">
+                <div class="chat-header">
+                    <span class="chat-title">公开法庭</span>
+                    <div class="header-right">
+                        <div class="window-controls" id="courtWinControls">
+                            <button class="win-ctrl-btn" id="courtWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
+                            <button class="win-ctrl-btn" id="courtWinMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
+                            <button class="win-ctrl-btn" id="courtWinCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+                        </div>
+                    </div>
+                </div>
+                <div class="court-detail" id="courtDetail">
+                    <div class="court-detail-empty">
+                        <i class="fa-solid fa-gavel" style="font-size:48px;color:var(--secondary-text);margin-bottom:16px;"></i>
+                        <p style="color:var(--secondary-text);">从左侧选择一个案件查看详情</p>
+                    </div>
                 </div>
             </div>
         </main>

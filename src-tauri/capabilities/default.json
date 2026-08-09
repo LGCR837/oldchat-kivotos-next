@@ -15,6 +15,11 @@
         { "url": "http://60.205.94.101:8080/**" },
         { "url": "http://60.205.94.101/**" },
         { "url": "http://files.mcl0.dpdns.org/**" },
+        { "url": "https://files.mcl0.dpdns.org/**" },
+        { "url": "https://ocf.oss-cn-shanghai.aliyuncs.com/**" },
+        { "url": "http://ocf.oss-cn-shanghai.aliyuncs.com/**" },
+        { "url": "https://old.chat/**" },
+        { "url": "http://old.chat/**" },
         { "url": "https://**" }
       ]
     }
