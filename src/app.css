@@ -599,7 +599,18 @@ body::-webkit-scrollbar {
 }
 
 .message.self .message-time {
+	position: absolute;
+	left: auto;
+	right: 100%;
+	bottom: 2px;
+	margin-right: 8px;
 	text-align: right;
+	font-size: 10px;
+	opacity: 0;
+	transition: opacity 0.2s ease;
+	pointer-events: none;
+	white-space: nowrap;
+	z-index: 1;
 }
 
 /* 对方消息：grid布局，头像在左 */
@@ -631,10 +642,22 @@ body::-webkit-scrollbar {
 	grid-column: 2;
 }
 
+/* 带头像的消息（非 .consecutive）：气泡最小高度对齐头像，避免短气泡被头像(36px)撑高行、在底部留出多余空隙 */
+.message.other:not(.consecutive) .message-bubble {
+	min-height: 36px;
+}
+
 .message.other .message-time {
-	grid-row: 3;
-	grid-column: 2;
-	text-align: left;
+	position: absolute;
+	right: -46px;
+	bottom: 2px;
+	text-align: right;
+	font-size: 10px;
+	opacity: 0;
+	transition: opacity 0.2s ease;
+	pointer-events: none;
+	white-space: nowrap;
+	z-index: 1;
 }
 
 /* 图片消息 */
@@ -658,9 +681,16 @@ body::-webkit-scrollbar {
 }
 
 .message.bare-image .message-time {
-	grid-row: 3;
-	grid-column: 2;
-	text-align: left;
+	position: absolute;
+	right: -46px;
+	bottom: 2px;
+	text-align: right;
+	font-size: 10px;
+	opacity: 0;
+	transition: opacity 0.2s ease;
+	pointer-events: none;
+	white-space: nowrap;
+	z-index: 1;
 }
 
 .message.self.bare-image {
@@ -682,7 +712,18 @@ body::-webkit-scrollbar {
 }
 
 .message.self.bare-image .message-time {
+	position: absolute;
+	left: auto;
+	right: 100%;
+	bottom: 2px;
+	margin-right: 8px;
 	text-align: right;
+	font-size: 10px;
+	opacity: 0;
+	transition: opacity 0.2s ease;
+	pointer-events: none;
+	white-space: nowrap;
+	z-index: 1;
 }
 
 .msg-avatar {
@@ -743,48 +784,6 @@ body::-webkit-scrollbar {
 
 .message.self.consecutive .message-bubble::before {
 	display: none;
-}
-
-.message.consecutive .message-time {
-	position: absolute;
-	right: -46px;
-	bottom: 2px;
-	font-size: 10px;
-	opacity: 0;
-	transition: opacity 0.2s ease;
-	pointer-events: none;
-	white-space: nowrap;
-	z-index: 1;
-}
-
-.message.self.consecutive .message-time {
-	left: auto;
-	right: 100%;
-	margin-right: 8px;
-}
-
-.message.consecutive-first .message-time {
-	position: absolute;
-	right: -46px;
-	bottom: 2px;
-	font-size: 10px;
-	opacity: 0;
-	transition: opacity 0.2s ease;
-	pointer-events: none;
-	white-space: nowrap;
-	z-index: 1;
-	margin-bottom: 0;
-}
-
-.message.self.consecutive-first .message-time {
-	left: auto;
-	right: 100%;
-	margin-right: 8px;
-}
-
-.message.consecutive-first:hover .message-time,
-.message.consecutive:hover .message-time {
-	opacity: 1;
 }
 
 .message-bubble {
@@ -1490,12 +1489,16 @@ body::-webkit-scrollbar {
 }
 
 .message.other.bare-image .message-time {
-	grid-row: 3;
-	grid-column: 2;
-}
-
-.message.other.bare-image.has-quote .message-time {
-	grid-row: 4;
+	position: absolute;
+	right: -46px;
+	bottom: 2px;
+	text-align: right;
+	font-size: 10px;
+	opacity: 0;
+	transition: opacity 0.2s ease;
+	pointer-events: none;
+	white-space: nowrap;
+	z-index: 1;
 }
 
 /* 自己消息：引用块用蓝色 */
