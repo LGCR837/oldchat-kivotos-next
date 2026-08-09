@@ -277,6 +277,9 @@ function refreshEndpoints() {
 document.addEventListener('error', function(e) {
     const img = e.target;
     if (!img || img.tagName !== 'IMG') return;
+    // MediaCache 已接管该图片的候选源降级（缓存层内部逐候选尝试，每个唯一 URL 只抓一次），
+    // 跳过此处以免全局监听在原生回退时重复放大请求 2~4 倍。
+    if (img.dataset.mcOrigSrc) return;
     const src = img.getAttribute('src') || '';
     const tries = parseInt(img.dataset.mediaTries || '0', 10);
     for (let i = tries; i < MEDIA_CANDIDATES.length - 1; i++) {
@@ -1822,6 +1825,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const seenMsgIds = {};
     let switchRequestId = 0;
     let contacts = { friends: [], groups: [] };
+    let _incomingFriendReqCache = null; // 会话内缓存：好友申请列表（避免每次打开用户主页都拉取 /v1/friends/requests）
 
     const contactList = document.getElementById('contactList');
     const chatHeader = document.getElementById('chatHeader');
@@ -2686,11 +2690,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                 } else if (contacts.friends.some(f => f.uid.toUpperCase() === (profileUid || '').toUpperCase() || (f.displayUid && f.displayUid.toUpperCase() === (profileUid || '').toUpperCase()))) {
                     relation = 'friend';
                 } else {
-                    // 检查是否有来自该用户的好友申请
+                    // 检查是否有来自该用户的好友申请（会话内缓存，仅首次拉取，之后复用，避免每次打开主页都打 /v1/friends/requests）
                     try {
-                        const reqRes = await apiFetch('/v1/friends/requests');
-                        const reqData = await reqRes.json();
-                        const incoming = (reqData.requests || []).some(r => uidEq(getUid(r) || r.from_ncuid || r.from_uid, profileUid || ncuid || uid));
+                        if (!_incomingFriendReqCache) {
+                            const reqRes = await apiFetch('/v1/friends/requests');
+                            const reqData = await reqRes.json();
+                            _incomingFriendReqCache = reqData.requests || [];
+                        }
+                        const incoming = _incomingFriendReqCache.some(r => uidEq(getUid(r) || r.from_ncuid || r.from_uid, profileUid || ncuid || uid));
                         if (incoming) relation = 'pending_received';
                     } catch (e) {}
                 }
@@ -2885,6 +2892,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         const r = await apiFetch('/v1/friends/request', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(toUidParam(uid)) });
                         const d = await r.json();
                         if (d.error) { showAlert(d.error); return; }
+                        _incomingFriendReqCache = null;
                         load();
                     } catch(e) { showAlert('请求失败'); }
                 };
@@ -2898,6 +2906,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         const r = await apiFetch('/v1/friends/respond', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({request_id: req.id, accept: action === 'accept'}) });
                         const d = await r.json();
                         if (d.error) { showAlert(d.error); return; }
+                        _incomingFriendReqCache = null;
                         load();
                     } catch(e) { showAlert('请求失败'); }
                 };
