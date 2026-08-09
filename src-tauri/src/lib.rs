@@ -31,6 +31,18 @@ fn env_report() -> serde_json::Value {
     })
 }
 
+// 当前应用版本：返回 tauri.conf.json 的 version 字段。
+// CI 发布构建时（scripts/set-version.mjs）会把该字段临时注入为 Release tag（如 v6）；
+// 本地开发（debug 构建）固定显示 DEV，方便区分构建来源。
+#[tauri::command]
+fn app_version(app: tauri::AppHandle) -> String {
+    if cfg!(debug_assertions) {
+        "DEV".to_string()
+    } else {
+        app.package_info().version.to_string()
+    }
+}
+
 // 切换 DevTools：前端在 Ctrl+Alt+Shift+F12 时调用
 #[cfg(desktop)]
 #[tauri::command]
@@ -128,11 +140,21 @@ fn flash_taskbar_windows(hwnd_val: isize) {
     }
 }
 
-// 弹出原生保存对话框，写入二进制数据
-fn save_with_dialog(app: &tauri::AppHandle, data: &[u8]) -> Result<(), String> {
-    let file_path = app.dialog().file()
-        .add_filter("图片", &["jpg", "jpeg", "png", "gif", "webp", "bmp"])
-        .blocking_save_file();
+// 弹出原生保存对话框，写入二进制数据（filename 可选默认文件名；filter 可选扩展名过滤）
+fn save_with_dialog(
+    app: &tauri::AppHandle,
+    data: &[u8],
+    filename: Option<&str>,
+    filter: Option<(&str, &[&str])>,
+) -> Result<(), String> {
+    let mut builder = app.dialog().file();
+    if let Some((name, exts)) = filter {
+        builder = builder.add_filter(name, exts);
+    }
+    if let Some(name) = filename {
+        builder = builder.set_file_name(name);
+    }
+    let file_path = builder.blocking_save_file();
 
     if let Some(path) = file_path {
         match path {
@@ -145,18 +167,47 @@ fn save_with_dialog(app: &tauri::AppHandle, data: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-// 通过 URL 下载图片（HTTP / HTTPS）
+// 通过 URL 下载图片（HTTP / HTTPS），可带请求头（媒体接口已加权鉴，需传 Authorization）
 #[tauri::command]
-async fn save_image(app: tauri::AppHandle, url: String) -> Result<(), String> {
-    let response = reqwest::get(&url).await.map_err(|e| format!("下载失败: {}", e))?;
+async fn save_image(
+    app: tauri::AppHandle,
+    url: String,
+    headers: Option<Vec<(String, String)>>,
+) -> Result<(), String> {
+    let mut req = reqwest::Client::new().get(&url);
+    if let Some(hs) = headers {
+        for (k, v) in hs {
+            req = req.header(&k, &v);
+        }
+    }
+    let response = req.send().await.map_err(|e| format!("下载失败: {}", e))?;
     let bytes = response.bytes().await.map_err(|e| format!("读取失败: {}", e))?;
-    save_with_dialog(&app, &bytes)
+    save_with_dialog(&app, &bytes, None, Some(("图片", &["jpg", "jpeg", "png", "gif", "webp", "bmp"])))
+}
+
+// 通用文件下载（文件消息；可带默认文件名与鉴权头，不限制扩展名）
+#[tauri::command]
+async fn save_download(
+    app: tauri::AppHandle,
+    url: String,
+    filename: Option<String>,
+    headers: Option<Vec<(String, String)>>,
+) -> Result<(), String> {
+    let mut req = reqwest::Client::new().get(&url);
+    if let Some(hs) = headers {
+        for (k, v) in hs {
+            req = req.header(&k, &v);
+        }
+    }
+    let response = req.send().await.map_err(|e| format!("下载失败: {}", e))?;
+    let bytes = response.bytes().await.map_err(|e| format!("读取失败: {}", e))?;
+    save_with_dialog(&app, &bytes, filename.as_deref(), None)
 }
 
 // 直接保存二进制数据（blob URL 用 canvas 读出后传过来）
 #[tauri::command]
 async fn save_image_data(app: tauri::AppHandle, data: Vec<u8>) -> Result<(), String> {
-    save_with_dialog(&app, &data)
+    save_with_dialog(&app, &data, None, None)
 }
 
 // ===== 多主题系统（用户上传自定义 .css 主题）=====
@@ -431,6 +482,15 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        // 单实例：防止重复启动（很多人关窗进托盘后忘了，会重复开好几个）。
+        // 第二个实例启动时自动退出，并把已存在实例的主窗口调出来。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .invoke_handler(tauri::generate_handler![
             greet,
             toggle_devtools,
@@ -440,8 +500,10 @@ pub fn run() {
             is_window_maximized,
             notify_new_message,
             save_image,
+            save_download,
             save_image_data,
             env_report,
+            app_version,
             import_theme,
             list_user_themes,
             delete_user_theme,

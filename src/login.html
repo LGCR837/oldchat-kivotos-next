@@ -441,12 +441,13 @@
         })();
 
         // ===== 自动登录（直观版自动登录）=====
-        // 若已记住账号密码，登录页加载后自动提交登录（等效于自动点击登录按钮）
+        // 已记住账号密码且未手动退出（oc_auto_login !== '0'）时，登录页加载后自动提交登录。
+        // 手动退出登录会置 oc_auto_login='0'，之后启动停留在登录页等待手动输入。
         (function autoLogin() {
             try {
                 var savedId = localStorage.getItem('savedIdentifier');
                 var savedPwd = localStorage.getItem('savedPassword');
-                if (savedId && savedPwd) {
+                if (savedId && savedPwd && localStorage.getItem('oc_auto_login') !== '0') {
                     var form = document.getElementById('loginForm');
                     if (form) {
                         setTimeout(function() {
@@ -481,6 +482,8 @@
                     localStorage.setItem('oc_access_token', d.access_token);
                     localStorage.setItem('oc_refresh_token', d.refresh_token || '');
                     localStorage.setItem('oc_user', JSON.stringify(d.user || {}));
+                    // 登录成功 → 恢复自动登录（手动退出后再次手动登录即恢复）
+                    try { localStorage.setItem('oc_auto_login', '1'); } catch (e) {}
                     var cb = document.getElementById('rememberAccountCheckbox');
                     if (cb && cb.checked) {
                         try { localStorage.setItem('savedIdentifier', id); localStorage.setItem('savedPassword', pwd); } catch(e) {}

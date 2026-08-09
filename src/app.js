@@ -208,8 +208,9 @@ const DEFAULT_BACKEND_CANDIDATES = [
     'https://oc.mcl0.dpdns.org',
     'http://60.205.94.101:8080'
 ];
-// 媒体文件：优先 60.205.94.101:8080（源服务器，速度最快），降级到 oc.mcl0.dpdns.org
+// 媒体文件：优先 files.mcl0.dpdns.org（CF 原站，非 CDN，URL 不需转义），其次 60.205.94.101:8080（源服务器），最后 oc.mcl0.dpdns.org
 const DEFAULT_MEDIA_CANDIDATES = [
+    'http://files.mcl0.dpdns.org',
     'http://60.205.94.101:8080',
     'http://oc.mcl0.dpdns.org',
     'https://oc.mcl0.dpdns.org'
@@ -248,7 +249,7 @@ function _getSavedMediaCandidates() {
 let BACKEND_CANDIDATES = _getSavedBackendCandidates();
 let MEDIA_CANDIDATES   = _getSavedMediaCandidates();
 let BACKEND_ORIGIN = BACKEND_CANDIDATES[0] || 'http://oc.mcl0.dpdns.org';
-let MEDIA_ORIGIN   = MEDIA_CANDIDATES[0] || 'http://60.205.94.101:8080';
+let MEDIA_ORIGIN   = MEDIA_CANDIDATES[0] || 'http://files.mcl0.dpdns.org';
 const BACKEND_HOST = (function() {
     try { return new URL(BACKEND_ORIGIN).host; } catch (e) { return 'oc.mcl0.dpdns.org'; }
 })();
@@ -265,7 +266,7 @@ function refreshEndpoints() {
     BACKEND_CANDIDATES = _getSavedBackendCandidates();
     MEDIA_CANDIDATES   = _getSavedMediaCandidates();
     BACKEND_ORIGIN = BACKEND_CANDIDATES[0] || 'http://oc.mcl0.dpdns.org';
-    MEDIA_ORIGIN   = MEDIA_CANDIDATES[0] || 'http://60.205.94.101:8080';
+    MEDIA_ORIGIN   = MEDIA_CANDIDATES[0] || 'http://files.mcl0.dpdns.org';
     const host = (function() { try { return new URL(BACKEND_ORIGIN).host; } catch (e) { return BACKEND_HOST; } })();
     WS_HOST    = host;
     API_BASE   = BACKEND_ORIGIN + '/v1';
@@ -655,8 +656,11 @@ function downloadImage(src) {
             img.onerror = function() { console.error('图片加载失败'); };
             img.src = src;
         } else {
-            // HTTP URL：直接传给 Rust 用 reqwest 下载
-            window.__TAURI_INTERNALS__.invoke('save_image', { url: src })
+            // HTTP URL：带鉴权头传给 Rust 用 reqwest 下载（媒体接口已加权鉴）
+            var dlHeaders = null;
+            var dlToken = localStorage.getItem('oc_access_token');
+            if (dlToken) dlHeaders = [['Authorization', 'Bearer ' + dlToken]];
+            window.__TAURI_INTERNALS__.invoke('save_image', { url: src, headers: dlHeaders })
                 .catch(function(err) {
                     console.error('Tauri save_image 失败:', err);
                 });
@@ -738,6 +742,72 @@ function webDownloadImage(src) {
         fetchAndSave(src);
     }
 }
+
+// 初始化 ArtPlayer 视频播放器（容器插入 DOM 后调用；缓存恢复场景先清空重建）
+function initArtPlayers(root) {
+    if (typeof Artplayer === 'undefined' || !root || !root.querySelectorAll) return;
+    root.querySelectorAll('.video-message').forEach(function (el) {
+        if (el.dataset.artInit) return; // 已初始化
+        var src = el.getAttribute('data-src') || '';
+        if (!src) return;
+        el.dataset.artInit = '1';
+        try {
+            new Artplayer({
+                container: el,
+                url: src,
+                autoplay: false,
+                volume: 0.7,
+                muted: false,
+                playsInline: true,
+                fullscreen: true,
+                fullscreenWeb: true,
+                aspectRatio: true,
+                setting: true
+            });
+        } catch (e) {
+            console.error('ArtPlayer 初始化失败:', e);
+            delete el.dataset.artInit;
+        }
+    });
+}
+
+// 下载文件（带鉴权，不再用浏览器直接打开）——文件接口已加权鉴
+function downloadFile(url, filename) {
+    if (!url) return;
+    if (IS_TAURI) {
+        var token = localStorage.getItem('oc_access_token');
+        var headers = token ? [['Authorization', 'Bearer ' + token]] : [];
+        window.__TAURI_INTERNALS__.invoke('save_download', { url: url, filename: filename || null, headers: headers })
+            .catch(function(e) { console.error('save_download 失败:', e); });
+        return;
+    }
+    // 非 Tauri 回退：带鉴权 fetch → blob 保存
+    var opts = {};
+    var tok = localStorage.getItem('oc_access_token');
+    if (tok) opts.headers = { 'Authorization': 'Bearer ' + tok };
+    tauriHttpFetch(url, opts)
+        .then(function(res) { return res.blob(); })
+        .then(function(blob) {
+            var a = document.createElement('a');
+            var objUrl = URL.createObjectURL(blob);
+            a.href = objUrl;
+            a.download = filename || 'download';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function() { URL.revokeObjectURL(objUrl); }, 1000);
+        })
+        .catch(function(e) { console.error('文件下载失败:', e); });
+}
+
+// 文件下载按钮：点击走带权鉴下载（不再 target=_blank 浏览器打开）
+document.addEventListener('click', function(e) {
+    var el = e.target && e.target.closest ? e.target.closest('.file-download-btn') : null;
+    if (!el) return;
+    e.preventDefault();
+    var url = el.getAttribute('data-dl-url');
+    if (url) downloadFile(url, el.getAttribute('data-dl-name') || '');
+});
 
 function openImageViewer(src) {
 	let overlay = document.getElementById('imageOverlay');
@@ -3363,6 +3433,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         localStorage.removeItem('oc_access_token');
         localStorage.removeItem('oc_refresh_token');
         localStorage.removeItem('oc_user');
+        // 手动退出：关闭自动登录，下次启动停在登录页等待手动输入
+        localStorage.setItem('oc_auto_login', '0');
         window.location.href = 'login.html';
     });
 
@@ -4880,6 +4952,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
         // 恢复缓存的 DOM
         messagesContainer.appendChild(cached.fragment);
+        // 视频播放器（ArtPlayer）实例不随 DOM 缓存：清空旧播放器 DOM 后重新初始化
+        cached.fragment.querySelectorAll('.video-message[data-art-init]').forEach(function (el) {
+            el.innerHTML = '';
+            delete el.dataset.artInit;
+        });
+        initArtPlayers(cached.fragment);
         // 恢复底部锚点
         if (messagesContainer.lastChild !== scrollAnchor) {
             messagesContainer.appendChild(scrollAnchor);
@@ -5427,7 +5505,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
 
         if (msgType === 'video') {
-            content = `<video controls style="max-width:200px;"><source src="${cachedResolveMediaUrl(msg.media_url || '')}"></video>`;
+            // ArtPlayer 容器：插入 DOM 后由 initArtPlayers 初始化播放器
+            const vUrl = cachedResolveMediaUrl(msg.media_url || '');
+            content = `<div class="video-message" data-src="${escapeHtml(vUrl)}" style="max-width:200px;width:100%;aspect-ratio:16/9;background:#000;"></div>`;
         } else if (msgType === 'audio') {
             content = `<audio controls style="max-width:200px;" src="${cachedResolveMediaUrl(msg.media_url || '')}"></audio>`;
         } else if (msgType === 'resource' || msgType === 'file') {
@@ -5436,6 +5516,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             let displayText = '';
             let fileUrl = msg.media_url || '';
             const audioRegex = /\.(mp3|m4a|aac|amr|wav|wave|ogg|opus|flac)$/i;
+            const videoRegex = /\.(mp4|3gp|mov|webm|mkv|avi)$/i;
 
             if (msg.body && msg.body.trim().startsWith('{')) {
                 try {
@@ -5481,8 +5562,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 fileName = decodeURIComponent(urlParts.pop()) || '文件';
             }
 
-            // 检测是否为音频文件（按文件名或 URL 扩展名）
+            // 检测是否为音频/视频文件（按文件名或 URL 扩展名）
             const isAudio = audioRegex.test(fileName) || (fileUrl && audioRegex.test(fileUrl));
+            const isVideo = videoRegex.test(fileName) || (fileUrl && videoRegex.test(fileUrl));
 
             if (isAudio && fileUrl) {
                 // 音频文件：渲染为嵌套音频播放器
@@ -5501,13 +5583,19 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 content = displayText
                     ? `<div style="margin-bottom:6px;white-space:pre-wrap;word-break:break-word;">${displayText}</div>${voiceHtml}`
                     : voiceHtml;
+            } else if (isVideo && fileUrl) {
+                // 视频文件：内嵌播放器（无外框消息，渲染后由气泡统一加 no-frame）
+                const vHtml = `<div class="video-message" data-src="${escapeHtml(cachedResolveMediaUrl(fileUrl))}" style="max-width:200px;width:100%;aspect-ratio:16/9;background:#000;"></div>`;
+                content = displayText
+                    ? `<div style="margin-bottom:6px;white-space:pre-wrap;word-break:break-word;">${displayText}</div>${vHtml}`
+                    : vHtml;
             } else {
-                // 非音频：渲染为文件卡片
+                // 非音频/视频：渲染为文件卡片
                 const fileCardHtml = `<div class="file-card">
                     <div class="file-info">
                         <div class="file-name">${escapeHtml(fileName)}</div>
                     </div>
-                    <a href="${cachedResolveMediaUrl(fileUrl)}" target="_blank" class="file-download-btn">⬇</a>
+                    <a class="file-download-btn" data-dl-url="${escapeHtml(cachedResolveMediaUrl(fileUrl))}" data-dl-name="${escapeHtml(fileName || '')}" style="cursor:pointer;">⬇</a>
                 </div>`;
                 content = displayText
                     ? `<div style="margin-bottom:6px;">${displayText}</div>${fileCardHtml}`
@@ -5538,7 +5626,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             // 未知消息类型但有 media_url：回退为文件下载链接
             const fileUrl = msg.media_url || '';
             const fileName = msg.body || fileUrl.split('/').pop();
-            content = `<a href="${fileUrl}" target="_blank" class="file-download-btn" style="color:var(--link-other);">📎 ${escapeHtml(fileName)}</a>`;
+            content = `<a class="file-download-btn" data-dl-url="${escapeHtml(cachedResolveMediaUrl(fileUrl))}" data-dl-name="${escapeHtml(fileName || '')}" style="color:var(--link-other);cursor:pointer;">📎 ${escapeHtml(fileName)}</a>`;
         } else if (msgType === 'text') {
             let body = msg.body || '';
             let quoteHtml = '';
@@ -5571,6 +5659,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                             const nFileName = obj.file.name || obj.file.fileName || '';
                             const nFileUrl = obj.file.url || obj.file.media_url || '';
                             const audioRe = /\.(mp3|m4a|aac|amr|wav|wave|ogg|opus|flac)$/i;
+                            const videoRe = /\.(mp4|3gp|mov|webm|mkv|avi)$/i;
                             if (nFileUrl && (audioRe.test(nFileName) || audioRe.test(nFileUrl))) {
                                 // 嵌套音频文件：渲染为音频播放器
                                 nestedFileHtml = `
@@ -5585,11 +5674,14 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                                         </div>
                                         <audio preload="metadata" src="${cachedResolveMediaUrl(nFileUrl)}"></audio>
                                     </div>`;
+                            } else if (nFileUrl && (videoRe.test(nFileName) || videoRe.test(nFileUrl))) {
+                                // 嵌套视频文件：内嵌播放器（无外框消息）
+                                nestedFileHtml = `<div class="video-message" data-src="${escapeHtml(cachedResolveMediaUrl(nFileUrl))}" style="max-width:200px;width:100%;aspect-ratio:16/9;background:#000;margin-top:6px;"></div>`;
                             } else if (nFileUrl) {
-                                // 嵌套非音频文件：渲染为文件卡片
+                                // 嵌套非音视频文件：渲染为文件卡片
                                 nestedFileHtml = `<div class="file-card" style="margin-top:6px;">
                                     <div class="file-info"><div class="file-name">${escapeHtml(nFileName || '文件')}</div></div>
-                                    <a href="${cachedResolveMediaUrl(nFileUrl)}" target="_blank" class="file-download-btn">⬇</a>
+                                    <a class="file-download-btn" data-dl-url="${escapeHtml(cachedResolveMediaUrl(nFileUrl))}" data-dl-name="${escapeHtml(nFileName || '')}" style="cursor:pointer;">⬇</a>
                                 </div>`;
                             }
                         }
@@ -5719,8 +5811,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const bubble = document.createElement('div');
         bubble.className = 'message-bubble';
         bubble.innerHTML = content;
-        // 红包消息不显示气泡外框（去掉背景/内边距/小箭头），仅保留红包卡片本身
-        if (bubble.querySelector('.red-packet-card')) {
+        // 红包/视频消息不显示气泡外框（去掉背景/内边距/小箭头），仅保留卡片或播放器本身
+        if (bubble.querySelector('.red-packet-card') || bubble.querySelector('.video-message')) {
             bubble.classList.add('no-frame');
         }
         // v3 按钮消息：为内联按钮绑定点击事件
@@ -5874,6 +5966,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
     
         messagesContainer.appendChild(msgDiv);
+        // 初始化本条消息内的 ArtPlayer 视频播放器
+        initArtPlayers(msgDiv);
         // 确保底部锚点始终在末尾，避免图片/长消息追加后锚点不在末尾导致滚动不到底
         if (messagesContainer.lastChild !== scrollAnchor) {
             messagesContainer.appendChild(scrollAnchor);
@@ -7968,6 +8062,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 localStorage.removeItem('oc_access_token');
                 localStorage.removeItem('oc_refresh_token');
                 localStorage.removeItem('oc_user');
+                // 手动退出：关闭自动登录，下次启动停在登录页等待手动输入
+                localStorage.setItem('oc_auto_login', '0');
                 window.location.href = 'login.html';
             }
         });
@@ -8297,7 +8393,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 </div>
                 <div class="settings-item" style="cursor:pointer;" id="aboutSiteLink">
                     <span class="label">官方网站</span>
-                    <span class="value" style="color:var(--accent);text-decoration:underline;">oldchatkivotos.l2.ink</span>
+                    <span class="value" style="color:var(--accent);text-decoration:underline;">ockn.reverie.dpdns.org</span>
+                </div>
+                <div class="settings-item" style="cursor:pointer;" id="aboutVersionRow" title="点击检查更新">
+                    <span class="label">版本号</span>
+                    <span class="value" id="aboutVersionValue" style="color:var(--accent);text-decoration:underline;">获取中…</span>
                 </div>
             </div>
             <div id="aboutEnvWarnings"></div>
@@ -8345,13 +8445,198 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             }
         });
         document.getElementById('aboutSiteLink')?.addEventListener('click', () => {
-            const url = 'https://oldchatkivotos.l2.ink';
+            const url = 'https://ockn.reverie.dpdns.org';
             if (IS_TAURI && tauriInvoke) {
                 tauriInvoke('plugin:opener|open_url', { url }).catch(() => { window.open(url, '_blank'); });
             } else {
                 window.open(url, '_blank');
             }
         });
+        // 版本号：读取 CI 注入的 tauri.conf.json version（Release tag）；点击检查更新
+        const aboutInvoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+        const verEl = document.getElementById('aboutVersionValue');
+        if (aboutInvoke) {
+            aboutInvoke('app_version').then(v => {
+                if (verEl) verEl.textContent = v || '未知';
+            }).catch(() => { if (verEl) verEl.textContent = '未知'; });
+        } else if (verEl) {
+            verEl.textContent = '未知';
+        }
+        document.getElementById('aboutVersionRow')?.addEventListener('click', checkForUpdates);
+    }
+
+    // ===== 版本号 / 检查更新（点击版本号触发，不做自动检查）=====
+    const UPDATE_API_URL = 'https://ockn.reverie.dpdns.org/api/releases';
+    const UPDATE_DOWNLOAD_URL = 'https://ockn.reverie.dpdns.org/download';
+
+    function openExternal(url) {
+        const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+        if (IS_TAURI && invoke) {
+            invoke('plugin:opener|open_url', { url }).catch(() => { window.open(url, '_blank'); });
+        } else {
+            window.open(url, '_blank');
+        }
+    }
+
+    // 拉取最新版本信息（https://** 已在 capabilities 白名单，走 plugin-http 无 CORS 限制）
+    async function fetchReleases() {
+        let res;
+        if (IS_TAURI && typeof tauriHttpFetch === 'function') {
+            res = await tauriHttpFetch(UPDATE_API_URL);
+        } else {
+            res = await fetch(UPDATE_API_URL);
+        }
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        if (!data || !Array.isArray(data.releases) || !data.releases.length) throw new Error('接口返回异常');
+        return data.releases;
+    }
+
+    // 检查更新：点击版本号 → 立即弹出弹窗并转圈加载 → 拉取数据后填充结果
+    // 最新 tag 与当前版本不一致 → 有更新；当前版本在列表中 → 展示其后的全部更新内容，否则只提示最新版本
+    async function checkForUpdates() {
+        const dlg = createUpdateDialog('检查更新');
+        dlg.setLoading('正在检查更新…');
+
+        const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+        let currentVersion = '';
+        if (invoke) {
+            try { currentVersion = (await invoke('app_version')) || ''; } catch (e) {}
+        }
+
+        let releases;
+        try {
+            releases = await fetchReleases();
+        } catch (e) {
+            dlg.setError('检查更新失败：' + (e && e.message ? e.message : e) + '\n请确认网络连接后重试。');
+            return;
+        }
+        const latest = releases[0] || {};
+        const latestTag = latest.tag || '';
+        if (!latestTag) { dlg.setError('未获取到版本信息。'); return; }
+
+        if (currentVersion === latestTag) {
+            dlg.showResult('当前已是最新版本（' + latestTag + '）。');
+            return;
+        }
+
+        // 定位当前版本在列表中的位置；>=0 表示列表中有此版本 → 展示其后的全部更新内容
+        const idx = releases.findIndex(r => (r.tag || '') === currentVersion);
+        const entries = idx >= 0 ? releases.slice(0, idx) : [latest];
+        dlg.showResult('发现新版本 ' + latestTag + '！', entries, currentVersion, idx >= 0, () => {
+            dlg.close();
+            openExternal(UPDATE_DOWNLOAD_URL);
+        });
+    }
+
+    // 更新弹窗：复用 .custom-modal-overlay/.custom-modal 的淡入+下滑动画；
+    // 先以 loading 态弹出，数据到达后由控制器切换到结果/错误态。纯文本渲染防注入。
+    function createUpdateDialog(title) {
+        const overlay = document.createElement('div');
+        overlay.className = 'custom-modal-overlay';
+        const box = document.createElement('div');
+        box.className = 'custom-modal';
+        box.style.maxWidth = '520px';
+        box.style.width = 'calc(100vw - 40px)';
+        box.style.padding = '18px';
+        box.style.display = 'flex';
+        box.style.flexDirection = 'column';
+        box.style.maxHeight = '75vh';
+
+        const head = document.createElement('div');
+        head.style.cssText = 'font-size:15px;font-weight:600;margin-bottom:12px;color:var(--text);flex-shrink:0;';
+        head.textContent = title;
+        const body = document.createElement('div');
+        body.style.cssText = 'overflow-y:auto;flex:1;font-size:13px;line-height:1.6;color:var(--text);';
+        const foot = document.createElement('div');
+        foot.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-shrink:0;';
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = '关闭';
+        const goBtn = document.createElement('button');
+        goBtn.className = 'btn primary';
+        goBtn.textContent = '前往下载';
+        goBtn.style.display = 'none';
+        foot.appendChild(cancelBtn);
+        foot.appendChild(goBtn);
+        box.appendChild(head);
+        box.appendChild(body);
+        box.appendChild(foot);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+
+        function close() { overlay.remove(); }
+        cancelBtn.addEventListener('click', close);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+        return {
+            close,
+            // 加载态：转圈 + 提示文案
+            setLoading(msg) {
+                head.textContent = title;
+                goBtn.style.display = 'none';
+                body.innerHTML = '';
+                const wrap = document.createElement('div');
+                wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:12px;padding:28px 0;color:var(--secondary-text);';
+                const spin = document.createElement('div');
+                spin.style.cssText = 'width:26px;height:26px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:updateSpin 0.8s linear infinite;';
+                const label = document.createElement('div');
+                label.style.fontSize = '13px';
+                label.textContent = msg || '正在检查更新…';
+                wrap.appendChild(spin);
+                wrap.appendChild(label);
+                body.appendChild(wrap);
+            },
+            // 错误态
+            setError(msg) {
+                head.textContent = title;
+                goBtn.style.display = 'none';
+                body.innerHTML = '';
+                body.style.whiteSpace = 'pre-wrap';
+                const t = document.createElement('div');
+                t.style.color = 'var(--danger)';
+                t.textContent = msg;
+                body.appendChild(t);
+            },
+            // 结果态：可带更新内容（纯文本，防注入）
+            showResult(heading, entries, currentVersion, hasChangelog, onDownload) {
+                head.textContent = heading;
+                body.style.whiteSpace = 'normal';
+                body.innerHTML = '';
+                if (entries && entries.length) {
+                    if (currentVersion && !hasChangelog) {
+                        body.appendChild(infoLine('当前版本 ' + currentVersion + ' 不在版本列表中，仅提示最新版本。'));
+                    }
+                    entries.forEach(r => {
+                        const item = document.createElement('div');
+                        item.style.marginBottom = '12px';
+                        const t = document.createElement('div');
+                        t.style.fontWeight = '600';
+                        t.style.marginBottom = '4px';
+                        t.textContent = (r.name || r.tag) + '　' + (r.published_at ? String(r.published_at).slice(0, 10) : '');
+                        item.appendChild(t);
+                        const b = document.createElement('div');
+                        b.style.cssText = 'white-space:pre-wrap;word-break:break-word;color:var(--secondary-text);';
+                        b.textContent = r.body || '（无更新说明）';
+                        item.appendChild(b);
+                        body.appendChild(item);
+                    });
+                    if (onDownload) {
+                        goBtn.style.display = '';
+                        goBtn.onclick = () => onDownload();
+                    }
+                } else {
+                    body.appendChild(infoLine(heading));
+                }
+            }
+        };
+    }
+
+    function infoLine(text) {
+        const el = document.createElement('div');
+        el.style.cssText = 'margin-bottom:12px;color:var(--secondary-text);';
+        el.textContent = text;
+        return el;
     }
 
     // 设置 → 我的收藏（与输入框表情选择器共用同一份 localStorage 数据）

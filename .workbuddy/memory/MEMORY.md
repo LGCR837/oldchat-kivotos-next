@@ -24,12 +24,12 @@ Tauri v2 跨平台桌面 IM 客户端，连接 OldChat 即时通讯后端（原�
 ## 关键架构约束（务必遵守）
 1. **单文件前端架构**：所有业务逻辑在 `src/app.js`（约 7372 行），`src/app.css`（约 3032 行）。全局函数，通过 window.xxx 暴露。有意设计，勿擅自引入打包工具。
 2. **仅 Tauri 单模式**（2026-08-08 起）：请求固定走 `tauri-plugin-http` 直连后端（无 CORS）。`WS_HOST = BACKEND_HOST`、`MEDIA_BASE = MEDIA_ORIGIN`，无同源反代分支。`IS_TAURI` 仅作「Tauri API 是否可用」守卫（fetch 重写 / downloadImage / 窗口按钮 / 通知），**不要再用它区分运行模式**。
-8. **候选地址降级架构**（2026-08-09 起）：`BACKEND_CANDIDATES` / `MEDIA_CANDIDATES` 按优先级排序，`apiFetch` → `_fetchWithCandidates` 遇网络错误 / 5xx 自动降到下一个候选；`<img>` 媒体失败在捕获阶段换源（`dataset.mediaTries` 防环）。默认：普通内容 `oc.mcl0.dpdns.org → https 版 → 60.205.94.101:8080`；媒体 `60.205.94.101:8080 → oc.mcl0.dpdns.org → https 版`。用户可在「设置 → 服务器配置」增删候选（localStorage `oc_custom_base_url` / `oc_custom_media_url`，空格分隔；改后 `refreshEndpoints()` + reload）。
+8. **候选地址降级架构**（2026-08-09 起）：`BACKEND_CANDIDATES` / `MEDIA_CANDIDATES` 按优先级排序，`apiFetch` → `_fetchWithCandidates` 遇网络错误 / 5xx 自动降到下一个候选；`<img>` 媒体失败在捕获阶段换源（`dataset.mediaTries` 防环）。默认：普通内容 `oc.mcl0.dpdns.org → https 版 → 60.205.94.101:8080`；媒体 `files.mcl0.dpdns.org → 60.205.94.101:8080 → oc.mcl0.dpdns.org → https 版`。用户可在「设置 → 服务器配置」增删候选（localStorage `oc_custom_base_url` / `oc_custom_media_url`，空格分隔；改后 `refreshEndpoints()` + reload）。
    - ⚠️ **候选项一律是「裸 origin，不含 `/v1`」**，拼接必须 `base + url`（url 自带 `/v1`）。曾因写成 `base + url.slice(3)` 把 `/v1` 吃掉，导致全部接口 404、纯文本 `404 page not found` 让 `res.json()` 抛出极难懂的 `Failed to execute 'close' on 'ReadableStreamDefaultController': Unexpected non-whitespace character after JSON at position 4`。`_parseCandidates()` 已做归一化（去尾 `/`、去 `/v1`、去重）。`API_BASE` 已无调用方，仅保留兼容。
    - 排查口诀：见到上述 ReadableStream/JSON position N 报错，**先怀疑响应压根不是 JSON**（404/502 纯文本或 HTML），不要去查 Tauri sentinel 流协议或 `res.clone()`。
 3. **NCUID 优先**：OldChat 有 uid/ncuid 两套 ID。`?uid=` 只接受旧 uid；`?ncuid=` 接受 ncuid；POST body 的 to_uid/with_uid 同时接受两种。所有逻辑优先用 ncuid，仅在 `?uid=` 场景降级。
 4. **媒体 URL 统一走 `resolveMediaUrl()`**：映射头像(60.205.94.101:8080)、封面/媒体/emoji/音乐(files.mcl0.dpdns.org) 等。所有 URL 用 http:// 不用 https（后端无 TLS）。
-5. **CDN 节流**：`files.mcl0.dpdns.org` 是付费 CDN，腐竹要求第三方客户端尽量少用，优先用 60.205.94.101:8080（头像）。
+5. **媒体候选顺序（2026-08-09 腐竹更正）**：`files.mcl0.dpdns.org → 60.205.94.101:8080 → oc.mcl0.dpdns.org`。**files 是 CF 原站（非 CDN），URL 不需转义**；旧结论「files 是付费 CDN 尽量少用」已作废。**文件/图片下载接口已加权鉴**（需 Authorization 头）：下载一律走 Rust `save_download`/`save_image`（带 headers）或 `downloadFile()`（带 token fetch），**不再 target=_blank 浏览器直接打开**。
 6. **新增资源域名**必须在 `src-tauri/capabilities/default.json` 的 http:default.allow 白名单中添加，否则 plugin-http 拒绝。
 7. **启动自检 `src-tauri/src/preflight.rs`**（2026-08-08 起）：在 `tauri::Builder` **之前**跑，检测 WebView2/WebKitGTK/图形环境/托盘依赖/数据目录。**绝不能改用 tauri-plugin-dialog 报错**——它自己就依赖 WebView2/GTK；必须用 Win32 `MessageBoxW` 与 Linux 的 zenity 降级链。两处误报陷阱务必保留：`WEBVIEW2_BROWSER_EXECUTABLE_FOLDER` 非空要豁免（企业固定版本部署）；Linux so 检测只是尽力而为（缺库通常在动态链接期就挂了）。自测：`OLDCHAT_PREFLIGHT_DEMO=webview2|webkit|display|runtime`。
 8. **多主题系统（2026-08-09 起，已落地设置选项卡+上传）**：深浅模式轴用 HTML 属性 `data-theme-mode`（值 `light` / `dark`），由 `src/app.js` 的 `applyTheme()` 经 `document.documentElement.setAttribute('data-theme-mode', mode)` 设置；CSS 用 `:root, [data-theme-mode="light"]`（浅）与 `[data-theme-mode="dark"]`（深）声明变量。**默认主题 = `src/app.css` 自身**（顶部带 `@theme` 元数据注释：id/name/description/author[可空]/version[可空]/framework:v1）。所有颜色走语义变量（`--bg/--text/--accent/--link/--danger/--muted/--surface-2/--overlay/...`）；**用户主题 = 单文件纯 .css，宽松模式允许任意 CSS**（不强制仅变量），主题不写 dark 块则深色回退默认。
@@ -48,7 +48,7 @@ Tauri v2 跨平台桌面 IM 客户端，连接 OldChat 即时通讯后端（原�
 - 开发：`npm run tauri dev`（Rust 增量编译；前端 Ctrl+R 刷新；capabilities/tauri.conf 修改需重启）
 - DevTools：Ctrl+Alt+Shift+F12
 - 纯浏览器调试**不再支持**（强依赖 plugin-http 与 Rust 命令），一律用 `npm run tauri dev`
-- Rust 命令：greet, toggle_devtools, minimize_window, toggle_maximize_window, close_window(隐藏到托盘), is_window_maximized, notify_new_message, save_image, save_image_data, env_report(系统/WebView版本+自检告警), import_theme, list_user_themes, delete_user_theme(多主题系统：用户 .css 主题导入/列表/删除，存 app_config_dir/themes/), import_plugin, list_user_plugins, read_plugin_source, delete_user_plugin(插件系统：任意 .js 插件导入/列表/读源码/删除，存 app_config_dir/plugins/，元数据解析 @plugin 头注释)
+- Rust 命令：greet, toggle_devtools, minimize_window, toggle_maximize_window, close_window(隐藏到托盘), is_window_maximized, notify_new_message, save_image(带 headers 权鉴下载), save_download(通用文件下载带鉴权+默认名), save_image_data, env_report(系统/WebView版本+自检告警), app_version(本地 debug 返回 DEV / release 返回注入的 Release tag), import_theme, list_user_themes, delete_user_theme(多主题系统：用户 .css 主题导入/列表/删除，存 app_config_dir/themes/), import_plugin, list_user_plugins, read_plugin_source, delete_user_plugin(插件系统：任意 .js 插件导入/列表/读源码/删除，存 app_config_dir/plugins/，元数据解析 @plugin 头注释)
 
 ## 插件系统（2026-08-09 新增）
 - 用户插件 = 任意 .js 文件，存 `<app_config_dir>/plugins/<id>.js`（Rust 命令管理）

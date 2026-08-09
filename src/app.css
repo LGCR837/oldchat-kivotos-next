@@ -2046,6 +2046,12 @@ body::-webkit-scrollbar {
 	justify-content: flex-end;
 }
 
+/* 检查更新弹窗：加载转圈 */
+@keyframes updateSpin {
+	from { transform: rotate(0deg); }
+	to { transform: rotate(360deg); }
+}
+
 .custom-modal-actions .btn {
 	min-width: 70px;
 	padding: 8px 18px;
