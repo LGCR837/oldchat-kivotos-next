@@ -1270,9 +1270,9 @@ function v2ToV1(url) {
 // 避免「主界面 401 → 跳登录页 → 自动登录 → 又 401」的死循环，且不影响其它已支持 v2 的端点。
 const v2FailedPaths = new Set();
 
-// 接口版本模式（设置 → 通用 → 接口版本）：'v1优先'(默认) / 'v2优先' / '仅v1' / '仅v2'
-//  - v1优先(默认)：优先 v1；若 v1 失败(网络/5xx/路由不存在)且存在 v2 映射，自动回退 v2 重试
-//  - v2优先：优先 v2(有映射时)；失败自动回退 v1
+// 接口版本模式（设置 → 通用 → 接口版本）：'v2优先'(默认) / 'v1优先' / '仅v1' / '仅v2'
+//  - v2优先(默认)：优先 v2(有映射时)；失败自动回退 v1
+//  - v1优先：优先 v1；若 v1 失败(网络/5xx/路由不存在)且存在 v2 映射，自动回退 v2 重试
 //  - 仅v1：始终 v1，绝不走 v2
 //  - 仅v2：始终 v2；若某接口无 v2 版本则直接抛错（"如果没有这个接口直接报错"）
 // v2 实际可行性(2026-08-10 据官方 v2 文档 api202608100558.md 确认)：ECDH 握手派生
@@ -1280,9 +1280,9 @@ const v2FailedPaths = new Set();
 // ②signingString 误用了 token 而非 METHOD。现已修正(见 v2SignHeaders)。WS 仍走 v1
 // （独立大项，暂不随开关迁移）。
 function getApiVersionMode() {
-    let m = 'v1优先';
-    try { m = localStorage.getItem('oc_api_version') || 'v1优先'; } catch (e) {}
-    if (!['v1优先', 'v2优先', '仅v1', '仅v2'].includes(m)) m = 'v1优先';
+    let m = 'v2优先';
+    try { m = localStorage.getItem('oc_api_version') || 'v2优先'; } catch (e) {}
+    if (!['v1优先', 'v2优先', '仅v1', '仅v2'].includes(m)) m = 'v2优先';
     return m;
 }
 
@@ -1400,7 +1400,7 @@ async function maybeDecryptV2Response(res) {
 
 async function apiFetch(url, options = {}) {
     // 接口版本模式（设置 → 通用 → 接口版本）。决定 v1/v2 尝试顺序与回退策略：
-    //  v1优先(默认): [v1, v2]   v2优先: [v2, v1]   仅v1: [v1]   仅v2: [v2]
+    //  v2优先(默认): [v2, v1]   v1优先: [v1, v2]   仅v1: [v1]   仅v2: [v2]
     const mode = getApiVersionMode();
     const hasV2 = mapToV2(url) !== url;
     const method = (options.method || 'GET').toUpperCase();
@@ -1416,7 +1416,7 @@ async function apiFetch(url, options = {}) {
     if (mode === '仅v1') plan = ['v1'];
     else if (mode === '仅v2') plan = ['v2'];
     else if (mode === 'v2优先') plan = (hasV2 && !v2Blocked) ? ['v2', 'v1'] : ['v1'];
-    else plan = (hasV2 && !v2Blocked) ? ['v1', 'v2'] : ['v1']; // v1优先（默认）
+    else plan = (hasV2 && !v2Blocked) ? ['v1', 'v2'] : ['v1']; // v1优先（非默认回退）
 
     let lastRes = null, lastErr = null;
     for (let i = 0; i < plan.length; i++) {
@@ -3749,6 +3749,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 滚动加载历史消息状态
     const convOffset = {};        // convKey → 当前已加载的消息偏移量
     const convHasMore = {};       // convKey → boolean
+    // 群消息 group_seq 增量续拉状态：记住每个群已渲染的最高序号与时间戳
+    const groupLastSeq = {};      // convKey → 已渲染的最高 group_seq
+    const groupLastSeqAt = {};    // convKey → 上次推进 groupLastSeq 的时间戳
+    const groupLastTs = {};       // convKey → 已渲染消息的最大 created_at（v1 时间戳续拉兜底用）
+    // 热窗口：距上次推进超过该时长即视为"冷"，回落为只拉最新一页（绝不翻历史）
+    const GROUP_WARM_MS = 30 * 60 * 1000; // 30 分钟
     // 会话消息 DOM 缓存（切换会话时保留旧消息 DOM）
     const convCache = {};         // convKey → { fragment, scrollTop, seenMsgIds, offset, hasMore, lastTs }
     let isLoadingMore = false;
@@ -4543,6 +4549,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             // 更新会话最后时间戳
             const maxTs = newMsgs.reduce((mx, m) => Math.max(mx, m.created_at || 0), 0);
             if (maxTs > lastRenderedTs) lastRenderedTs = maxTs;
+            // 推进 group_seq 记录，保持热窗口
+            recordGroupSeq(convKey, newMsgs);
             console.log('[WS] 群增量同步补回 ' + newMsgs.length + ' 条消息');
         } catch (e) {
             console.warn('[WS] 群增量同步失败:', e);
@@ -5145,8 +5153,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 thumb_url: d.thumb_url || null,
                 created_at: d.created_at,
                 group_id: groupId,
+                group_seq: d.group_seq || 0,
             };
             appendMessage(msgObj, convKey, seenMsgIds[convKey]);
+            if (d.group_seq) recordGroupSeq(convKey, [msgObj]); // 实时消息推进序号，保持热窗口
             scheduleAutoScroll();
             // 节流标记已读
             debouncedMarkRead('group', groupId);
@@ -5747,6 +5757,28 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         return true;
     }
 
+    // 群消息 group_seq 记录：扫描一批消息，推进该会话的最高序号/时间戳，并刷新热窗口时间戳
+    function recordGroupSeq(convKey, msgs) {
+        if (!convKey) return;
+        let maxSeq = groupLastSeq[convKey] || 0;
+        let maxTs = groupLastTs[convKey] || 0;
+        (msgs || []).forEach(m => {
+            const s = m.group_seq || 0;
+            const t = m.created_at || 0;
+            if (s > maxSeq) maxSeq = s;
+            if (t > maxTs) maxTs = t;
+        });
+        if (maxSeq > (groupLastSeq[convKey] || 0)) groupLastSeq[convKey] = maxSeq;
+        if (maxTs > (groupLastTs[convKey] || 0)) groupLastTs[convKey] = maxTs;
+        groupLastSeqAt[convKey] = Date.now();
+    }
+
+    // 将消息数组规整为 ASC（旧→新）顺序，按 group_seq 优先、created_at 兜底
+    function sortMessagesAsc(msgs) {
+        return (msgs || []).slice().sort((a, b) =>
+            ((a.group_seq || a.created_at || 0) - (b.group_seq || b.created_at || 0)));
+    }
+
     // 后台拉取最新消息（带请求 ID 防竞态）
     // 同步完成后丢弃旧缓存，用最新消息重建 DOM，只缓存最新一页
     let fetchLatestReqId = 0;
@@ -5756,21 +5788,66 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         // 显示同步中指示器
         if (syncIndicator) syncIndicator.style.display = '';
         try {
-            // 私聊历史：API 使用 ?with_ncuid= 参数传 NCUID
-            const historyUrl = type === 'group'
-                ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`
-                : `/v1/direct/messages/v2?with_ncuid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
-            const res = await apiFetch(historyUrl);
-            const data = await res.json();
-            if (data.error) {
-                console.error('[FETCH] API error for', historyUrl, data.error);
-                return;
+            // 群消息：优先按 group_seq 增量续拉（短间隙，如刚切走 / WS 重连后）；
+            // 间隔超过热窗口（GROUP_WARM_MS）或首次进入 → 回落为拉最新一页（offset=0），
+            // 绝不翻历史（与旧行为一致，避免多年未进群时全量拉取）。
+            let historyUrl;
+            let useWarm = false;
+            if (type === 'group') {
+                const lastSeq = groupLastSeq[convKey] || 0;
+                // 暖续拉的前提是：当前已有渲染好的 DOM（从缓存恢复）可追加；
+                // 若无 DOM（缓存被回收 / 首开），after=seq 只会返回"片段"，必须走冷拉取最新一页。
+                const hasDom = messagesContainer.querySelector('.message[data-msg-id]') !== null;
+                const warm = hasDom && lastSeq > 0 && (Date.now() - (groupLastSeqAt[convKey] || 0) < GROUP_WARM_MS);
+                if (warm) {
+                    const mode = getApiVersionMode();
+                    if (mode !== '仅v1') {
+                        // v2 按序号续拉（v2 优先 / v1优先 的 v2 分支 / 仅v2 均走此）
+                        historyUrl = `/v2/groups/messages/after?group_id=${encodeURIComponent(id)}&seq=${lastSeq}&limit=${PAGE_SIZE}`;
+                    } else {
+                        // 仅v1 模式无 v2 端点，回落 v1 时间戳续拉
+                        historyUrl = `/v1/groups/messages/after?group_id=${encodeURIComponent(id)}&after=${groupLastTs[convKey] || 0}&limit=${PAGE_SIZE}`;
+                    }
+                    useWarm = true;
+                }
+            }
+            if (!historyUrl) {
+                // 冷拉取：私聊按 NCUID；群拉最新一页
+                historyUrl = type === 'group'
+                    ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`
+                    : `/v1/direct/messages/v2?with_ncuid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
+            }
+            let res, data;
+            try {
+                res = await apiFetch(historyUrl);
+                data = await res.json();
+                if (data.error) throw new Error(String(data.error));
+            } catch (e) {
+                // 增量续拉失败：回落为最新一页冷拉取（与旧行为一致，避免报错卡死）
+                if (useWarm) {
+                    console.warn('[FETCH] 群消息暖续拉失败，回落最新一页:', e);
+                    useWarm = false;
+                    historyUrl = `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
+                    res = await apiFetch(historyUrl);
+                    data = await res.json();
+                    if (data.error) {
+                        console.error('[FETCH] API error for', historyUrl, data.error);
+                        return;
+                    }
+                } else {
+                    console.error('[FETCH] API error for', historyUrl, e);
+                    return;
+                }
             }
             // 检查是否已切换会话或该请求已过期
             if (reqId !== fetchLatestReqId || currentConv?.key !== convKey) return;
 
-            // ASC 顺序
-            const msgs = (data.messages || []).slice().reverse();
+            // 冷拉取返回 DESC（最新在前）→ 反转 ASC；暖续拉返回 ASC（按 seq/时间）→ 直接排序
+            const msgs = useWarm
+                ? sortMessagesAsc(data.messages)
+                : (data.messages || []).slice().reverse();
+            // 记录已渲染的最高 group_seq / created_at，刷新热窗口
+            if (type === 'group') recordGroupSeq(convKey, msgs);
 
             // ====== 增量更新：检查是否已有缓存 DOM，尝试增量追加新消息 ======
             const existingMsgEls = messagesContainer.querySelectorAll('.message[data-msg-id]');
@@ -6275,7 +6352,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (msgType === 'video') {
             // ArtPlayer 容器：插入 DOM 后由 initArtPlayers 初始化播放器
             const vUrl = cachedResolveMediaUrl(msg.media_url || '');
-            content = `<div class="video-message" data-src="${escapeHtml(vUrl)}" style="width:200px;max-width:100%;aspect-ratio:16/9;background:#000;"></div>`;
+            content = `<div class="video-message" data-src="${escapeHtml(vUrl)}" style="width:320px;max-width:100%;aspect-ratio:16/9;background:#000;"></div>`;
         } else if (msgType === 'audio') {
             content = `<audio controls style="max-width:200px;" src="${cachedResolveMediaUrl(msg.media_url || '')}"></audio>`;
         } else if (msgType === 'resource' || msgType === 'file') {
@@ -6353,7 +6430,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     : voiceHtml;
             } else if (isVideo && fileUrl) {
                 // 视频文件：内嵌播放器（无外框消息，渲染后由气泡统一加 no-frame）
-                const vHtml = `<div class="video-message" data-src="${escapeHtml(cachedResolveMediaUrl(fileUrl))}" style="width:200px;max-width:100%;aspect-ratio:16/9;background:#000;"></div>`;
+                const vHtml = `<div class="video-message" data-src="${escapeHtml(cachedResolveMediaUrl(fileUrl))}" style="width:320px;max-width:100%;aspect-ratio:16/9;background:#000;"></div>`;
                 content = displayText
                     ? `<div style="margin-bottom:6px;white-space:pre-wrap;word-break:break-word;">${displayText}</div>${vHtml}`
                     : vHtml;
@@ -6444,7 +6521,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                                     </div>`;
                             } else if (nFileUrl && (videoRe.test(nFileName) || videoRe.test(nFileUrl))) {
                                 // 嵌套视频文件：内嵌播放器（无外框消息）
-                                nestedFileHtml = `<div class="video-message" data-src="${escapeHtml(cachedResolveMediaUrl(nFileUrl))}" style="width:200px;max-width:100%;aspect-ratio:16/9;background:#000;margin-top:6px;"></div>`;
+                                nestedFileHtml = `<div class="video-message" data-src="${escapeHtml(cachedResolveMediaUrl(nFileUrl))}" style="width:320px;max-width:100%;aspect-ratio:16/9;background:#000;margin-top:6px;"></div>`;
                             } else if (nFileUrl) {
                                 // 嵌套非音视频文件：渲染为文件卡片
                                 nestedFileHtml = `<div class="file-card" style="margin-top:6px;">
@@ -8850,8 +8927,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     <span class="label">接口版本</span>
                     <span class="value">
                         <select id="apiVersionSelect" style="max-width:150px;padding:4px 8px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;cursor:pointer;">
-                            <option value="v1优先">v1优先（默认）</option>
-                            <option value="v2优先">v2优先</option>
+                            <option value="v1优先">v1优先</option>
+                            <option value="v2优先">v2优先（默认）</option>
                             <option value="仅v1">仅v1</option>
                             <option value="仅v2">仅v2</option>
                         </select>

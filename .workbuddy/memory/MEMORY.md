@@ -34,15 +34,16 @@ Tauri v2 跨平台桌面 IM 客户端，连接 OldChat 后端（Android `com.im.
 9. **v2 API 迁移**（2026-08-10 实现完成，附 4 档开关）：脚手架齐备、派生算法正确（ECDH → `macKey=sha256(secret||"mac")` 与官方 §4.1 一致）。
    - `V1_TO_V2` 映射表（app.js ~1167）覆盖几乎所有业务端点。
    - **已修复的两个根因 bug**（对照官方 §4.4）：① `v2SignHeaders()` 现在**带 `X-Session`**（handshake 的 session_id，官方 `v2SignMiddleware` 强制有效）；② `signingString` 改为 `METHOD+"\n"+PATH+"\n"+TS+"\n"+NONCE`（旧实现错用 token 开头 → `bad_signature`）。`X-Enc` 信封加密与 `/v2/gateway` 折叠仍为**可选**，暂缓（当前 v2 走明文 body + 签名 + X-Session）。
-   - **接口版本开关**（设置 → 通用 → 接口版本，存 `localStorage oc_api_version`，默认 `v1优先`）：
-     - `v1优先`(默认)：plan `[v1,v2]`，v1 优先、v1 失败(网络/5xx/路由不存在)且存在 v2 映射时回退 v2 重试。
-     - `v2优先`：plan `[v2,v1]`，v2 优先、失败回退 v1。
+   - **接口版本开关**（设置 → 通用 → 接口版本，存 `localStorage oc_api_version`，默认 `v2优先`）：
+     - `v2优先`(默认)：plan `[v2,v1]`，v2 优先、失败回退 v1。
+     - `v1优先`：plan `[v1,v2]`，v1 优先、v1 失败(网络/5xx/路由不存在)且存在 v2 映射时回退 v2 重试。
      - `仅v1`：始终 v1。
      - `仅v2`：始终 v2；某接口无 v2 版本则 **直接抛错**（"如果没有这个接口直接报错"）。`strictV2` 模式抑制 `_fetchWithCandidates` 内部的 v2→v1 熔断回退，让错误上浮。
      - 实现：`getApiVersionMode()` 决定 `plan`；`apiFetch` 按 plan 循环尝试，每次独立 headers 副本；`_isFallbackable()` 判定是否值得回退（网络/5xx/非JSON-404 才回退，4xx/401 不回退）；端点级熔断 `v2FailedPaths` 仍保留（非 仅v2 模式下 v2 失败则本次会话跳过该端点）。切换开关即时生效并清空 `v2FailedPaths`。
    - **会话失效自愈**：`window.__wsSession.clear()` 新增；`_fetchWithCandidates` 遇 v2 401 且响应含 `invalid_session|missing_session` 时清本地会话，下次 v2 请求自动重新握手。
    - **WS 仍走 v1**（`/v1/ws?token=&sid=`）；v2 WS 需 `sid=`+加密帧，独立大项，暂不随开关迁移。WS 连接不随接口版本开关改变。
    - 经验：曾误以为 v2 失败是「macKey 派生未对齐」，实际派生算法正确，仅请求头装配错；排查 v2 问题时优先核对官方 §4.4 的 `X-Session` 与 `signingString` 公式，而非怀疑 ECDH 派生。
+10. **群消息同步（2026-08-10 改为 group_seq 增量续拉）**：`fetchLatestMessages` 群分支按 `GROUP_WARM_MS=30min` 热窗口决定冷热——热（有 DOM + 有 lastSeq + 未超窗口）用 `/v2/groups/messages/after?seq=` 续拉（仅v1 模式回落 `/v1/groups/messages/after?after=<ts>`），冷（首开/超窗口/无 DOM）仍 `offset=0&limit=30` 最新一页。**刻意不翻历史**：超窗口或多年未进群 = 只拉最新 30 条，与旧行为一致。WS 实时群消息与 `syncGroupAfterReconnect` 补齐后都 `recordGroupSeq` 推进序号+刷新热窗口。状态 `groupLastSeq/groupLastSeqAt/groupLastTs` 皆内存态（重启清零 → 首开即冷）。direct 仍走整页拉，未改。
 
 ## 后端地址
 API 根 `http://oc.mcl0.dpdns.org/v1`；头像 `http://60.205.94.101:8080/v1/uploads/avatars/`；媒体 `http://files.mcl0.dpdns.org/`；WebSocket `ws://oc.mcl0.dpdns.org/ws`（重连 5s→10s→20s→30s）。
