@@ -473,6 +473,9 @@ function debounce(fn, wait) {
     function processElement(el) {
         if (!(el instanceof Element)) return;
         const tag = (el.tagName || '').toLowerCase();
+        // 视频/音轨交给播放器原生流式加载：MediaCache 把整段视频读进内存 blob 是负优化，
+        // 且会打断 ArtPlayer 的加载（先换 GIF 占位再换 blob），故直接跳过。
+        if (tag === 'video' || tag === 'source') return;
         const MEDIA_ATTRS = ['src', 'poster'];
         MEDIA_ATTRS.forEach(attr => {
             const raw = el.getAttribute('data-mc-orig-' + attr);
@@ -541,7 +544,7 @@ function debounce(fn, wait) {
                             if (n.nodeType === 1) {
                                 processElement(n);
                                 if (n.querySelectorAll) {
-                                    n.querySelectorAll('img,audio,video,source,track,link[rel~="icon"],link[rel~="apple-touch-icon"]').forEach(processElement);
+                                    n.querySelectorAll('img,audio,track,link[rel~="icon"],link[rel~="apple-touch-icon"]').forEach(processElement);
                                 }
                             }
                         });
@@ -558,7 +561,7 @@ function debounce(fn, wait) {
                     attributeFilter: ['src', 'poster', 'style', 'href']
                 });
                 // 初次扫描
-                document.body.querySelectorAll('img,audio,video,source,track').forEach(processElement);
+                document.body.querySelectorAll('img,audio,track').forEach(processElement);
             }
         } catch (e) { console.error('[MediaCache] observer init fail', e); }
     }
@@ -6217,7 +6220,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (msgType === 'video') {
             // ArtPlayer 容器：插入 DOM 后由 initArtPlayers 初始化播放器
             const vUrl = cachedResolveMediaUrl(msg.media_url || '');
-            content = `<div class="video-message" data-src="${escapeHtml(vUrl)}" style="max-width:200px;width:100%;aspect-ratio:16/9;background:#000;"></div>`;
+            content = `<div class="video-message" data-src="${escapeHtml(vUrl)}" style="width:200px;max-width:100%;aspect-ratio:16/9;background:#000;"></div>`;
         } else if (msgType === 'audio') {
             content = `<audio controls style="max-width:200px;" src="${cachedResolveMediaUrl(msg.media_url || '')}"></audio>`;
         } else if (msgType === 'resource' || msgType === 'file') {
@@ -6295,7 +6298,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     : voiceHtml;
             } else if (isVideo && fileUrl) {
                 // 视频文件：内嵌播放器（无外框消息，渲染后由气泡统一加 no-frame）
-                const vHtml = `<div class="video-message" data-src="${escapeHtml(cachedResolveMediaUrl(fileUrl))}" style="max-width:200px;width:100%;aspect-ratio:16/9;background:#000;"></div>`;
+                const vHtml = `<div class="video-message" data-src="${escapeHtml(cachedResolveMediaUrl(fileUrl))}" style="width:200px;max-width:100%;aspect-ratio:16/9;background:#000;"></div>`;
                 content = displayText
                     ? `<div style="margin-bottom:6px;white-space:pre-wrap;word-break:break-word;">${displayText}</div>${vHtml}`
                     : vHtml;
@@ -6386,7 +6389,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                                     </div>`;
                             } else if (nFileUrl && (videoRe.test(nFileName) || videoRe.test(nFileUrl))) {
                                 // 嵌套视频文件：内嵌播放器（无外框消息）
-                                nestedFileHtml = `<div class="video-message" data-src="${escapeHtml(cachedResolveMediaUrl(nFileUrl))}" style="max-width:200px;width:100%;aspect-ratio:16/9;background:#000;margin-top:6px;"></div>`;
+                                nestedFileHtml = `<div class="video-message" data-src="${escapeHtml(cachedResolveMediaUrl(nFileUrl))}" style="width:200px;max-width:100%;aspect-ratio:16/9;background:#000;margin-top:6px;"></div>`;
                             } else if (nFileUrl) {
                                 // 嵌套非音视频文件：渲染为文件卡片
                                 nestedFileHtml = `<div class="file-card" style="margin-top:6px;">

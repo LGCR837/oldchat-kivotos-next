@@ -50,3 +50,4 @@ API 根 `http://oc.mcl0.dpdns.org/v1`；头像 `http://60.205.94.101:8080/v1/upl
 ## 参考文档
 - docs/aidocs/dev1.md — AI 接手文档 v1（前任编写，最全）
 - docs/oldchat-docs-20260809/{mcl0,nx1,nx2,nx3}/ — 后端 API / Android 逆向架构文档
+- docs/mcl0-new-docs/api202608100558.md — **官方完整 v2 服务端 API 文档（2026-08-10 发布，最权威）**：含基础约定/鉴权/ECDH 握手/v2 签名/WS/各业务接口表与返回示例、限流(24.2)。要点：朋友圈 `GET /v2/moments/comments?moment_id=` 仍**仅单条**、无批量评论接口、`moments/user` 未给 `comment_count` 字段 → 评论数 N+1 只能靠客户端懒加载规避，无服务端批量解；限流仅对 注册/登录/发码/上传下载 生效（媒体全局限速），对普通读接口无明确配额。v2 接口多需签名链（macKey，待解决，见约束9）。
