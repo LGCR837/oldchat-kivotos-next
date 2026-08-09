@@ -4079,6 +4079,90 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 }
 `;
 
+    const QQ_BLUE_CSS = `
+:root, [data-theme-mode="light"] {
+  --bg: #FFFFFF;
+  --sidebar-bg: #FFFFFF;
+  --chat-bg: #FFFFFF;
+  --header-bg: #4C8BFF;                                    /* 渐变兜底纯色（取渐变起点） */
+  --header-gradient: linear-gradient(to right, #4C8BFF, #20D1FE);
+  --text: #1A1A1A;                                         /* 白底正文用近黑 */
+  --secondary-text: #6B7280;
+  --border: #E3E8EF;
+  --hover: #F0F4F8;
+  --active: #E3ECF5;
+  --shadow: 0 2px 6px rgba(0,0,0,0.08);
+  --msg-other-bg: #F2F4F7;
+  --bubble-other: #E5E5E5;                                 /* 对方消息：浅灰底 */
+  --bubble-self: #09B8F5;                                  /* 自己消息：蓝底 */
+  --accent: #12B7F5;                                       /* 主按钮 */
+  --accent-dark: #0FA0D8;                                  /* 主按钮 hover */
+  --header-height: 46px;
+  --link-other: #0E8FD0;
+  --link-self: #E6F8FF;
+  --scrollbar-thumb: rgba(0,0,0,0.25);
+  --scrollbar-thumb-hover: rgba(0,0,0,0.4);
+  --rp-grad-start: #4C8BFF;
+  --rp-grad-end: #20D1FE;
+  --panel-bg: #FFFFFF;
+  --border-color: #E3E8EF;
+  --input-bg: #FFFFFF;
+  --title-bg: #E5E5E5;                                      /* 称号：浅灰底 */
+  --title-text: #000000;                                    /* 称号：黑字 */
+  --on-accent: #FFFFFF;                                    /* 自己气泡（蓝底）之上的白字 */
+  --link: #0E8FD0;
+  --link-hover: #12B7F5;
+  --danger: #FF5B5B;
+  --muted: #8A93A2;
+  --surface-2: #F0F4F8;
+  --overlay: rgba(0,0,0,0.5);
+}
+
+/* 其他按钮：#878B99 底 + 白字（用 :not(.primary) 避免覆盖主按钮，主按钮走 --accent） */
+.btn:not(.primary) {
+  background: #878B99 !important;
+  color: #FFFFFF !important;
+}
+.btn:not(.primary):hover {
+  background: #757A88 !important;
+  color: #FFFFFF !important;
+}
+
+/* 对方消息：浅灰底 + 黑字（基类 .message-bubble 硬编码 white，这里压回黑色） */
+.message.other .message-bubble {
+  color: #000000 !important;
+}
+
+/* 去掉自定义字体，改用默认非衬线（system-ui 栈，不含 zyyt 网络字体）。
+   必须用 * 全元素选择器 + !important 才能盖掉 app.css 里挂在 .message-bubble/.sidebar-header 等
+   具体元素上的 zyyt；排除 Font Awesome 图标类避免图标变“口”。 */
+*:not(.fa-solid):not(.fa-regular):not(.fa-brands):not(.fa):not(.fas):not(.far):not(.fab):not(.fa-classic) {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", "微软雅黑", sans-serif !important;
+}
+
+/* 对方消息的引用块：#D6D6D7 浅灰底 + 黑字（自己消息不变） */
+.message.other .quote-block,
+.message.other .quote-block-image {
+  background: #D6D6D7 !important;
+  color: #000000 !important;
+  border-left-color: #BFC0C2 !important;
+}
+.message.other .quote-block .quote-sender,
+.message.other .quote-block-image .quote-sender {
+  color: #000000 !important;
+}
+
+/* 输入栏 图片/表情/更多：去掉灰底，前景用原本的灰 (#878B99)，hover 仅留极淡灰蒙版 */
+.input-buttons .btn:not(.primary) {
+  background: transparent !important;
+  color: #878B99 !important;
+}
+.input-buttons .btn:not(.primary):hover {
+  background: rgba(135,139,153,0.12) !important;
+  color: #878B99 !important;
+}
+`;
+
     const BUILTIN_THEMES = {
         'modern-block': {
             id: 'modern-block',
@@ -4089,12 +4173,23 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             framework: 'v1',
             builtin: true,
             css: MODERN_BLOCK_CSS
+        },
+        'qqblue': {
+            id: 'qqblue',
+            name: 'QQ Blue',
+            description: '经典 QQ 蓝',
+            author: 'Aoharu Reverie',
+            version: '1.0.0',
+            framework: 'v1',
+            builtin: true,
+            showDayNightToggle: false,
+            css: QQ_BLUE_CSS
         }
     };
 
     // 解析 @theme 注释元数据（与 parseThemeMeta 同规则，但此处不依赖设置块作用域）
     function parseBuiltinMeta(css) {
-        const meta = { id: 'default', name: '', description: '', author: '', version: '', framework: 'v1' };
+        const meta = { id: 'default', name: '', description: '', author: '', version: '', framework: 'v1', showDayNightToggle: '' };
         const re = /@theme\s+(\w+)\s*:\s*(.*)/;
         for (const raw of (css || '').split('\n')) {
             const s = raw.trim().replace(/^\*\s?/, '').trim();
@@ -4137,10 +4232,29 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // 应用某个主题：default 清除覆盖回退 app.css；内置/用户主题注入其 CSS
     function applyThemeById(id) {
         localStorage.setItem('themeId', id);
-        if (id === 'default') { clearThemeStyle(); return; }
+        if (id === 'default') { clearThemeStyle(); updateThemeToggleVisibility(id); return; }
         const css = USER_THEMES[id] || (BUILTIN_THEMES[id] && BUILTIN_THEMES[id].css);
         if (css) injectThemeStyle(css);
         else clearThemeStyle();
+        updateThemeToggleVisibility(id);
+    }
+
+    // 根据主题元数据决定是否显示「昼夜切换」按钮。
+    // 规则：内置主题看 showDayNightToggle（布尔）；用户主题解析 CSS 内 @theme showDayNightToggle 注释；
+    // 未声明 / 'true' / 缺省 → 显示；显式 false → 隐藏。
+    function updateThemeToggleVisibility(themeId) {
+        const btn = document.getElementById('themeToggleBtn');
+        if (!btn) return;
+        let show = true;
+        const builtin = BUILTIN_THEMES[themeId];
+        if (builtin && 'showDayNightToggle' in builtin) {
+            show = !!builtin.showDayNightToggle;
+        } else if (themeId && themeId !== 'default' && USER_THEMES[themeId]) {
+            const raw = parseThemeMeta(USER_THEMES[themeId]).showDayNightToggle;
+            if (raw === false || raw === 'false') show = false;
+            else if (raw === true || raw === 'true') show = true;
+        }
+        btn.style.display = show ? '' : 'none';
     }
 
     // 从后端读取已安装用户主题并还原上次选择
@@ -9175,7 +9289,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
     // ===== 主题设置页 =====
     function parseThemeMeta(css) {
-        const meta = { id: '', name: '', description: '', author: '', version: '', framework: '' };
+        const meta = { id: '', name: '', description: '', author: '', version: '', framework: '', showDayNightToggle: '' };
         const lines = (css || '').split('\n');
         const re = /@theme\s+(\w+)\s*:\s*(.*)/;
         for (const raw of lines) {

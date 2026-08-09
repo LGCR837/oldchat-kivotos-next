@@ -154,7 +154,11 @@ body::-webkit-scrollbar {
 	height: var(--header-height);
 	padding: 0 10px;
 	gap: 4px;
-	background: var(--header-bg);
+	background-color: var(--header-bg);
+	background-image: var(--header-gradient, none);
+	background-attachment: fixed;
+	background-size: 100% 100%;
+	background-repeat: no-repeat;
 	flex-wrap: nowrap;
 	position: relative;
 	z-index: 1;
@@ -445,7 +449,11 @@ body::-webkit-scrollbar {
 	padding: 0 16px;
 	font-size: 15px;
 	font-weight: 500;
-	background: var(--header-bg);
+	background-color: var(--header-bg);
+	background-image: var(--header-gradient, none);
+	background-attachment: fixed;
+	background-size: 100% 100%;
+	background-repeat: no-repeat;
 	color: #ffffff;
 	display: flex;
 	align-items: center;
@@ -532,6 +540,7 @@ body::-webkit-scrollbar {
 .messages {
 	flex: 1;
 	overflow-y: auto;
+	overflow-x: hidden;
 	min-height: 0;
 	padding: 16px;
 	display: flex;
