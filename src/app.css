@@ -2250,12 +2250,14 @@ body::-webkit-scrollbar {
 	position: relative;
 	height: 24px;
 	line-height: 24px;
+	animation: typingEnter 0.3s ease both;
 }
 
 .typing-indicator .typing-avatars-container {
 	position: relative;
 	height: 24px;
 	flex-shrink: 0;
+	transition: width 0.25s ease;
 }
 
 .typing-indicator .typing-avatar {
@@ -2279,6 +2281,17 @@ body::-webkit-scrollbar {
 	position: absolute;
 	top: 50%;
 	transform: translateY(-50%);
+	transition: left 0.25s ease;
+}
+
+/* 新头像入场：淡入 + 缩放，避免“凭空弹出”造成的横向视觉跳变 */
+.typing-indicator .typing-avatar.typing-avatar-enter {
+	animation: typingAvatarIn 0.25s ease both;
+}
+
+@keyframes typingAvatarIn {
+	from { opacity: 0; transform: scale(0.5); }
+	to { opacity: 1; transform: scale(1); }
 }
 
 .typing-indicator .typing-dots span {
@@ -2295,6 +2308,36 @@ body::-webkit-scrollbar {
 @keyframes typingDot {
 	0%, 60%, 100% { opacity: 0.3; }
 	30% { opacity: 1; }
+}
+
+/* 出场：淡出 + 向下位移（与入场对称，方向相反） */
+.typing-indicator.typing-leaving {
+	animation: typingLeave 0.25s ease both;
+}
+
+@keyframes typingLeave {
+	from { opacity: 1; transform: translateY(0); }
+	to { opacity: 0; transform: translateY(6px); }
+}
+
+@keyframes typingEnter {
+	from { opacity: 0; transform: translateY(6px); }
+	to { opacity: 1; transform: translateY(0); }
+}
+
+/* 尊重系统“减少动态效果”偏好 */
+@media (prefers-reduced-motion: reduce) {
+	.typing-indicator,
+	.typing-indicator .typing-dots span {
+		animation: none !important;
+	}
+	.typing-indicator .typing-avatars-container,
+	.typing-indicator .typing-dots {
+		transition: none !important;
+	}
+	.typing-indicator .typing-avatar.typing-avatar-enter {
+		animation: none !important;
+	}
 }
 
 @keyframes syncPulse {
@@ -3137,6 +3180,38 @@ body::-webkit-scrollbar {
 }
 .checkin-card .checkin-action-btn.liked {
     color: var(--danger);
+}
+
+/* ===== 系统通知页（发现页子页，视觉参考签到墙） ===== */
+.notice-wall {
+    max-width: 600px;
+}
+.notice-card {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+.notice-card .notice-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #1f1f1f;
+    margin-bottom: 6px;
+}
+.notice-card .notice-body {
+    font-size: 14px;
+    color: #333333;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.notice-card .notice-time {
+    font-size: 11px;
+    color: var(--muted);
+    text-align: right;
+    margin-top: 8px;
 }
 
 /* ===== 联系人主面板 ===== */

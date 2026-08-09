@@ -336,6 +336,9 @@ function debounce(fn, wait) {
     const DB_NAME = 'oldchat_media_cache_v1';
     const STORE_NAME = 'media';
     const memCache = new Map();  // url -> Blob
+    // 1x1 透明 GIF：用于在 observer 拦截到 <img src> 的瞬间抢先替换原生 src，
+    // 阻断浏览器向媒体服务器发起原生请求（否则每次重渲染都会先白打一次原生 http，被 no-store 禁缓存 → 请求量爆炸）。
+    const MEDIA_PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
     let dbPromise = null;
     let mediasOriginSet = [];   // 延迟初始化，DOMContentLoaded 之后设置
 
@@ -387,37 +390,62 @@ function debounce(fn, wait) {
         return false;
     }
 
-    async function fetchAndStore(url) {
-        // 媒体缓存预取：走 tauriHttpFetch（Tauri 下 plugin-http 无 CORS 限制，媒体域名已在 capabilities 白名单）。
-        // 之前用原生 fetch + mode:'cors' 会被媒体服务器（无 CORS 头）拦截 → 缓存失效 + console 报错。
+    // 根据已解析的绝对媒体 URL，生成候选源列表（命中 MEDIA_CANDIDATES 中某一个后，按顺序拼出后续候选）
+    function mediaCandidateUrls(url) {
+        const list = [];
+        for (const base of MEDIA_CANDIDATES) {
+            if (url.indexOf(base) === 0) {
+                const path = url.slice(base.length);
+                for (let i = MEDIA_CANDIDATES.indexOf(base); i < MEDIA_CANDIDATES.length; i++) {
+                    list.push(MEDIA_CANDIDATES[i] + path);
+                }
+                break;
+            }
+        }
+        if (list.length === 0) list.push(url);
+        return Array.from(new Set(list));
+    }
+
+    // 抓取单个 URL（tauriHttpFetch 优先，失败兜底 XHR）
+    async function fetchOne(u) {
         let blob;
-        let mime = '';
         try {
-            const resp = await tauriHttpFetch(url);
-            if (!resp || !resp.ok) throw new Error('fetch failed');
-            mime = resp.headers ? (resp.headers.get('content-type') || '') : '';
+            const resp = await tauriHttpFetch(u);
+            if (!resp || !resp.ok) throw new Error('fetch status ' + (resp && resp.status));
             blob = await resp.blob();
         } catch (e) {
-            // fetch 失败兜底：XHR
             blob = await new Promise((resolve, reject) => {
                 const xhr = new XMLHttpRequest();
-                xhr.open('GET', url, true);
+                xhr.open('GET', u, true);
                 xhr.responseType = 'blob';
                 xhr.onload = () => {
-                    if (xhr.status >= 200 && xhr.status < 300) {
-                        mime = xhr.getResponseHeader('content-type') || '';
-                        resolve(xhr.response);
-                    } else reject(new Error('xhr status ' + xhr.status));
+                    if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.response);
+                    else reject(new Error('xhr status ' + xhr.status));
                 };
-                xhr.onerror = () => reject(xhr.statusText || 'network');
+                xhr.onerror = () => reject(new Error('xhr network'));
                 xhr.send();
             });
         }
-        if (blob && blob.size) {
-            memCache.set(url, blob);
-            idbPut(url, blob, mime).catch(() => {});
-        }
         return blob;
+    }
+
+    async function fetchAndStore(url) {
+        // 媒体缓存预取：走 tauriHttpFetch（plugin-http 无 CORS 限制，媒体域名已在 capabilities 白名单）。
+        // 关键修复：候选源降级在【缓存层内部】完成（每个唯一 URL 只抓一次），
+        // 避免每个渲染点都触发全局 error 监听的候选链、把请求量放大 2~4 倍。
+        const candidates = mediaCandidateUrls(url);
+        let lastErr;
+        for (const c of candidates) {
+            try {
+                const blob = await fetchOne(c);
+                if (blob && blob.size) {
+                    memCache.set(url, blob);
+                    idbPut(url, blob, blob.type).catch(() => {});
+                    return blob;
+                }
+            } catch (e) { lastErr = e; }
+        }
+        throw lastErr || new Error('all media candidates failed: ' + url);
     }
 
     async function getBlob(url) {
@@ -452,10 +480,19 @@ function debounce(fn, wait) {
                 // 标记正在处理中，防止重复触发
                 if (el.getAttribute('data-mc-' + attr + '-loading') === '1') return;
                 el.setAttribute('data-mc-' + attr + '-loading', '1');
+                // 关键修复：立即把原生 src 换成 1x1 透明占位，抢在浏览器向媒体服务器发起原生请求之前。
+                // 否则每次重渲染都会先白打一次原生 http（被 no-store 禁缓存），再被 observer 换成 blob → 请求量爆炸。
+                el.setAttribute(attr, MEDIA_PLACEHOLDER);
                 getCachedUrlOrPass(val, (newUrl) => {
-                    if (newUrl !== val) {
-                        try { el.setAttribute(attr, newUrl); } catch (e) {}
-                    }
+                    try {
+                        if (newUrl && newUrl.indexOf('blob:') === 0) {
+                            // 命中缓存 / 抓取成功：用 blob URL，零网络
+                            el.setAttribute(attr, newUrl);
+                        } else {
+                            // 缓存未命中或抓取失败：恢复原始远程地址，降级为旧行为（全局 error 监听负责候选链）
+                            el.setAttribute(attr, val);
+                        }
+                    } catch (e) {}
                     el.removeAttribute('data-mc-' + attr + '-loading');
                 });
             }
@@ -2713,7 +2750,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             media +
                             '<div style="display:flex;gap:16px;margin-top:10px;align-items:center;">' +
                                 '<button class="sp-like-btn" data-moment-id="' + (m.id || '') + '" data-liked="' + (m.liked ? '1' : '0') + '" style="background:none;border:none;color:' + (m.liked ? '#ff4757' : 'var(--secondary-text)') + ';font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px;"><i class="' + (m.liked ? 'fa-solid' : 'fa-regular') + ' fa-heart"></i> ' + (m.likes || 0) + '</button>' +
-                                '<button class="sp-comment-btn" data-moment-id="' + (m.id || '') + '" style="background:none;border:none;color:var(--secondary-text);font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px;"><i class="fa-solid fa-comment"></i> ' + (m.comment_count || m.comments_count || m.total_comments || m.reply_count || (m.comments && m.comments.length) || 0) + '</button>' +
+                                '<button class="sp-comment-btn" data-moment-id="' + (m.id || '') + '" style="background:none;border:none;color:var(--secondary-text);font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px;"><i class="fa-solid fa-comment"></i> ' + (function(){ var c = m.comment_count || m.comments_count || m.total_comments || m.reply_count || (m.comments && m.comments.length) || 0; return c > 0 ? c : '-'; })() + '</button>' +
                             '</div>' +
                             '</div>';
                     });
@@ -2805,18 +2842,32 @@ document.addEventListener('DOMContentLoaded', async () => {
                         openMomentCommentsPanel(momentId, btn);
                     });
                 });
-                // 评论数校正：服务端 moments/user 未必填充 comment_count，逐个回查真实数量
-                scroll.querySelectorAll('.sp-comment-btn').forEach(async (btn) => {
-                    const momentId = btn.dataset.momentId;
-                    if (!momentId) return;
+                // 评论数懒加载：默认显示 '-'，仅当用户滚动到该动态（进入可视区）时才补查真实数量。
+                // 避免打开主页时对每条动态各发一次 moments/comments 的 N+1 请求（服务器压力的主要来源）。
+                if (window.__spCommentObserver) { try { window.__spCommentObserver.disconnect(); } catch (e) {} }
+                const spCommentObserver = new IntersectionObserver((entries) => {
+                    entries.forEach(entry => {
+                        if (!entry.isIntersecting) return;
+                        const btn = entry.target;
+                        spCommentObserver.unobserve(btn);
+                        const momentId = btn.dataset.momentId;
+                        if (!momentId) return;
+                        const cur = parseInt((btn.textContent || '').replace(/\D/g, '')) || 0;
+                        if (cur > 0) return; // 服务端已给非零计数则信任之，跳过
+                        apiFetch('/v1/moments/comments?moment_id=' + encodeURIComponent(momentId))
+                            .then(r => r.json())
+                            .then(data => {
+                                const n = (data.comments || []).length;
+                                if (n > 0) btn.innerHTML = '<i class="fa-solid fa-comment"></i> ' + n;
+                            })
+                            .catch(() => {});
+                    });
+                }, { root: scroll, rootMargin: '120px', threshold: 0.01 });
+                window.__spCommentObserver = spCommentObserver;
+                scroll.querySelectorAll('.sp-comment-btn').forEach(btn => {
                     const cur = parseInt((btn.textContent || '').replace(/\D/g, '')) || 0;
-                    if (cur > 0) return; // 已有非零计数则信任之
-                    try {
-                        const res = await apiFetch('/v1/moments/comments?moment_id=' + encodeURIComponent(momentId));
-                        const data = await res.json();
-                        const n = (data.comments || []).length;
-                        if (n > 0) btn.innerHTML = '<i class="fa-solid fa-comment"></i> ' + n;
-                    } catch (e) {}
+                    if (cur > 0) return;
+                    spCommentObserver.observe(btn);
                 });
 
                 window.spMsg = function() {
@@ -5130,47 +5181,85 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         renderTypingAvatars(convKey);
     }
 
-    function renderTypingAvatars(convKey) {
+    let typingLeaveTimer = null;
+    function beginTypingLeave() {
         if (!typingIndicator) return;
-        const userMap = typingUsers.get(convKey);
-        if (!userMap || userMap.size === 0) {
+        if (typingLeaveTimer) return;
+        if (typingIndicator.style.display === 'none' && !typingIndicator.innerHTML) return;
+        typingIndicator.classList.add('typing-leaving');
+        typingLeaveTimer = setTimeout(() => {
+            typingLeaveTimer = null;
+            typingIndicator.classList.remove('typing-leaving');
             typingIndicator.style.display = 'none';
             typingIndicator.innerHTML = '';
+        }, 260);
+    }
+    function cancelTypingLeave() {
+        if (typingLeaveTimer) { clearTimeout(typingLeaveTimer); typingLeaveTimer = null; }
+        if (typingIndicator) typingIndicator.classList.remove('typing-leaving');
+    }
+
+    function renderTypingAvatars(convKey) {
+        if (!typingIndicator) return;
+        cancelTypingLeave();
+        const userMap = typingUsers.get(convKey);
+        if (!userMap || userMap.size === 0) {
+            beginTypingLeave();
             return;
         }
-        typingIndicator.innerHTML = '';
-        // 创建头像容器（重叠布局）
-        const container = document.createElement('div');
-        container.className = 'typing-avatars-container';
         const users = Array.from(userMap.values());
         const avatarCount = users.length;
         // 计算容器宽度：第一个头像完全可见，后续每个偏移14px（挡住左边半个），再加一颗头像宽度
         const containerWidth = 20 + (avatarCount - 1) * 14;
+
+        // 复用容器与点的 DOM，仅更新宽度/位置并靠 CSS transition 平滑过渡，
+        // 避免每次新头像进来时整体 innerHTML 重建导致的横向瞬移。
+        let container = typingIndicator.querySelector('.typing-avatars-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.className = 'typing-avatars-container';
+            typingIndicator.appendChild(container);
+        }
         container.style.width = containerWidth + 'px';
         container.style.height = '24px';
+
+        let dots = typingIndicator.querySelector('.typing-dots');
+        if (!dots) {
+            dots = document.createElement('span');
+            dots.className = 'typing-dots';
+            for (let i = 0; i < 3; i++) dots.appendChild(document.createElement('span'));
+            typingIndicator.appendChild(dots);
+        }
+        dots.style.left = containerWidth + 'px';
+
+        // 调和头像：保留仍在场的、新增的淡入、离场的移除，避免整段重建。
+        const presentUids = new Set(users.map(u => u.uid));
+        Array.from(container.children).forEach((img) => {
+            if (img.dataset && img.dataset.uid && !presentUids.has(img.dataset.uid)) {
+                img.remove();
+            }
+        });
         users.forEach((u, index) => {
-            const img = document.createElement('img');
-            img.className = 'typing-avatar';
-            let avatarUrl = u.avatar
-                ? cachedResolveMediaUrl(u.avatar)
-                : cachedResolveMediaUrl(lookupAvatar(u.uid) || 'assets/default-avatar.png');
-            img.src = avatarUrl || 'assets/default-avatar.png';
-            img.alt = u.name || '';
-            img.onerror = () => { img.onerror = null; img.src = 'assets/default-avatar.png'; };
+            let img = null;
+            for (const child of container.children) {
+                if (child.dataset && child.dataset.uid === u.uid) { img = child; break; }
+            }
+            if (!img) {
+                img = document.createElement('img');
+                img.className = 'typing-avatar';
+                img.dataset.uid = u.uid;
+                const avatarUrl = u.avatar
+                    ? cachedResolveMediaUrl(u.avatar)
+                    : cachedResolveMediaUrl(lookupAvatar(u.uid) || 'assets/default-avatar.png');
+                img.src = avatarUrl || 'assets/default-avatar.png';
+                img.alt = u.name || '';
+                img.onerror = () => { img.onerror = null; img.src = 'assets/default-avatar.png'; };
+                img.classList.add('typing-avatar-enter');
+                container.appendChild(img);
+            }
             img.style.left = (index * 14) + 'px'; // 每个头像向右偏移14px，右边挡住左边半个
             img.style.zIndex = index + 1;
-            container.appendChild(img);
         });
-        // 所有头像右侧的 ...
-        const dots = document.createElement('span');
-        dots.className = 'typing-dots';
-        dots.style.left = containerWidth + 'px';
-        for (let i = 0; i < 3; i++) {
-            const dot = document.createElement('span');
-            dots.appendChild(dot);
-        }
-        typingIndicator.appendChild(container);
-        typingIndicator.appendChild(dots);
         typingIndicator.style.display = 'flex';
     }
 
@@ -5186,8 +5275,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 // 没有指定 uid，移除整个会话
                 userMap.forEach((entry) => clearTimeout(entry.timer));
                 typingUsers.delete(convKey);
-                typingIndicator.style.display = 'none';
-                typingIndicator.innerHTML = '';
+                beginTypingLeave();
                 return;
             }
         }
@@ -5195,8 +5283,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (currentConv && typingUsers.has(currentConv.key) && typingUsers.get(currentConv.key).size > 0) {
             renderTypingAvatars(currentConv.key);
         } else {
-            typingIndicator.style.display = 'none';
-            typingIndicator.innerHTML = '';
+            beginTypingLeave();
         }
     }
 
@@ -8976,6 +9063,82 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
     }
 
+    // ===== 系统通知页（入口在发现页，设计参考签到墙） =====
+    // 从多个候选字段名中取第一个非空值（兼容不同版本后端字段命名）
+    function noticePick(obj, names) {
+        if (!obj || typeof obj !== 'object') return '';
+        for (const n of names) {
+            const v = obj[n];
+            if (v !== undefined && v !== null && v !== '') return v;
+        }
+        return '';
+    }
+
+    // 从响应里找出通知数组：兼容 {notifications:[]} / {data:{...}} / {data:[]} / 直接数组 / 第一个非空数组值
+    function extractNoticeList(obj) {
+        if (Array.isArray(obj)) return obj;
+        if (obj && typeof obj === 'object') {
+            for (const k of ['notifications', 'items', 'list', 'records', 'messages', 'data']) {
+                if (Array.isArray(obj[k])) return obj[k];
+            }
+            if (obj.data && typeof obj.data === 'object') return extractNoticeList(obj.data);
+            for (const k of Object.keys(obj)) {
+                if (Array.isArray(obj[k]) && obj[k].length) return obj[k];
+            }
+        }
+        return [];
+    }
+
+    async function renderSystemNotice(target) {
+        target = target || settingsContent;
+        target.innerHTML = '<h3>系统通知</h3><div style="text-align:center;padding:20px;color:var(--secondary-text);">加载中...</div>';
+        let items = [];
+        try {
+            let data = {};
+            try {
+                const res = await apiFetch('/v1/notifications?limit=50');
+                if (res.status === 404) {
+                    target.innerHTML = '<h3>系统通知</h3><div style="text-align:center;padding:60px 20px;color:var(--secondary-text);"><i class="fa-solid fa-hammer" style="font-size:32px;margin-bottom:12px;display:block;"></i>功能建设中，敬请期待</div>';
+                    return;
+                }
+                const text = await res.text();
+                try { data = JSON.parse(text); } catch (e) { console.warn('[notice] not JSON:', text.slice(0, 100)); }
+            } catch (e) {
+                target.innerHTML = '<h3>系统通知</h3><div style="text-align:center;padding:60px 20px;color:var(--secondary-text);"><i class="fa-solid fa-hammer" style="font-size:32px;margin-bottom:12px;display:block;"></i>功能建设中，敬请期待</div>';
+                return;
+            }
+            items = extractNoticeList(data);
+        } catch (e) {
+            console.error('[notice]', e);
+            target.innerHTML = '<h3>系统通知</h3><div style="text-align:center;padding:20px;color:var(--secondary-text);">加载失败</div>';
+            return;
+        }
+
+        let html = '<h3>系统通知</h3>';
+        html += '<div class="notice-wall">';
+        if (items.length === 0) {
+            html += '<div style="text-align:center;padding:20px;color:var(--secondary-text);">暂无系统通知</div>';
+        }
+        items.forEach(item => {
+            const title = noticePick(item, ['title', 'subject', 'name', '标题', '主题']) || '系统通知';
+            const content = noticePick(item, ['content', 'body', 'text', 'message', 'desc', 'description', '内容', '正文', '摘要']);
+            const rawTime = noticePick(item, ['created_at', 'ctime', 'time', 'timestamp', 'published_at', '发布时间', '时间']);
+            const imageUrl = noticePick(item, ['image', 'image_url', 'cover', 'pic', '图片']);
+            const timeStr = rawTime ? new Date(rawTime).toLocaleString('zh-CN') : '';
+            html += '<div class="notice-card">';
+            html += '<div class="notice-title">' + escapeHtml(title) + '</div>';
+            if (content) html += '<div class="notice-body">' + escapeHtml(String(content)) + '</div>';
+            if (imageUrl) {
+                const img = cachedResolveMediaUrl(imageUrl);
+                html += '<img src="' + img + '" style="max-width:100%;max-height:240px;border-radius:8px;margin-top:8px;cursor:pointer;" onclick="openImageViewer(\'' + img + '\')" onerror="this.style.display=\'none\'">';
+            }
+            if (timeStr) html += '<div class="notice-time">' + escapeHtml(timeStr) + '</div>';
+            html += '</div>';
+        });
+        html += '</div>';
+        target.innerHTML = html;
+    }
+
     function renderSettingsAbout() {
         const GITHUB_URL = 'https://github.com/LGCR837/oldchat-kivotos-next';
         settingsContent.innerHTML = `
@@ -9617,6 +9780,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             if (main) {
                 main.classList.add('discover-has-content');
                 renderCheckin(main);
+            }
+        } else if (target === 'notice') {
+            const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
+            if (main) {
+                main.classList.add('discover-has-content');
+                renderSystemNotice(main);
             }
         } else if (target) {
             switchTab(target);
