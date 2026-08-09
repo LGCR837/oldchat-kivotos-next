@@ -443,8 +443,12 @@
         // ===== 自动登录（直观版自动登录）=====
         // 已记住账号密码且未手动退出（oc_auto_login !== '0'）时，登录页加载后自动提交登录。
         // 手动退出登录会置 oc_auto_login='0'，之后启动停留在登录页等待手动输入。
+        // 自动登录失败（429/网络错误）后：本会话内不再自动提交，避免 reload 循环持续打登录接口触发限流。
         (function autoLogin() {
             try {
+                var blocked = false;
+                try { blocked = !!sessionStorage.getItem('oc_auto_login_blocked'); } catch (e) {}
+                if (blocked) return;
                 var savedId = localStorage.getItem('savedIdentifier');
                 var savedPwd = localStorage.getItem('savedPassword');
                 if (savedId && savedPwd && localStorage.getItem('oc_auto_login') !== '0') {
@@ -484,6 +488,7 @@
                     localStorage.setItem('oc_user', JSON.stringify(d.user || {}));
                     // 登录成功 → 恢复自动登录（手动退出后再次手动登录即恢复）
                     try { localStorage.setItem('oc_auto_login', '1'); } catch (e) {}
+                    try { sessionStorage.removeItem('oc_auto_login_blocked'); } catch (e) {}
                     var cb = document.getElementById('rememberAccountCheckbox');
                     if (cb && cb.checked) {
                         try { localStorage.setItem('savedIdentifier', id); localStorage.setItem('savedPassword', pwd); } catch(e) {}
@@ -492,10 +497,18 @@
                     }
                     window.location.href = 'index.html';
                 } else {
-                    showMsg(d.msg || d.error || '登录失败', 'error');
+                    // 登录失败：本会话内停止自动重试（防 reload 循环持续打接口触发限流）
+                    try { sessionStorage.setItem('oc_auto_login_blocked', '1'); } catch (e) {}
+                    if (r.status === 429) {
+                        showMsg('请求过于频繁，请稍后再试', 'error');
+                    } else {
+                        showMsg(d.msg || d.error || '登录失败', 'error');
+                    }
                 }
             } catch(err) {
-                showMsg('网络错误', 'error');
+                // 网络/解析错误（含 429 非 JSON 响应体）：同样停止本会话自动重试
+                try { sessionStorage.setItem('oc_auto_login_blocked', '1'); } catch (e) {}
+                showMsg('网络错误，请稍后再试', 'error');
             }
             btn.disabled = false; btn.textContent = '登录';
         });

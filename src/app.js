@@ -208,10 +208,10 @@ const DEFAULT_BACKEND_CANDIDATES = [
     'https://oc.mcl0.dpdns.org',
     'http://60.205.94.101:8080'
 ];
-// 媒体文件：优先 files.mcl0.dpdns.org（CF 原站，非 CDN，URL 不需转义），其次 60.205.94.101:8080（源服务器），最后 oc.mcl0.dpdns.org
+// 媒体文件：优先 60.205.94.101:8080（源服务器，速度最快；files 的音乐资源加载慢），其次 files.mcl0.dpdns.org（CF 原站，非 CDN），最后 oc.mcl0.dpdns.org
 const DEFAULT_MEDIA_CANDIDATES = [
-    'http://files.mcl0.dpdns.org',
     'http://60.205.94.101:8080',
+    'http://files.mcl0.dpdns.org',
     'http://oc.mcl0.dpdns.org',
     'https://oc.mcl0.dpdns.org'
 ];
@@ -249,7 +249,7 @@ function _getSavedMediaCandidates() {
 let BACKEND_CANDIDATES = _getSavedBackendCandidates();
 let MEDIA_CANDIDATES   = _getSavedMediaCandidates();
 let BACKEND_ORIGIN = BACKEND_CANDIDATES[0] || 'http://oc.mcl0.dpdns.org';
-let MEDIA_ORIGIN   = MEDIA_CANDIDATES[0] || 'http://files.mcl0.dpdns.org';
+let MEDIA_ORIGIN   = MEDIA_CANDIDATES[0] || 'http://60.205.94.101:8080';
 const BACKEND_HOST = (function() {
     try { return new URL(BACKEND_ORIGIN).host; } catch (e) { return 'oc.mcl0.dpdns.org'; }
 })();
@@ -266,7 +266,7 @@ function refreshEndpoints() {
     BACKEND_CANDIDATES = _getSavedBackendCandidates();
     MEDIA_CANDIDATES   = _getSavedMediaCandidates();
     BACKEND_ORIGIN = BACKEND_CANDIDATES[0] || 'http://oc.mcl0.dpdns.org';
-    MEDIA_ORIGIN   = MEDIA_CANDIDATES[0] || 'http://files.mcl0.dpdns.org';
+    MEDIA_ORIGIN   = MEDIA_CANDIDATES[0] || 'http://60.205.94.101:8080';
     const host = (function() { try { return new URL(BACKEND_ORIGIN).host; } catch (e) { return BACKEND_HOST; } })();
     WS_HOST    = host;
     API_BASE   = BACKEND_ORIGIN + '/v1';
@@ -388,14 +388,12 @@ function debounce(fn, wait) {
     }
 
     async function fetchAndStore(url) {
-        // 使用原生 fetch（绕过 Tauri 的 http 插件层，让它走 webview 网络栈，避免跨域）
-        // 但对于非跨域场景也可以走 Tauri。这里统一使用 window.__nativeFetch（已保留） 或 XHR
+        // 媒体缓存预取：走 tauriHttpFetch（Tauri 下 plugin-http 无 CORS 限制，媒体域名已在 capabilities 白名单）。
+        // 之前用原生 fetch + mode:'cors' 会被媒体服务器（无 CORS 头）拦截 → 缓存失效 + console 报错。
         let blob;
         let mime = '';
         try {
-            const resp = await (typeof window.__nativeFetch === 'function'
-                ? window.__nativeFetch(url, { credentials: 'omit', mode: 'cors', cache: 'force-cache' })
-                : fetch(url, { credentials: 'omit', mode: 'cors', cache: 'force-cache' }));
+            const resp = await tauriHttpFetch(url);
             if (!resp || !resp.ok) throw new Error('fetch failed');
             mime = resp.headers ? (resp.headers.get('content-type') || '') : '';
             blob = await resp.blob();
@@ -1113,13 +1111,275 @@ function openImageViewer(src) {
 // 并发去重：相同 GET 请求复用同一底层响应（克隆给各调用方），减少初始化期间冗余请求
 const _inflightGet = new Map();
 
+// ===== v1 → v2 API 路径映射（2026-08-09 文档确认）=====
+// 依据：oldchat-docs-20260809/nx3/oldchat-diff-release-vs-dev2.md §9.4（60+ 条映射表）
+//      + 12-v2签名机制与响应结构补充.md §5（direct/messages、direct/unread、群消息 v2）
+//      + 02-网络层与API通信机制.md（channels/buttons/files/群 members-lookup）
+// 说明：
+//  - 私聊历史 v1=/v1/direct/messages/v2 → v2=/v2/direct/messages（v2 去掉 /v2 后缀，12 文档 §5.1）
+//  - 群历史 v1=/v1/groups/messages/v2 → v2=/v2/groups/messages/v2（02 §2.13.2 保留后缀）
+//  - 未列入的端点保持 /v1（auth/login|refresh|handshake|web/register、music/*、emoji/plaza、
+//    checkin/wall、public-court、media 上传、messages/search、messages/after、direct|groups/unread、
+//    groups/message/send —— 这些文档未确认 v2 路径或响应结构不兼容，保守保留 v1）
+const V1_TO_V2 = {
+    // 私聊
+    '/v1/direct/send': '/v2/direct/send',
+    '/v1/direct/read': '/v2/direct/read',
+    '/v1/direct/burn/open': '/v2/direct/burn/open',
+    '/v1/direct/messages/v2': '/v2/direct/messages',
+    // 群组
+    '/v1/groups/messages/v2': '/v2/groups/messages/v2',
+    '/v1/groups/read': '/v2/groups/read',
+    '/v1/groups/burn/open': '/v2/groups/burn/open',
+    '/v1/groups/typing': '/v2/groups/typing',
+    '/v1/groups/create': '/v2/groups/create',
+    '/v1/groups/join': '/v2/groups/join',
+    '/v1/groups/leave': '/v2/groups/leave',
+    '/v1/groups/invite': '/v2/groups/invite',
+    '/v1/groups/invitations': '/v2/groups/invitations',
+    '/v1/groups/invitations/respond': '/v2/groups/invitations/respond',
+    '/v1/groups/requests': '/v2/groups/requests',
+    '/v1/groups/approve': '/v2/groups/approve',
+    '/v1/groups/admin': '/v2/groups/admin',
+    '/v1/groups/avatar': '/v2/groups/avatar',
+    '/v1/groups/kick': '/v2/groups/kick',
+    '/v1/groups/name': '/v2/groups/name',
+    '/v1/groups/settings': '/v2/groups/settings',
+    '/v1/groups/announcement': '/v2/groups/announcement',
+    '/v1/groups/announcement/read': '/v2/groups/announcement/read',
+    '/v1/groups/dissolve': '/v2/groups/dissolve',
+    '/v1/groups/list': '/v2/groups/list',
+    '/v1/groups/members': '/v2/groups/members',
+    // 红包
+    '/v1/redpackets/send': '/v2/redpackets/send',
+    '/v1/redpackets/claim': '/v2/redpackets/claim',
+    // 好友
+    '/v1/friends': '/v2/friends',
+    '/v1/friends/request': '/v2/friends/request',
+    '/v1/friends/requests': '/v2/friends/requests',
+    '/v1/friends/respond': '/v2/friends/respond',
+    '/v1/friends/remark': '/v2/friends/remark',
+    '/v1/friends/delete': '/v2/friends/delete',
+    // 个人
+    '/v1/me': '/v2/me',
+    '/v1/me/uid': '/v2/me/uid',
+    '/v1/me/profile': '/v2/me/profile',
+    '/v1/me/avatar': '/v2/me/avatar',
+    '/v1/me/cover': '/v2/me/cover',
+    '/v1/me/checkin': '/v2/me/checkin',
+    '/v1/me/devices': '/v2/me/devices',
+    '/v1/me/devices/cleanup': '/v2/me/devices/cleanup',
+    '/v1/me/password': '/v2/me/password',
+    '/v1/me/presence': '/v2/me/presence',
+    '/v1/me/group-invite-preference': '/v2/me/group-invite-preference',
+    '/v1/me/group-reports': '/v2/me/group-reports',
+    '/v1/me/bug-reports': '/v2/me/bug-reports',
+    '/v1/me/user-reports': '/v2/me/user-reports',
+    // 动态
+    '/v1/moments': '/v2/moments',
+    '/v1/moments/like': '/v2/moments/like',
+    '/v1/moments/unlike': '/v2/moments/unlike',
+    '/v1/moments/comment': '/v2/moments/comment',
+    '/v1/moments/comment/delete': '/v2/moments/comment/delete',
+    '/v1/moments/comments': '/v2/moments/comments',
+    '/v1/moments/delete': '/v2/moments/delete',
+    '/v1/moments/user': '/v2/moments/user',
+    '/v1/moments/feed': '/v2/moments/feed',
+    // 用户 / 聊天 / 交互
+    '/v1/users/profile': '/v2/users/profile',
+    '/v1/chats/typing': '/v2/chats/typing',
+    '/v1/buttons/callback': '/v2/buttons/callback',
+    // 频道 / 文件（v2 新增端点，客户端暂未接入，先占位保证未来直接可用）
+    '/v1/channels/subscribe': '/v2/channels/subscribe',
+    '/v1/channels/unsubscribe': '/v2/channels/unsubscribe',
+    '/v1/channels/notifications': '/v2/channels/notifications',
+    '/v1/channels/discover': '/v2/channels/discover',
+    '/v1/channels/posts/send': '/v2/channels/posts/send',
+    '/v1/files/check': '/v2/files/check',
+    '/v1/files/upload': '/v2/files/upload',
+    '/v1/resources/upload': '/v2/resources/upload'
+};
+
+// 命中映射表则把 /v1/xxx 换成 /v2/xxx（精确路径或路径+查询参数）
+function mapToV2(url) {
+    if (!url || url.indexOf('/v1/') !== 0) return url;
+    for (const v1 of Object.keys(V1_TO_V2)) {
+        if (url === v1 || url.startsWith(v1 + '?')) {
+            return V1_TO_V2[v1] + url.slice(v1.length);
+        }
+    }
+    return url;
+}
+
+// v2 → v1 反向映射（v2 接口 401 熔断回退用）
+function v2ToV1(url) {
+    if (!url || url.indexOf('/v2/') !== 0) return url;
+    for (const v1 of Object.keys(V1_TO_V2)) {
+        const v2 = V1_TO_V2[v1];
+        if (url === v2 || url.startsWith(v2 + '?')) {
+            return v1 + url.slice(v2.length);
+        }
+    }
+    return url;
+}
+
+// v2 熔断（按端点）：v2 请求 401（该端点服务器实际未迁 v2 / 签名问题）后，仅该 v2 路径回退 v1。
+// 避免「主界面 401 → 跳登录页 → 自动登录 → 又 401」的死循环，且不影响其它已支持 v2 的端点。
+const v2FailedPaths = new Set();
+
+// v2 迁移开关（2026-08-09 决定：**默认关闭**，客户端走 v1 保稳定）：
+// 服务器 v1+v2 混合，实测 v2 仍 401——两轮排查后定位：服务器要求「X-Session + 签名」共存，
+// 但我们带 X-Session 时 macKey 验签失败（bad_signature），不带时 missing_session——
+// macKey 派生或 session 绑定与服务器仍不一致，需抓包级样本才能定死（见 12-排查指南）。
+// 全部代码保留（V1_TO_V2 映射、v2SignHeaders 签名、v2EncryptBody/v2DecryptBody 信封、端点级熔断），
+// 设 localStorage oc_enable_v2='1' 即可一键启用。
+let v2Enabled = false;
+try { if (localStorage.getItem('oc_enable_v2') === '1') v2Enabled = true; } catch (e) {}
+
+// v2 请求签名头（HMAC-SHA256，密钥 = ECDH 握手派生的 wsMacKey）
+// 12-v2签名机制与响应结构补充.md §1：sign = base64_nopad(HMAC-SHA256(macKey, token+\n+path+\n+ts+\n+nonce))
+// path 不含查询参数；nonce = 16 字节随机 → base64 无填充；X-Device-Id = oldchat_device_id
+async function v2SignHeaders(path) {
+    const cleanPath = String(path || '').split('?')[0];
+    if (!/^\/v2\//.test(cleanPath)) return {};
+    const sess = window.__wsSession;
+    if (!sess) return {};
+    try {
+        await sess.ensure();
+    } catch (e) {
+        return {}; // 握手失败则跳过签名（文档 §6.2：握手失败请求也能发出）
+    }
+    const macKey = sess.getMacKey();
+    if (!macKey || !macKey.length) return {};
+    const token = localStorage.getItem('oc_access_token') || '';
+    const ts = String(Math.floor(Date.now() / 1000));
+    const nonceBytes = new Uint8Array(16);
+    try { crypto.getRandomValues(nonceBytes); } catch (e) {}
+    const nonce = Crypto.bytesToBase64(nonceBytes).replace(/=+$/, '');
+    const data = new TextEncoder().encode(token + '\n' + cleanPath + '\n' + ts + '\n' + nonce);
+    const sig = await Crypto.hmacSha256(macKey, data);
+    const sign = Crypto.bytesToBase64(sig).replace(/=+$/, '');
+    const hdrs = { 'X-Ts': ts, 'X-Nonce': nonce, 'X-Sign': sign };
+    const devId = localStorage.getItem('oldchat_device_id');
+    if (devId) hdrs['X-Device-Id'] = devId;
+    return hdrs;
+}
+
+// v2 请求体加密（08-ECDH 文档 §4：AES-256-CBC + HMAC-SHA256 信封）
+// 信封 JSON：{iv, data, mac}，base64(NO_WRAP)；mac = HMAC-SHA256(macKey, iv字节 || data字节)
+// 返回加密后的信封 JSON 字符串；密钥/会话缺失或加密失败返回 null（调用方降级明文）
+async function v2EncryptBody(plainJson) {
+    const sess = window.__wsSession;
+    if (!sess) return null;
+    const encKey = sess.getEncKey();
+    const macKey = sess.getMacKey();
+    if (!encKey || !macKey) return null;
+    try {
+        const iv = crypto.getRandomValues(new Uint8Array(16));
+        const key = await crypto.subtle.importKey('raw', encKey, { name: 'AES-CBC' }, false, ['encrypt']);
+        const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, key, new TextEncoder().encode(plainJson)));
+        const mac = await Crypto.hmacSha256(macKey, Crypto.concatBytes(iv, ciphertext));
+        return JSON.stringify({
+            iv: Crypto.bytesToBase64(iv),
+            data: Crypto.bytesToBase64(ciphertext),
+            mac: Crypto.bytesToBase64(mac)
+        });
+    } catch (e) {
+        console.warn('[v2] 请求体加密失败:', e);
+        return null;
+    }
+}
+
+// v2 响应体解密（08-ECDH 文档 §5：验证 MAC → AES-CBC 解密 → 可选 gzip 解压）
+// 非信封（明文响应）返回 null；成功返回明文 JSON 字符串
+async function v2DecryptBody(text) {
+    if (!text) return null;
+    let env;
+    try { env = JSON.parse(text); } catch (e) { return null; }
+    if (!env || typeof env !== 'object' || !env.iv || !env.data || !env.mac) return null;
+    const sess = window.__wsSession;
+    if (!sess) return null;
+    const macKey = sess.getMacKey();
+    const encKey = sess.getEncKey();
+    if (!macKey || !encKey) return null;
+    try {
+        const iv = Crypto.base64ToBytes(env.iv);
+        const data = Crypto.base64ToBytes(env.data);
+        const mac = Crypto.base64ToBytes(env.mac);
+        const expected = await Crypto.hmacSha256(macKey, Crypto.concatBytes(iv, data));
+        if (!Crypto.timingSafeEqual(mac, expected)) return null;
+        const key = await crypto.subtle.importKey('raw', encKey, { name: 'AES-CBC' }, false, ['decrypt']);
+        const plain = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, data));
+        // 尝试 gzip 解压（服务器可能标 X-Enc-Compression: gzip；失败则用原文）
+        try {
+            const stream = new Blob([plain]).stream().pipeThrough(new DecompressionStream('gzip'));
+            return new TextDecoder().decode(await new Response(stream).arrayBuffer());
+        } catch (e) {
+            return new TextDecoder().decode(plain);
+        }
+    } catch (e) {
+        return null;
+    }
+}
+
+// 尝试解密 v2 响应：是信封则解密并包装为新 Response，否则原样返回
+async function maybeDecryptV2Response(res) {
+    if (!res || !res.ok) return res;
+    try {
+        const text = await res.text();
+        const dec = await v2DecryptBody(text);
+        if (dec !== null) {
+            return new Response(dec, { status: res.status, statusText: res.statusText, headers: res.headers });
+        }
+        // 非信封（明文响应，如错误详情）→ 原样包装保留 body
+        return new Response(text, { status: res.status, statusText: res.statusText, headers: res.headers });
+    } catch (e) {
+        console.warn('[v2] 响应解密失败:', e);
+        return res;
+    }
+}
+
 async function apiFetch(url, options = {}) {
-    const useCandidates = url.startsWith('/v1/');
+    // 路径版本处理：
+    //  - 启用 v2 且该端点未熔断：/v1/ 命中映射表 → /v2/（并加签名）
+    //  - 该 v2 端点已熔断：/v2/ 转回 /v1/（不再签名）
+    //  - 默认：未列入映射表的端点始终是 /v1/，不做迁移
+    if (url.startsWith('/v1/')) {
+        if (v2Enabled) url = mapToV2(url);
+    } else if (url.startsWith('/v2/')) {
+        if (v2FailedPaths.has(url.split('?')[0])) url = v2ToV1(url);
+    }
+    const useCandidates = url.startsWith('/v1/') || url.startsWith('/v2/');
     const token = localStorage.getItem('oc_access_token');
     options.headers = options.headers || {};
     options.headers['User-Agent'] = 'OldChatForKivotosNext';
     if (token) {
         options.headers['Authorization'] = 'Bearer ' + token;
+    }
+    // v2 端点附加签名头（12-排查指南 §8.2：两条传输路径**互斥**——h0.e 旧传输层=有签名无加密、
+    // 不带 X-Session；h0.c 新传输层=有加密无签名。服务器实测按 h0.e 验签（返回明文 bad_signature），
+    // 因此 v2 请求走**纯 h0.e 路径**：只带签名四件套 + Authorization，body 明文，不加任何 X-Enc/X-Session/X-Burn-Secure）
+    if (url.startsWith('/v2/')) {
+        let signHdrs = {};
+        try {
+            signHdrs = await v2SignHeaders(url);
+        } catch (e) {
+            console.warn('[apiFetch] v2 签名失败，熔断回退 v1：', url, e);
+        }
+        // 会话/签名不可用（握手未完成/失败）时**不裸发 v2**——服务器会报 missing_session；
+        // 直接按端点熔断回退 v1（本次即恢复）。
+        const sessReady = !!(window.__wsSession && window.__wsSession.getSessionId && window.__wsSession.getSessionId());
+        if (!signHdrs['X-Sign'] || !sessReady) {
+            const v1Url = v2ToV1(url);
+            if (v1Url !== url) {
+                v2FailedPaths.add(url.split('?')[0]);
+                console.warn('[apiFetch] v2 会话未就绪，熔断回退 v1：', url);
+                url = v1Url;
+            }
+        } else {
+            // h0.e 纯签名路径：X-Ts/X-Nonce/X-Sign/X-Device-Id（签名函数已返回），body 明文不加密
+            Object.assign(options.headers, signHdrs);
+        }
     }
     const isGet = !options.method || String(options.method).toUpperCase() === 'GET';
     if (useCandidates && isGet) {
@@ -1145,7 +1405,7 @@ async function apiFetch(url, options = {}) {
 
 // 按候选列表顺序请求：网络错误 / 5xx 自动降级到下一个候选
 async function _fetchWithCandidates(url, options) {
-    if (!url.startsWith('/v1/')) {
+    if (!url.startsWith('/v1/') && !url.startsWith('/v2/')) {
         // 绝对地址（如媒体直链）不走候选降级
         return await tauriHttpFetch(url, options);
     }
@@ -1179,6 +1439,47 @@ async function _fetchWithCandidates(url, options) {
             }
         }
         if (res.status === 401) {
+            // v2 端点 401 → 该端点熔断回退 v1 重发（本次即恢复；仅影响该端点，避免登录死循环）
+            if (url.startsWith('/v2/')) {
+                // 读取并打印 401 响应体（可能是加密信封，尝试解密）——服务器拒绝原因的关键调试信息
+                let bodyText = '';
+                try { bodyText = await res.text(); } catch (e) {}
+                if (bodyText) {
+                    let shown = bodyText;
+                    if (options._v2Encrypted) {
+                        try {
+                            const dec = await v2DecryptBody(bodyText);
+                            if (dec !== null) shown = dec;
+                        } catch (e) {}
+                    }
+                    console.warn('[apiFetch] v2 401 响应体：' + base + url + ' → ' + String(shown).slice(0, 300));
+                }
+                const cleanPath = url.split('?')[0];
+                if (!v2FailedPaths.has(cleanPath)) {
+                    v2FailedPaths.add(cleanPath);
+                    console.warn('[apiFetch] v2 端点 401，熔断回退 v1：', url, options.headers);
+                }
+                const v1Url = v2ToV1(url);
+                if (v1Url !== url) {
+                    const hdrs = Object.assign({}, options.headers || {});
+                    // 回退 v1 需清理 v2 专属头（签名 + 加密标记），否则 v1 服务器可能误判
+                    delete hdrs['X-Sign'];
+                    delete hdrs['X-Ts'];
+                    delete hdrs['X-Nonce'];
+                    delete hdrs['X-Device-Id'];
+                    delete hdrs['X-Enc'];
+                    delete hdrs['X-Session'];
+                    delete hdrs['X-Burn-Secure'];
+                    delete hdrs['X-Enc-Compression'];
+                    for (const fb of BACKEND_CANDIDATES) {
+                        try {
+                            const r2 = await tauriHttpFetch(fb + v1Url, Object.assign({}, options, { headers: hdrs }));
+                            if (r2.status < 500) return r2;
+                        } catch (e) { /* 继续下一个候选 */ }
+                    }
+                }
+                // 回退也失败：继续走下方刷新/登出逻辑
+            }
             const refreshToken = localStorage.getItem('oc_refresh_token');
             if (refreshToken) {
                 try {
@@ -1194,7 +1495,9 @@ async function _fetchWithCandidates(url, options) {
                         if (data.user) localStorage.setItem('oc_user', JSON.stringify(data.user));
                         options.headers = options.headers || {};
                         options.headers['Authorization'] = 'Bearer ' + data.access_token;
-                        return await tauriHttpFetch(base + url, options);
+                        const replay = await tauriHttpFetch(base + url, options);
+                        // v2 加密响应解密后返回
+                        return options._v2Encrypted ? await maybeDecryptV2Response(replay) : replay;
                     }
                 } catch (e) { /* 忽略，走登出流程 */ }
             }
@@ -1203,6 +1506,10 @@ async function _fetchWithCandidates(url, options) {
             localStorage.removeItem('oc_user');
             window.location.href = 'login.html';
             return;
+        }
+        // v2 加密响应：解密后包装为新 Response，调用方 res.json() 拿到明文
+        if (options._v2Encrypted) {
+            return await maybeDecryptV2Response(res);
         }
         return res;
     }
@@ -2002,37 +2309,67 @@ document.addEventListener('DOMContentLoaded', async () => {
             const res = await tauriHttpFetch(fullUrl);
             if (!res.ok) throw new Error('HTTP ' + res.status);
             const lrcText = await res.text();
-            
-            musicLrcObj = parseLyrics(lrcText);
-            musicLrcIndex = -1;
-            ul.innerHTML = '';
-            if (musicLrcObj.length === 0) {
-                // 无歌词时隐藏整个歌词区域
-                lrcContainer.style.display = 'none';
-            } else {
-                lrcContainer.style.display = '';
-                const frag = document.createDocumentFragment();
-                musicLrcObj.forEach(item => {
-                    const li = document.createElement('li');
-                    const main = document.createElement('div');
-                    main.className = 'lrc-main';
-                    main.textContent = item.text;
-                    li.appendChild(main);
-                    if (item.translation) {
-                        const tr = document.createElement('div');
-                        tr.className = 'lrc-translation';
-                        tr.textContent = item.translation;
-                        li.appendChild(tr);
-                    }
-                    li.dataset.time = item.time;
-                    frag.appendChild(li);
-                });
-                ul.appendChild(frag);
-            }
+            renderLyricsText(lrcText);
         } catch (e) {
             console.error('[music] lyrics load failed:', e);
             lrcContainer.style.display = 'none';
             musicLrcObj = null;
+        }
+    }
+
+    // 渲染歌词文本（LRC/TTML 已由 parseLyrics 解析）
+    function renderLyricsText(lrcText) {
+        const lrcContainer = musicWorkspace?.querySelector('.music-lyrics-container');
+        const ul = lrcContainer?.querySelector('ul');
+        if (!ul || !lrcContainer) return;
+        musicLrcObj = parseLyrics(lrcText || '');
+        musicLrcIndex = -1;
+        ul.innerHTML = '';
+        if (musicLrcObj.length === 0) {
+            // 无歌词时隐藏整个歌词区域
+            lrcContainer.style.display = 'none';
+            return;
+        }
+        lrcContainer.style.display = '';
+        const frag = document.createDocumentFragment();
+        musicLrcObj.forEach(item => {
+            const li = document.createElement('li');
+            const main = document.createElement('div');
+            main.className = 'lrc-main';
+            main.textContent = item.text;
+            li.appendChild(main);
+            if (item.translation) {
+                const tr = document.createElement('div');
+                tr.className = 'lrc-translation';
+                tr.textContent = item.translation;
+                li.appendChild(tr);
+            }
+            li.dataset.time = item.time;
+            frag.appendChild(li);
+        });
+        ul.appendChild(frag);
+    }
+
+    // 按 item_id 拉取歌词（v1.4.x 新接口兜底：/v1/music/plaza/lyrics?item_id=）
+    // 响应兼容三种形态：歌词文本(lyrics/lrc/lyrics_text) / lyrics_url / 空
+    async function fetchMusicLyricsById(itemId) {
+        const lrcContainer = musicWorkspace?.querySelector('.music-lyrics-container');
+        if (!itemId) { if (lrcContainer) lrcContainer.style.display = 'none'; return; }
+        try {
+            const res = await apiFetch('/v1/music/plaza/lyrics?item_id=' + encodeURIComponent(itemId));
+            const data = await res.json();
+            if (data.error) { if (lrcContainer) lrcContainer.style.display = 'none'; return; }
+            const lrcText = data.lyrics || data.lrc || data.lyrics_text || (typeof data === 'string' ? data : '');
+            if (lrcText) {
+                renderLyricsText(lrcText);
+            } else if (data.lyrics_url) {
+                loadMusicLyrics(data.lyrics_url);
+            } else if (lrcContainer) {
+                lrcContainer.style.display = 'none';
+            }
+        } catch (e) {
+            console.warn('[music] fetch lyrics by id failed:', e);
+            if (lrcContainer) lrcContainer.style.display = 'none';
         }
     }
 
@@ -2059,12 +2396,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (e) {
             console.warn('[music] play failed:', e);
         }
-        // 加载歌词（使用数据中自带的 lyrics_url）
+        // 加载歌词：优先数据自带的 lyrics_url；没有则用 v1.4.x 新接口按 item_id 兜底
         if (m.lyrics_url) {
             loadMusicLyrics(m.lyrics_url);
         } else {
-            const lrcContainer = musicWorkspace?.querySelector('.music-lyrics-container');
-            if (lrcContainer) lrcContainer.style.display = 'none';
+            fetchMusicLyricsById(m.id);
         }
         updateMusicPlayBtn();
     }
@@ -3951,6 +4287,150 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         wsReconnectTimer = setTimeout(initWebSocket, delay);
     }
 
+    // 群消息增量同步：WS 断线重连后，用最后渲染消息的时间戳补齐漏掉的群消息
+    // 端点：GET /v1/groups/messages/after?group_id=<GID>&after=<秒级时间戳>（v1.4.x diff §2.2）
+    async function syncGroupAfterReconnect() {
+        if (!currentConv || currentConv.type !== 'group') return;
+        const after = lastRenderedTs || 0;
+        if (!after) return; // 当前会话还没有渲染过消息，无从增量
+        const groupId = currentConv.id;
+        const convKey = currentConv.key;
+        try {
+            const res = await apiFetch(`/v1/groups/messages/after?group_id=${encodeURIComponent(groupId)}&after=${after}`);
+            const data = await res.json();
+            if (data.error || !Array.isArray(data.messages)) return;
+            // 只保留时间在 after 之后、且未渲染过的消息，避免与实时推送重复
+            const existing = new Set();
+            messagesContainer.querySelectorAll('.message[data-msg-id]').forEach(el => {
+                if (el.dataset.msgId) existing.add(el.dataset.msgId);
+            });
+            const newMsgs = (data.messages || []).filter(m => m.id && (m.created_at || 0) > after && !existing.has(m.id));
+            if (!newMsgs.length) return;
+            const seen = seenMsgIds[convKey] || new Set();
+            newMsgs.forEach(m => appendMessage(m, convKey, seen));
+            scrollToBottom(true, true);
+            // 更新会话最后时间戳
+            const maxTs = newMsgs.reduce((mx, m) => Math.max(mx, m.created_at || 0), 0);
+            if (maxTs > lastRenderedTs) lastRenderedTs = maxTs;
+            console.log('[WS] 群增量同步补回 ' + newMsgs.length + ' 条消息');
+        } catch (e) {
+            console.warn('[WS] 群增量同步失败:', e);
+        }
+    }
+
+    // ===== 聊天记录搜索（当前会话）=====
+    // 端点：GET /v1/direct/messages/search?with_uid=&keyword= ｜ /v1/groups/messages/search?group_id=&keyword=（v1.4.x diff §2.1）
+    function openChatSearch() {
+        if (!currentConv) { showAlert('请先选择一个会话再搜索。'); return; }
+        const overlay = document.createElement('div');
+        overlay.className = 'custom-modal-overlay';
+        overlay.style.alignItems = 'flex-start';
+        overlay.style.paddingTop = '8vh';
+        const box = document.createElement('div');
+        box.className = 'custom-modal';
+        box.style.maxWidth = '560px';
+        box.style.width = 'calc(100vw - 40px)';
+        box.style.maxHeight = '72vh';
+        box.style.display = 'flex';
+        box.style.flexDirection = 'column';
+
+        const title = document.createElement('div');
+        title.className = 'custom-modal-title';
+        title.textContent = '搜索聊天记录';
+
+        const inputRow = document.createElement('div');
+        inputRow.style.cssText = 'display:flex;gap:8px;margin-bottom:12px;flex-shrink:0;';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = '输入关键词搜索当前会话...';
+        input.style.cssText = 'flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--chat-bg);color:var(--text);font-size:13px;font-family:inherit;';
+        const goBtn = document.createElement('button');
+        goBtn.className = 'btn primary';
+        goBtn.textContent = '搜索';
+        inputRow.appendChild(input);
+        inputRow.appendChild(goBtn);
+
+        const list = document.createElement('div');
+        list.style.cssText = 'overflow-y:auto;flex:1;min-height:120px;font-size:13px;color:var(--secondary-text);line-height:1.6;';
+        list.textContent = '输入关键词开始搜索';
+
+        const foot = document.createElement('div');
+        foot.style.cssText = 'display:flex;justify-content:flex-end;margin-top:12px;flex-shrink:0;';
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'btn';
+        closeBtn.textContent = '关闭';
+        closeBtn.addEventListener('click', () => overlay.remove());
+        foot.appendChild(closeBtn);
+
+        box.appendChild(title);
+        box.appendChild(inputRow);
+        box.appendChild(list);
+        box.appendChild(foot);
+        overlay.appendChild(box);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+        document.body.appendChild(overlay);
+        input.focus();
+
+        async function doSearch() {
+            const kw = input.value.trim();
+            if (!kw) return;
+            const conv = currentConv;
+            if (!conv) return;
+            list.textContent = '搜索中...';
+            try {
+                const url = conv.type === 'group'
+                    ? `/v1/groups/messages/search?group_id=${encodeURIComponent(conv.id)}&keyword=${encodeURIComponent(kw)}`
+                    : `/v1/direct/messages/search?with_uid=${encodeURIComponent(conv._sendToUid || conv.id)}&keyword=${encodeURIComponent(kw)}`;
+                const res = await apiFetch(url);
+                const data = await res.json();
+                if (data.error) { list.textContent = String(data.error); return; }
+                const results = data.messages || data.results || [];
+                list.innerHTML = '';
+                if (!results.length) { list.textContent = '未找到相关消息'; return; }
+                results.forEach(m => {
+                    const item = document.createElement('div');
+                    item.style.cssText = 'padding:8px 10px;border:1px solid var(--border-color);border-radius:6px;margin-bottom:6px;cursor:pointer;background:var(--panel-bg);';
+                    item.addEventListener('mouseenter', () => { item.style.background = 'var(--hover)'; });
+                    item.addEventListener('mouseleave', () => { item.style.background = 'var(--panel-bg)'; });
+                    const head = document.createElement('div');
+                    head.style.cssText = 'display:flex;justify-content:space-between;font-size:11px;color:var(--secondary-text);margin-bottom:4px;';
+                    head.textContent = (m.from_name || m.sender || '') + '　' + (m.created_at ? new Date(m.created_at * 1000).toLocaleString('zh-CN', { hour12: false }) : '');
+                    const body = document.createElement('div');
+                    body.style.cssText = 'color:var(--text);word-break:break-word;white-space:pre-wrap;max-height:48px;overflow:hidden;';
+                    body.textContent = String(m.body || '').slice(0, 120);
+                    item.appendChild(head);
+                    item.appendChild(body);
+                    item.addEventListener('click', () => {
+                        overlay.remove();
+                        jumpToMessage(m.id);
+                    });
+                    list.appendChild(item);
+                });
+            } catch (e) {
+                list.textContent = '搜索失败：' + (e && e.message ? e.message : e);
+            }
+        }
+
+        goBtn.addEventListener('click', doSearch);
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+    }
+
+    // 定位并高亮某条消息（若已渲染在列表中）
+    function jumpToMessage(messageId) {
+        if (!messageId) return;
+        const target = messagesContainer.querySelector(`.message[data-msg-id="${CSS.escape(messageId)}"]`);
+        if (target) {
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            const prevBg = target.style.backgroundColor;
+            target.style.backgroundColor = 'rgba(255, 200, 0, 0.25)';
+            setTimeout(() => { target.style.backgroundColor = prevBg; }, 1800);
+        } else {
+            showAlert('该消息不在当前已加载的会话范围内。\n可先关闭重开会话加载历史后再试，或使用历史消息翻页定位。');
+        }
+    }
+
+    document.getElementById('chatSearchBtn')?.addEventListener('click', openChatSearch);
+
     // Typing 状态（多用户支持）
     const typingUsers = new Map(); // convKey -> Map(uid -> { name, avatar, timer })
     let typingSendTimer = null;
@@ -3958,27 +4438,46 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     const TYPING_THROTTLE = 3000; // 每 3 秒最多发送一次
 
     // ECDH P-256 握手，派生 encKey/macKey
+    // 握手进行中的共享 Promise：并发调用（多个 v2 请求同时触发签名、WS 建立）只握手一次，
+    // 避免 handshake 风暴触发后端限流（"too many requests"）
+    let wsHandshakePromise = null;
+
     async function ensureWsSession() {
         if (wsSessionId && wsEncKey && wsMacKey) return;
-        if (!window.crypto || !crypto.subtle) throw new Error('Crypto not supported');
-        const keys = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
-        const spki = await crypto.subtle.exportKey('spki', keys.publicKey);
-        const clientPub = Crypto.bytesToBase64(new Uint8Array(spki));
-        const res = await apiFetch('/v1/auth/handshake', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ client_pub: clientPub })
+        if (wsHandshakePromise) return wsHandshakePromise;
+        wsHandshakePromise = (async () => {
+            if (wsSessionId && wsEncKey && wsMacKey) return;
+            if (!window.crypto || !crypto.subtle) throw new Error('Crypto not supported');
+            const keys = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+            const spki = await crypto.subtle.exportKey('spki', keys.publicKey);
+            const clientPub = Crypto.bytesToBase64(new Uint8Array(spki));
+            const res = await apiFetch('/v1/auth/handshake', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ client_pub: clientPub })
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            const serverPubBytes = Crypto.base64ToBytes(data.server_pub);
+            const serverPub = await crypto.subtle.importKey('spki', serverPubBytes, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+            const secret = await crypto.subtle.deriveBits({ name: 'ECDH', public: serverPub }, keys.privateKey, 256);
+            const secretBytes = new Uint8Array(secret);
+            wsEncKey = await Crypto.sha256(Crypto.concatBytes(secretBytes, new TextEncoder().encode('enc')));
+            wsMacKey = await Crypto.sha256(Crypto.concatBytes(secretBytes, new TextEncoder().encode('mac')));
+            wsSessionId = data.session_id;
+        })().finally(() => {
+            wsHandshakePromise = null;
         });
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-        const serverPubBytes = Crypto.base64ToBytes(data.server_pub);
-        const serverPub = await crypto.subtle.importKey('spki', serverPubBytes, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
-        const secret = await crypto.subtle.deriveBits({ name: 'ECDH', public: serverPub }, keys.privateKey, 256);
-        const secretBytes = new Uint8Array(secret);
-        wsEncKey = await Crypto.sha256(Crypto.concatBytes(secretBytes, new TextEncoder().encode('enc')));
-        wsMacKey = await Crypto.sha256(Crypto.concatBytes(secretBytes, new TextEncoder().encode('mac')));
-        wsSessionId = data.session_id;
+        return wsHandshakePromise;
     }
+
+    // 暴露给顶层 v2 签名/加密使用（apiFetch 在 IIFE 外，取不到闭包变量）
+    window.__wsSession = {
+        ensure: ensureWsSession,
+        getMacKey: () => wsMacKey,
+        getEncKey: () => wsEncKey,
+        getSessionId: () => wsSessionId
+    };
 
     // 解密 WS 加密信封 {iv, data, mac}
     async function decryptEnvelope(payload) {
@@ -4008,6 +4507,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             ws.onopen = () => {
                 console.log('[WS] connected');
                 wsReconnectAttempts = 0; // 连接成功，重置重连计数
+                syncGroupAfterReconnect(); // 断线重连后补齐漏掉的群消息
             };
             ws.onmessage = async (event) => {
                 try {

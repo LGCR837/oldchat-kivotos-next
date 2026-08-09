@@ -4,6 +4,9 @@
 > 分析方法: jadx 反编译两个版本 APK，逐类对比源码  
 > 对比对象: **Release (正式版)** vs **Dev2 (测试版)**  
 > R8 map-id: Release `2a5d39f` → Dev2 `dev2-build`
+>
+> **补充文档**: [12-v2签名机制与加密信封及bad_signature排查指南.md](./12-v2签名机制与加密信封及bad_signature排查指南.md)  
+> 基于最新下载的 `oldchat-dev.apk` 补充了 v2 签名算法完整实现、ECDH 握手、响应结构等细节。
 
 ---
 

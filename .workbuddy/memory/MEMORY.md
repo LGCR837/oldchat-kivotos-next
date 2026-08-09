@@ -29,7 +29,7 @@ Tauri v2 跨平台桌面 IM 客户端，连接 OldChat 即时通讯后端（原�
    - 排查口诀：见到上述 ReadableStream/JSON position N 报错，**先怀疑响应压根不是 JSON**（404/502 纯文本或 HTML），不要去查 Tauri sentinel 流协议或 `res.clone()`。
 3. **NCUID 优先**：OldChat 有 uid/ncuid 两套 ID。`?uid=` 只接受旧 uid；`?ncuid=` 接受 ncuid；POST body 的 to_uid/with_uid 同时接受两种。所有逻辑优先用 ncuid，仅在 `?uid=` 场景降级。
 4. **媒体 URL 统一走 `resolveMediaUrl()`**：映射头像(60.205.94.101:8080)、封面/媒体/emoji/音乐(files.mcl0.dpdns.org) 等。所有 URL 用 http:// 不用 https（后端无 TLS）。
-5. **媒体候选顺序（2026-08-09 腐竹更正）**：`files.mcl0.dpdns.org → 60.205.94.101:8080 → oc.mcl0.dpdns.org`。**files 是 CF 原站（非 CDN），URL 不需转义**；旧结论「files 是付费 CDN 尽量少用」已作废。**文件/图片下载接口已加权鉴**（需 Authorization 头）：下载一律走 Rust `save_download`/`save_image`（带 headers）或 `downloadFile()`（带 token fetch），**不再 target=_blank 浏览器直接打开**。
+5. **媒体候选顺序（2026-08-09 腐竹更正）**：`60.205.94.101:8080 → files.mcl0.dpdns.org → oc.mcl0.dpdns.org`（**60 优先**，因 files 音乐资源加载慢；files 是 CF 原站非 CDN，URL 不需转义）。**文件/图片下载接口已加权鉴**（需 Authorization 头）：下载一律走 Rust `save_download`/`save_image`（带 headers）或 `downloadFile()`（带 token fetch），**不再 target=_blank 浏览器直接打开**。
 6. **新增资源域名**必须在 `src-tauri/capabilities/default.json` 的 http:default.allow 白名单中添加，否则 plugin-http 拒绝。
 7. **启动自检 `src-tauri/src/preflight.rs`**（2026-08-08 起）：在 `tauri::Builder` **之前**跑，检测 WebView2/WebKitGTK/图形环境/托盘依赖/数据目录。**绝不能改用 tauri-plugin-dialog 报错**——它自己就依赖 WebView2/GTK；必须用 Win32 `MessageBoxW` 与 Linux 的 zenity 降级链。两处误报陷阱务必保留：`WEBVIEW2_BROWSER_EXECUTABLE_FOLDER` 非空要豁免（企业固定版本部署）；Linux so 检测只是尽力而为（缺库通常在动态链接期就挂了）。自测：`OLDCHAT_PREFLIGHT_DEMO=webview2|webkit|display|runtime`。
 8. **多主题系统（2026-08-09 起，已落地设置选项卡+上传）**：深浅模式轴用 HTML 属性 `data-theme-mode`（值 `light` / `dark`），由 `src/app.js` 的 `applyTheme()` 经 `document.documentElement.setAttribute('data-theme-mode', mode)` 设置；CSS 用 `:root, [data-theme-mode="light"]`（浅）与 `[data-theme-mode="dark"]`（深）声明变量。**默认主题 = `src/app.css` 自身**（顶部带 `@theme` 元数据注释：id/name/description/author[可空]/version[可空]/framework:v1）。所有颜色走语义变量（`--bg/--text/--accent/--link/--danger/--muted/--surface-2/--overlay/...`）；**用户主题 = 单文件纯 .css，宽松模式允许任意 CSS**（不强制仅变量），主题不写 dark 块则深色回退默认。
@@ -37,6 +37,8 @@ Tauri v2 跨平台桌面 IM 客户端，连接 OldChat 即时通讯后端（原�
    - **存储（系统用户文件夹，无需 fs 插件）**：`src-tauri/src/lib.rs` 用既有 `tauri-plugin-dialog` + `std::fs` + `app.path().app_config_dir()` 写入 `<app_config_dir>/themes/<id>.css`。Win `%APPDATA%/aoharureverie.oldchat.kivotosnextapp/themes/`；Linux `~/.config/aoharureverie.oldchat.kivotosnextapp/themes/`。
    - **Rust 命令（已注册）**：`import_theme`（文件框选 .css→解析→写盘→返回元数据含 css）、`list_user_themes`（扫 themes/ 返回元数据数组含 css）、`delete_user_theme(id)`。`parse_theme_meta` 逐行解析 ` @theme key: value`（去 `*` 前缀），`sanitize_theme_id` 仅留字母数字 `-_`。
    - **前端入口**：设置导航 `data-settings="theme"`（我的/通用/主题/关于）→ `renderSettingsTheme()`；引擎 `applyThemeById`/`injectThemeStyle`/`refreshUserThemes`（启动即 `invoke('list_user_themes')` 还原 `localStorage.themeId`）。改任何颜色优先加语义变量、勿硬编码。
+
+9. **v2 API 迁移（2026-08-09 起）**：apiFetch 入口 `mapToV2()` 按 `V1_TO_V2` 映射表（60+ 条，文档确认）把命中端点换 /v2/；**v2 请求必须带签名头** `X-Ts/X-Nonce/X-Sign/X-Device-Id`（HMAC-SHA256，密钥=ECDH 握手派生的 wsMacKey，经 `window.__wsSession` 复用；拼接 `token\npath(去query)\n ts\nnonce`，base64 无填充）——`v2SignHeaders()` 实现（node 已验证与文档一致）。**保持 /v1 待确认**：auth/*、music/*、emoji/plaza、checkin/wall、public-court、media 上传、direct|groups/unread、groups/message/send、messages/search、messages/after、WS。响应结构与 v1 平铺一致（无 Gateway 包装）。
 
 ## 后端地址
 - API 根：`http://oc.mcl0.dpdns.org/v1`（Go 实现）
