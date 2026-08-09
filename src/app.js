@@ -1270,19 +1270,28 @@ function v2ToV1(url) {
 // 避免「主界面 401 → 跳登录页 → 自动登录 → 又 401」的死循环，且不影响其它已支持 v2 的端点。
 const v2FailedPaths = new Set();
 
-// v2 迁移开关（2026-08-09 决定：**默认关闭**，客户端走 v1 保稳定）：
-// 服务器 v1+v2 混合，实测 v2 仍 401——两轮排查后定位：服务器要求「X-Session + 签名」共存，
-// 但我们带 X-Session 时 macKey 验签失败（bad_signature），不带时 missing_session——
-// macKey 派生或 session 绑定与服务器仍不一致，需抓包级样本才能定死（见 12-排查指南）。
-// 全部代码保留（V1_TO_V2 映射、v2SignHeaders 签名、v2EncryptBody/v2DecryptBody 信封、端点级熔断），
-// 设 localStorage oc_enable_v2='1' 即可一键启用。
-let v2Enabled = false;
-try { if (localStorage.getItem('oc_enable_v2') === '1') v2Enabled = true; } catch (e) {}
+// 接口版本模式（设置 → 通用 → 接口版本）：'v1优先'(默认) / 'v2优先' / '仅v1' / '仅v2'
+//  - v1优先(默认)：优先 v1；若 v1 失败(网络/5xx/路由不存在)且存在 v2 映射，自动回退 v2 重试
+//  - v2优先：优先 v2(有映射时)；失败自动回退 v1
+//  - 仅v1：始终 v1，绝不走 v2
+//  - 仅v2：始终 v2；若某接口无 v2 版本则直接抛错（"如果没有这个接口直接报错"）
+// v2 实际可行性(2026-08-10 据官方 v2 文档 api202608100558.md 确认)：ECDH 握手派生
+// macKey=sha256(secret||"mac") 与文档 §4.1 完全一致；此前 v2 失败的两点根因 = ①未带 X-Session
+// ②signingString 误用了 token 而非 METHOD。现已修正(见 v2SignHeaders)。WS 仍走 v1
+// （独立大项，暂不随开关迁移）。
+function getApiVersionMode() {
+    let m = 'v1优先';
+    try { m = localStorage.getItem('oc_api_version') || 'v1优先'; } catch (e) {}
+    if (!['v1优先', 'v2优先', '仅v1', '仅v2'].includes(m)) m = 'v1优先';
+    return m;
+}
 
 // v2 请求签名头（HMAC-SHA256，密钥 = ECDH 握手派生的 wsMacKey）
-// 12-v2签名机制与响应结构补充.md §1：sign = base64_nopad(HMAC-SHA256(macKey, token+\n+path+\n+ts+\n+nonce))
-// path 不含查询参数；nonce = 16 字节随机 → base64 无填充；X-Device-Id = oldchat_device_id
-async function v2SignHeaders(path) {
+// 官方文档 §4.4：sign = base64url(HMAC-SHA256(macKey, signingString))
+// signingString = METHOD + "\n" + PATH + "\n" + TS + "\n" + NONCE
+// 且 v2SignMiddleware 强制 X-Session 有效 → 必须带上 handshake 返回的 session_id
+// PATH 不含查询参数；nonce = 16 字节随机 → base64 无填充；X-Device-Id = oldchat_device_id（可选，灰度绑定）
+async function v2SignHeaders(path, method) {
     const cleanPath = String(path || '').split('?')[0];
     if (!/^\/v2\//.test(cleanPath)) return {};
     const sess = window.__wsSession;
@@ -1294,15 +1303,22 @@ async function v2SignHeaders(path) {
     }
     const macKey = sess.getMacKey();
     if (!macKey || !macKey.length) return {};
-    const token = localStorage.getItem('oc_access_token') || '';
+    const sessionId = sess.getSessionId();
+    if (!sessionId) return {};
     const ts = String(Math.floor(Date.now() / 1000));
     const nonceBytes = new Uint8Array(16);
     try { crypto.getRandomValues(nonceBytes); } catch (e) {}
     const nonce = Crypto.bytesToBase64(nonceBytes).replace(/=+$/, '');
-    const data = new TextEncoder().encode(token + '\n' + cleanPath + '\n' + ts + '\n' + nonce);
+    const meth = (method || 'GET').toUpperCase();
+    const data = new TextEncoder().encode(meth + '\n' + cleanPath + '\n' + ts + '\n' + nonce);
     const sig = await Crypto.hmacSha256(macKey, data);
     const sign = Crypto.bytesToBase64(sig).replace(/=+$/, '');
-    const hdrs = { 'X-Ts': ts, 'X-Nonce': nonce, 'X-Sign': sign };
+    const hdrs = {
+        'X-Session': sessionId,
+        'X-Ts': ts,
+        'X-Nonce': nonce,
+        'X-Sign': sign
+    };
     const devId = localStorage.getItem('oldchat_device_id');
     if (devId) hdrs['X-Device-Id'] = devId;
     return hdrs;
@@ -1383,71 +1399,104 @@ async function maybeDecryptV2Response(res) {
 }
 
 async function apiFetch(url, options = {}) {
-    // 路径版本处理：
-    //  - 启用 v2 且该端点未熔断：/v1/ 命中映射表 → /v2/（并加签名）
-    //  - 该 v2 端点已熔断：/v2/ 转回 /v1/（不再签名）
-    //  - 默认：未列入映射表的端点始终是 /v1/，不做迁移
-    if (url.startsWith('/v1/')) {
-        if (v2Enabled) url = mapToV2(url);
-    } else if (url.startsWith('/v2/')) {
-        if (v2FailedPaths.has(url.split('?')[0])) url = v2ToV1(url);
+    // 接口版本模式（设置 → 通用 → 接口版本）。决定 v1/v2 尝试顺序与回退策略：
+    //  v1优先(默认): [v1, v2]   v2优先: [v2, v1]   仅v1: [v1]   仅v2: [v2]
+    const mode = getApiVersionMode();
+    const hasV2 = mapToV2(url) !== url;
+    const method = (options.method || 'GET').toUpperCase();
+
+    // 仅v2 但该接口无 v2 版本 → 直接报错（"如果没有这个接口直接报错"）
+    if (mode === '仅v2' && !hasV2) {
+        throw new Error('该接口不存在 v2 版本：' + url);
     }
-    const useCandidates = url.startsWith('/v1/') || url.startsWith('/v2/');
-    const token = localStorage.getItem('oc_access_token');
-    options.headers = options.headers || {};
-    options.headers['User-Agent'] = 'OldChatForKivotosNext';
-    if (token) {
-        options.headers['Authorization'] = 'Bearer ' + token;
-    }
-    // v2 端点附加签名头（12-排查指南 §8.2：两条传输路径**互斥**——h0.e 旧传输层=有签名无加密、
-    // 不带 X-Session；h0.c 新传输层=有加密无签名。服务器实测按 h0.e 验签（返回明文 bad_signature），
-    // 因此 v2 请求走**纯 h0.e 路径**：只带签名四件套 + Authorization，body 明文，不加任何 X-Enc/X-Session/X-Burn-Secure）
-    if (url.startsWith('/v2/')) {
-        let signHdrs = {};
-        try {
-            signHdrs = await v2SignHeaders(url);
-        } catch (e) {
-            console.warn('[apiFetch] v2 签名失败，熔断回退 v1：', url, e);
-        }
-        // 会话/签名不可用（握手未完成/失败）时**不裸发 v2**——服务器会报 missing_session；
-        // 直接按端点熔断回退 v1（本次即恢复）。
-        const sessReady = !!(window.__wsSession && window.__wsSession.getSessionId && window.__wsSession.getSessionId());
-        if (!signHdrs['X-Sign'] || !sessReady) {
-            const v1Url = v2ToV1(url);
-            if (v1Url !== url) {
-                v2FailedPaths.add(url.split('?')[0]);
-                console.warn('[apiFetch] v2 会话未就绪，熔断回退 v1：', url);
-                url = v1Url;
+
+    const v2Path = hasV2 ? mapToV2(url).split('?')[0] : null;
+    const v2Blocked = !!(v2Path && v2FailedPaths.has(v2Path)); // 该端点此前 v2 失败，本次跳过（仅v2 除外）
+    let plan;
+    if (mode === '仅v1') plan = ['v1'];
+    else if (mode === '仅v2') plan = ['v2'];
+    else if (mode === 'v2优先') plan = (hasV2 && !v2Blocked) ? ['v2', 'v1'] : ['v1'];
+    else plan = (hasV2 && !v2Blocked) ? ['v1', 'v2'] : ['v1']; // v1优先（默认）
+
+    let lastRes = null, lastErr = null;
+    for (let i = 0; i < plan.length; i++) {
+        const ver = plan[i];
+        const isLast = i === plan.length - 1;
+        const targetUrl = ver === 'v2' ? mapToV2(url) : url;
+        const strictV2 = (ver === 'v2' && mode === '仅v2');
+
+        // 每次尝试用独立 headers 副本，避免 v2 专属头泄漏到 v1 尝试
+        const attemptOptions = Object.assign({}, options);
+        attemptOptions.headers = Object.assign({}, options.headers || {});
+        attemptOptions.headers['User-Agent'] = 'OldChatForKivotosNext';
+        const token = localStorage.getItem('oc_access_token');
+        if (token) attemptOptions.headers['Authorization'] = 'Bearer ' + token;
+
+        if (ver === 'v2') {
+            let signHdrs = {};
+            try { signHdrs = await v2SignHeaders(targetUrl, method); } catch (e) {
+                console.warn('[apiFetch] v2 签名失败：', targetUrl, e);
             }
-        } else {
-            // h0.e 纯签名路径：X-Ts/X-Nonce/X-Sign/X-Device-Id（签名函数已返回），body 明文不加密
-            Object.assign(options.headers, signHdrs);
+            const sessReady = !!(window.__wsSession && window.__wsSession.getSessionId && window.__wsSession.getSessionId());
+            if (signHdrs['X-Sign'] && sessReady) {
+                Object.assign(attemptOptions.headers, signHdrs);
+            } else if (strictV2) {
+                throw new Error('v2 会话未就绪，无法发送 v2 请求：' + targetUrl);
+            } else if (!isLast) {
+                // 非严格模式且 v2 会话不可用：跳过本次 v2 尝试，交回退版本处理
+                continue;
+            }
+        }
+
+        try {
+            const res = await _fetchVersion(targetUrl, attemptOptions, strictV2);
+            if (res && res.ok) return res;
+            lastRes = res;
+            if (isLast) break;
+            if (!_isFallbackable(res)) break;
+        } catch (e) {
+            lastErr = e;
+            if (isLast) break;
         }
     }
+    if (lastErr && !lastRes) throw lastErr;
+    return lastRes;
+}
+
+// 单次版本尝试：GET 请求去重 + 候选地址降级
+async function _fetchVersion(url, options, strictV2) {
     const isGet = !options.method || String(options.method).toUpperCase() === 'GET';
-    if (useCandidates && isGet) {
+    if (isGet) {
+        const token = localStorage.getItem('oc_access_token');
         const key = url + '|' + (token ? '1' : '0');
         if (_inflightGet.has(key)) {
-            const p = _inflightGet.get(key);
-            try { return (await p).clone(); } catch (e) { /* clone 失败则重新请求 */ }
+            try { return (await _inflightGet.get(key)).clone(); } catch (e) { /* clone 失败则重新请求 */ }
         }
-        const p = _fetchWithCandidates(url, options);
+        const p = _fetchWithCandidates(url, options, strictV2);
         _inflightGet.set(key, p);
         try {
             const res = await p;
-            if (!res) return res;
-            return res.clone();
-        } catch (e) {
-            throw e;
+            return res ? res.clone() : res;
         } finally {
             _inflightGet.delete(key);
         }
     }
-    return _fetchWithCandidates(url, options);
+    return _fetchWithCandidates(url, options, strictV2);
+}
+
+// 判断某次失败响应是否值得回退到下一个版本尝试
+function _isFallbackable(res) {
+    if (!res) return true;               // 网络错误
+    if (res.status >= 500) return true;  // 服务端暂不可用
+    if (res.status === 404) {            // 路由不存在（非 JSON 404）→ 可能该版本无此接口
+        const ct = (res.headers && res.headers.get && res.headers.get('content-type')) || '';
+        if (ct.indexOf('json') === -1) return true;
+    }
+    return false; // 2xx 已在上层 return；4xx（含 401 鉴权）按语义错误，不回退
 }
 
 // 按候选列表顺序请求：网络错误 / 5xx 自动降级到下一个候选
-async function _fetchWithCandidates(url, options) {
+async function _fetchWithCandidates(url, options, strictV2) {
     if (!url.startsWith('/v1/') && !url.startsWith('/v2/')) {
         // 绝对地址（如媒体直链）不走候选降级
         return await tauriHttpFetch(url, options);
@@ -1483,7 +1532,8 @@ async function _fetchWithCandidates(url, options) {
         }
         if (res.status === 401) {
             // v2 端点 401 → 该端点熔断回退 v1 重发（本次即恢复；仅影响该端点，避免登录死循环）
-            if (url.startsWith('/v2/')) {
+            // 仅v2 模式(strictV2)下不回退 v1，让错误直接上浮
+            if (!strictV2 && url.startsWith('/v2/')) {
                 // 读取并打印 401 响应体（可能是加密信封，尝试解密）——服务器拒绝原因的关键调试信息
                 let bodyText = '';
                 try { bodyText = await res.text(); } catch (e) {}
@@ -1496,6 +1546,10 @@ async function _fetchWithCandidates(url, options) {
                         } catch (e) {}
                     }
                     console.warn('[apiFetch] v2 401 响应体：' + base + url + ' → ' + String(shown).slice(0, 300));
+                    // 服务端重启导致会话失效：清本地会话，下次 v2 请求自动重新握手
+                    if (/invalid_session|missing_session/.test(bodyText) && window.__wsSession && window.__wsSession.clear) {
+                        window.__wsSession.clear();
+                    }
                 }
                 const cleanPath = url.split('?')[0];
                 if (!v2FailedPaths.has(cleanPath)) {
@@ -4653,7 +4707,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         ensure: ensureWsSession,
         getMacKey: () => wsMacKey,
         getEncKey: () => wsEncKey,
-        getSessionId: () => wsSessionId
+        getSessionId: () => wsSessionId,
+        clear: () => { wsSessionId = null; wsEncKey = null; wsMacKey = null; }
     };
 
     // 解密 WS 加密信封 {iv, data, mac}
@@ -8791,6 +8846,17 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     <span class="label">深色模式</span>
                     <span class="value">${currentTheme === 'dark' ? '已开启' : '已关闭'} <i class="fa-solid fa-chevron-right"></i></span>
                 </div>
+                <div class="settings-item" id="settingsApiVersion">
+                    <span class="label">接口版本</span>
+                    <span class="value">
+                        <select id="apiVersionSelect" style="max-width:150px;padding:4px 8px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;cursor:pointer;">
+                            <option value="v1优先">v1优先（默认）</option>
+                            <option value="v2优先">v2优先</option>
+                            <option value="仅v1">仅v1</option>
+                            <option value="仅v2">仅v2</option>
+                        </select>
+                    </span>
+                </div>
             </div>
             <h3 style="margin-top:20px;">服务器配置</h3>
             <div class="settings-group">
@@ -8838,6 +8904,16 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             applyTheme(newTheme);
             renderSettingsAppearance();
         });
+        // 接口版本开关（设置 → 通用 → 接口版本）
+        const apiSel = document.getElementById('apiVersionSelect');
+        if (apiSel) {
+            apiSel.value = getApiVersionMode();
+            apiSel.addEventListener('change', () => {
+                localStorage.setItem('oc_api_version', apiSel.value);
+                try { v2FailedPaths.clear(); } catch (e) {} // 切换后重置 v2 端点熔断，允许重新尝试
+                if (typeof showAlert === 'function') showAlert('接口版本已切换为「' + apiSel.value + '」，后续请求即时生效');
+            });
+        }
         // 服务器配置：候选列表管理 / 保存 / 恢复默认
         {
             const baseCands = BACKEND_CANDIDATES.slice();
