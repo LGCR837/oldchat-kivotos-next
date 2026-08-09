@@ -63,9 +63,6 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Inject release tag as app version (no commit)
-        run: node scripts/set-version.mjs "${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}"
-
       - name: Build and upload Tauri binary
         uses: tauri-apps/tauri-action@v1
         env:
@@ -151,9 +148,6 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
-
-      - name: Inject release tag as app version (no commit)
-        run: node scripts/set-version.mjs "${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}"
 
       - name: Build and upload Tauri binary
         uses: tauri-apps/tauri-action@v1

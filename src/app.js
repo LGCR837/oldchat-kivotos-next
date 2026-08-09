@@ -8952,7 +8952,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 window.open(url, '_blank');
             }
         });
-        // 版本号：读取 CI 注入的 tauri.conf.json version（Release tag）；点击检查更新
+        // 版本号：读取 app_version 命令（本地写死为 v7）；点击检查更新
         const aboutInvoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
         const verEl = document.getElementById('aboutVersionValue');
         if (aboutInvoke) {
@@ -8992,18 +8992,6 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         return data.releases;
     }
 
-    // 归一化版本号用于比对：CI 注入的 version 是 semver（v6→6.0.0），而 Release tag 带 v 前缀，
-    // 两者必须归一化后才能判断"是否最新/是否在列表中"。仅用于比较，展示仍用原始字符串。
-    function normVer(v) {
-        if (!v) return '';
-        const s = String(v).replace(/^v/i, '').replace(/[-+].*$/, '');
-        const parts = s.split('.').map(p => p.replace(/\D+/g, ''));
-        const nums = [];
-        for (const p of parts) { if (p === '') break; nums.push(parseInt(p, 10)); }
-        while (nums.length < 3) nums.push(0);
-        return nums.slice(0, 3).join('.');
-    }
-
     // 检查更新：点击版本号 → 立即弹出弹窗并转圈加载 → 拉取数据后填充结果
     // 最新 tag 与当前版本不一致 → 有更新；当前版本在列表中 → 展示其后的全部更新内容，否则只提示最新版本
     async function checkForUpdates() {
@@ -9027,14 +9015,13 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const latestTag = latest.tag || '';
         if (!latestTag) { dlg.setError('未获取到版本信息。'); return; }
 
-        if (normVer(currentVersion) === normVer(latestTag)) {
+        if (currentVersion === latestTag) {
             dlg.showResult('当前已是最新版本（' + latestTag + '）。');
             return;
         }
 
-        // 定位当前版本在列表中的位置（semver 归一化后比较）；>=0 表示列表中有此版本 → 展示其后的全部更新内容
-        const cv = normVer(currentVersion);
-        const idx = releases.findIndex(r => normVer(r.tag || '') === cv && cv !== '');
+        // 定位当前版本在列表中的位置；>=0 表示列表中有此版本 → 展示其后的全部更新内容
+        const idx = releases.findIndex(r => (r.tag || '') === currentVersion);
         const entries = idx >= 0 ? releases.slice(0, idx) : [latest];
         dlg.showResult('发现新版本 ' + latestTag + '！', entries, currentVersion, idx >= 0, () => {
             dlg.close();

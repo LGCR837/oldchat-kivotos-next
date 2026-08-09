@@ -31,16 +31,10 @@ fn env_report() -> serde_json::Value {
     })
 }
 
-// 当前应用版本：返回 tauri.conf.json 的 version 字段。
-// CI 发布构建时（scripts/set-version.mjs）会把该字段临时注入为 Release tag（如 v6）；
-// 本地开发（debug 构建）固定显示 DEV，方便区分构建来源。
+// 当前应用版本：本地写死为 v7，不再由 CI 动态注入。
 #[tauri::command]
-fn app_version(app: tauri::AppHandle) -> String {
-    if cfg!(debug_assertions) {
-        "DEV".to_string()
-    } else {
-        app.package_info().version.to_string()
-    }
+fn app_version() -> String {
+    "v7".to_string()
 }
 
 // 切换 DevTools：前端在 Ctrl+Alt+Shift+F12 时调用
