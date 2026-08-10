@@ -3619,12 +3619,20 @@ body::-webkit-scrollbar {
 .cip-overlay-header .window-controls { -webkit-app-region: no-drag; }
 .cip-overlay-title { font-weight: 600; font-size: 15px; }
 .cip-overlay-body { flex: 1; display: flex; min-height: 0; }
-.cip-app-list {
+.cip-side {
     width: 240px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
     border-right: 1px solid var(--border-color);
+}
+.cip-list-actions { padding: 8px 8px 0; flex-shrink: 0; }
+.cip-app-list {
+    flex: 1;
     overflow-y: auto;
     padding: 8px;
     box-sizing: border-box;
+    min-height: 0;
 }
 .cip-app-item {
     padding: 10px 12px;
@@ -3695,3 +3703,42 @@ body::-webkit-scrollbar {
 }
 .cip-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .cip-error { color: #ff6b6b; font-size: 13px; white-space: pre-wrap; line-height: 1.6; }
+
+/* 上传按钮 + 本地小程序管理 */
+.cip-list-actions { margin-bottom: 8px; }
+.cip-upload-btn {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px dashed var(--border-color);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s, border-color 0.15s;
+}
+.cip-upload-btn:hover { background: var(--hover-bg); border-color: var(--accent); }
+.cip-badge {
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-weight: 600;
+    line-height: 1.6;
+    flex-shrink: 0;
+}
+.cip-badge-local { background: rgba(76, 175, 80, 0.18); color: #4caf50; }
+.cip-badge-remote { background: rgba(120, 120, 120, 0.18); color: var(--secondary-text); }
+.cip-app-del {
+    border: none;
+    background: transparent;
+    color: var(--secondary-text);
+    cursor: pointer;
+    padding: 2px 5px;
+    border-radius: 6px;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+.cip-app-del:hover { background: rgba(255, 80, 80, 0.15); color: #ff6b6b; }
+

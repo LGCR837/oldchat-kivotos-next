@@ -463,6 +463,248 @@ fn delete_user_plugin(app: tauri::AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+// ===== CIP 本地小程序（用户上传 .cip / .zip）=====
+// 本地小程序存入「系统用户文件夹」：<app_config_dir>/cip/<id>/
+//   Windows: %APPDATA%/<identifier>/cip
+//   Linux  : $XDG_CONFIG_HOME/<identifier>/cip
+// 包格式：.cip / .zip 都是 zip 容器，根目录需含 main.lua（或任一 .lua 作为入口）；
+//         若文件本身不是合法 zip，则当作裸 Lua 源码直接作为 main.lua。
+// 每个小程序目录内含 meta.json（id/name/version/permissions/entry/kind=local）。
+
+// 取 cip 根目录（自动创建）
+fn cip_base(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let base = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("获取配置目录失败: {}", e))?;
+    let dir = base.join("cip");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建小程序目录失败: {}", e))?;
+    Ok(dir)
+}
+
+// 生成不冲突的 id（基于文件名清洗；已存在则追加 _2/_3…）
+fn make_cip_id(app: &tauri::AppHandle, stem: &str) -> Result<String, String> {
+    let base = cip_base(app)?;
+    let safe = sanitize_theme_id(stem);
+    let mut candidate = safe.clone();
+    let mut n = 2;
+    while base.join(&candidate).exists() {
+        candidate = format!("{}_{}", safe, n);
+        n += 1;
+    }
+    Ok(candidate)
+}
+
+// 防 zip-slip：把压缩项名安全拼到目标目录
+fn safe_join(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    let cleaned: String = name.replace('\\', "/");
+    let mut out = dir.to_path_buf();
+    for seg in cleaned.split('/') {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." {
+            out.pop();
+            continue;
+        }
+        out.push(seg);
+    }
+    Some(out)
+}
+
+// 解压 zip 字节到目录
+fn extract_zip(bytes: &[u8], dir: &std::path::Path) -> Result<(), String> {
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| format!("不是有效的压缩包: {}", e))?;
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .map_err(|e| format!("读取压缩项失败: {}", e))?;
+        let name = file.name().to_string();
+        let outpath = match safe_join(dir, &name) {
+            Some(p) => p,
+            None => continue,
+        };
+        if file.is_dir() {
+            std::fs::create_dir_all(&outpath).map_err(|e| format!("创建目录失败: {}", e))?;
+            continue;
+        }
+        if let Some(parent) = outpath.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
+        }
+        let mut out =
+            std::fs::File::create(&outpath).map_err(|e| format!("写入文件失败: {}", e))?;
+        std::io::copy(&mut file, &mut out).map_err(|e| format!("解压失败: {}", e))?;
+    }
+    Ok(())
+}
+
+// 在解压目录里定位入口 lua（优先 main.lua，否则首个 .lua）
+fn find_entry_lua(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let main = dir.join("main.lua");
+    if main.exists() {
+        return Some(main);
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let mut found: Vec<std::path::PathBuf> = Vec::new();
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("lua") {
+                found.push(p);
+            }
+        }
+        found.sort();
+        if let Some(f) = found.into_iter().next() {
+            return Some(f);
+        }
+    }
+    None
+}
+
+// 构建 meta.json（优先读包内 meta.json/manifest.json/cip.json，否则派生）
+fn build_cip_meta(
+    dir: &std::path::Path,
+    id: &str,
+    stem: &str,
+    entry_rel: &str,
+) -> serde_json::Value {
+    for name in ["meta.json", "manifest.json", "cip.json"] {
+        let p = dir.join(name);
+        if let Ok(s) = std::fs::read_to_string(&p) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                let mut meta = v;
+                meta["id"] = serde_json::json!(id);
+                if meta["entry"].is_null() {
+                    meta["entry"] = serde_json::json!(entry_rel);
+                }
+                if meta["name"].is_null()
+                    || meta["name"].as_str().unwrap_or("").is_empty()
+                {
+                    meta["name"] = serde_json::json!(stem);
+                }
+                meta["kind"] = serde_json::json!("local");
+                return meta;
+            }
+        }
+    }
+    let created = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    serde_json::json!({
+        "id": id,
+        "name": stem,
+        "description": "",
+        "version": "1.0.0",
+        "permissions": [],
+        "entry": entry_rel,
+        "kind": "local",
+        "created_at": created
+    })
+}
+
+// 原生文件选择框挑选 .cip/.zip → 解包 → 写入 cip/<id>/ → 返回 meta
+#[tauri::command]
+fn import_cip_app(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter("CIP 小程序", &["cip", "zip"])
+        .blocking_pick_file();
+    let path = match picked {
+        Some(FilePath::Path(p)) => p,
+        _ => return Err("未选择文件".into()),
+    };
+    let bytes = std::fs::read(&path).map_err(|e| format!("读取文件失败: {}", e))?;
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("app")
+        .to_string();
+
+    let id = make_cip_id(&app, &stem)?;
+    let dir = cip_base(&app)?.join(&id);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建小程序目录失败: {}", e))?;
+
+    // 先尝试作为 zip 解包；失败则当作裸 Lua 源码
+    let is_zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).is_ok();
+    let entry_rel: String;
+    if is_zip {
+        extract_zip(&bytes, &dir)?;
+        let entry =
+            find_entry_lua(&dir).ok_or_else(|| "压缩包内未找到 main.lua 或任何 .lua 入口".to_string())?;
+        entry_rel = entry
+            .strip_prefix(&dir)
+            .unwrap_or(&entry)
+            .to_string_lossy()
+            .replace('\\', "/");
+    } else {
+        std::fs::write(dir.join("main.lua"), &bytes).map_err(|e| format!("写入脚本失败: {}", e))?;
+        entry_rel = "main.lua".to_string();
+    }
+
+    let meta = build_cip_meta(&dir, &id, &stem, &entry_rel);
+    std::fs::write(
+        dir.join("meta.json"),
+        serde_json::to_string_pretty(&meta).unwrap_or_default(),
+    )
+    .map_err(|e| format!("写入元数据失败: {}", e))?;
+    Ok(meta)
+}
+
+// 列出已安装的本地小程序
+#[tauri::command]
+fn list_cip_apps(app: tauri::AppHandle) -> Vec<serde_json::Value> {
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    if let Ok(base) = cip_base(&app) {
+        if let Ok(entries) = std::fs::read_dir(base) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if !p.is_dir() {
+                    continue;
+                }
+                let meta_path = p.join("meta.json");
+                if let Ok(s) = std::fs::read_to_string(&meta_path) {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                        out.push(v);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+// 读取本地小程序入口脚本（按 meta.entry，缺省 main.lua）
+#[tauri::command]
+fn read_cip_app(app: tauri::AppHandle, id: String) -> Result<String, String> {
+    let safe = sanitize_theme_id(&id);
+    let dir = cip_base(&app)?.join(safe);
+    let mut entry = "main.lua".to_string();
+    let meta_path = dir.join("meta.json");
+    if let Ok(s) = std::fs::read_to_string(&meta_path) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+            if let Some(e) = v["entry"].as_str() {
+                entry = e.to_string();
+            }
+        }
+    }
+    let script_path = dir.join(&entry);
+    std::fs::read_to_string(&script_path).map_err(|e| format!("读取脚本失败: {}", e))
+}
+
+// 删除本地小程序
+#[tauri::command]
+fn delete_cip_app(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let safe = sanitize_theme_id(&id);
+    let dir = cip_base(&app)?.join(safe);
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).map_err(|e| format!("删除失败: {}", e))?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 启动自检：必须先于 Tauri 运行时初始化。
@@ -504,7 +746,11 @@ pub fn run() {
             import_plugin,
             list_user_plugins,
             read_plugin_source,
-            delete_user_plugin
+            delete_user_plugin,
+            import_cip_app,
+            list_cip_apps,
+            read_cip_app,
+            delete_cip_app
         ])
         // 拦截窗口关闭请求：改为隐藏到托盘
         .on_window_event(|window, event| {

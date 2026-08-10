@@ -41,6 +41,14 @@
     return Promise.resolve(null); // 无 subtle 时跳过校验
   }
 
+  // 调 Rust 命令（与 app.js getInvoke() 同款写法）
+  function cipInvoke(cmd, args) {
+    var invoke = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
+      (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);
+    if (!invoke) return Promise.reject(new Error('当前环境不支持（需在 Tauri 中运行）'));
+    return invoke(cmd, args || {});
+  }
+
   var Controller = {
     _list: [],
     _engine: null,
@@ -48,6 +56,12 @@
     open: function () {
       var el = document.getElementById('cipDebugger');
       if (el) el.classList.remove('hidden');
+      // 绑定「上传本地小程序」按钮（仅绑一次）
+      var up = document.getElementById('cipUploadBtn');
+      if (up && !up.dataset.bound) {
+        up.dataset.bound = '1';
+        up.addEventListener('click', function () { Controller.uploadApp(); });
+      }
       this.refresh();
     },
     close: function () {
@@ -71,27 +85,95 @@
       var self = this;
       var listEl = document.getElementById('cipAppList');
       listEl.innerHTML = '<div class="cip-placeholder">加载清单中…</div>';
-      getJSON(manifestUrl()).then(function (data) {
-        self._list = (data && data.apps) || [];
+      // 本地与官方清单独立加载，任一失败都不影响另一部分
+      Promise.allSettled([this.loadLocal(), this.loadRemote()]).then(function (r) {
+        var list = [];
+        if (r[0].status === 'fulfilled') list = list.concat(r[0].value);
+        if (r[1].status === 'fulfilled') list = list.concat(r[1].value);
+        self._list = list;
         self.renderList();
-      }).catch(function (err) {
-        listEl.innerHTML = '<div class="cip-error">清单加载失败：' + ((err && err.message) || err) + '</div>';
+      });
+    },
+    // 本地小程序（用户上传，存于用户目录）
+    loadLocal: function () {
+      return cipInvoke('list_cip_apps').then(function (apps) {
+        return (apps || []).map(function (a) {
+          return {
+            id: a.id,
+            name: a.name || a.id,
+            description: a.description || '',
+            version: a.version || '',
+            permissions: a.permissions || [],
+            kind: 'local'
+          };
+        });
+      });
+    },
+    // 官方小程序（服务端 manifest）
+    loadRemote: function () {
+      return getJSON(manifestUrl()).then(function (data) {
+        return (data && data.apps || []).map(function (a) {
+          return {
+            id: a.id,
+            name: a.name || a.id,
+            description: a.description || '',
+            version: a.version || '',
+            permissions: a.permissions || [],
+            kind: 'remote'
+          };
+        });
       });
     },
     renderList: function () {
       var listEl = document.getElementById('cipAppList');
       listEl.innerHTML = '';
-      if (!this._list.length) { listEl.innerHTML = '<div class="cip-placeholder">没有可用小程序</div>'; return; }
+      if (!this._list.length) { listEl.innerHTML = '<div class="cip-placeholder">没有可用小程序<br>点上方「上传本地小程序」试试</div>'; return; }
       var self = this;
       this._list.forEach(function (app) {
         var item = document.createElement('div');
         item.className = 'cip-app-item';
         item.dataset.id = app.id;
+        item.dataset.kind = app.kind;
+
+        var head = document.createElement('div');
+        head.style.display = 'flex';
+        head.style.alignItems = 'center';
+        head.style.justifyContent = 'space-between';
+        head.style.gap = '8px';
+
+        var nameWrap = document.createElement('div');
+        nameWrap.style.minWidth = '0';
         var name = document.createElement('div'); name.className = 'cip-app-name';
         name.textContent = app.name || app.id;
         var desc = document.createElement('div'); desc.className = 'cip-app-desc';
         desc.textContent = app.description || '';
-        item.appendChild(name); item.appendChild(desc);
+        nameWrap.appendChild(name); nameWrap.appendChild(desc);
+        head.appendChild(nameWrap);
+
+        // 右侧：来源徽标 + （本地）删除按钮
+        var right = document.createElement('div');
+        right.style.display = 'flex';
+        right.style.alignItems = 'center';
+        right.style.gap = '6px';
+        right.style.flexShrink = '0';
+        var badge = document.createElement('span');
+        badge.className = 'cip-badge ' + (app.kind === 'local' ? 'cip-badge-local' : 'cip-badge-remote');
+        badge.textContent = app.kind === 'local' ? '本地' : '官方';
+        right.appendChild(badge);
+        if (app.kind === 'local') {
+          var del = document.createElement('button');
+          del.className = 'cip-app-del';
+          del.title = '删除小程序';
+          del.innerHTML = '<i class="fa-solid fa-trash"></i>';
+          del.addEventListener('click', function (e) {
+            e.stopPropagation();
+            self.deleteApp(app, item);
+          });
+          right.appendChild(del);
+        }
+        head.appendChild(right);
+        item.appendChild(head);
+
         item.addEventListener('click', function () { self.selectApp(app, item); });
         listEl.appendChild(item);
       });
@@ -106,6 +188,17 @@
       var self = this;
       var area = document.getElementById('cipRunArea');
       area.innerHTML = '<div class="cip-placeholder">加载「' + (app.name || app.id) + '」中…</div>';
+      if (app.kind === 'local') {
+        // 本地小程序：从用户目录读取入口脚本（不做 sha256 远程校验）
+        cipInvoke('read_cip_app', { id: app.id }).then(function (script) {
+          if (!script) { area.innerHTML = '<div class="cip-error">脚本为空</div>'; return; }
+          self.execute(app, script);
+        }).catch(function (err) {
+          area.innerHTML = '<div class="cip-error">加载失败：' + ((err && err.message) || err) + '</div>';
+        });
+        return;
+      }
+      // 官方小程序：拉取脚本 + sha256 校验
       getJSON(appUrl(app.id)).then(function (data) {
         var script = data && data.script;
         if (!script) { area.innerHTML = '<div class="cip-error">脚本为空</div>'; return; }
@@ -150,6 +243,29 @@
       } catch (e) {
         area.innerHTML = '<div class="cip-error">' + ((e && e.message) || e) + '</div>';
       }
+    },
+    uploadApp: function () {
+      var self = this;
+      cipInvoke('import_cip_app').then(function (meta) {
+        self.toast('已导入「' + (meta.name || meta.id) + '」');
+        self.refresh();
+      }).catch(function (err) {
+        var m = (err && (err.message || err)) || '';
+        // 用户取消选择（"未选择文件"/cancelled）则静默
+        if (String(m).indexOf('未选择') === -1 && String(m).toLowerCase().indexOf('cancel') === -1) {
+          self.toast('导入失败：' + m);
+        }
+      });
+    },
+    deleteApp: function (app, itemEl) {
+      var self = this;
+      cipInvoke('delete_cip_app', { id: app.id }).then(function () {
+        if (itemEl && itemEl.parentNode) itemEl.parentNode.removeChild(itemEl);
+        self.toast('已删除「' + (app.name || app.id) + '」');
+        self.refresh();
+      }).catch(function (err) {
+        self.toast('删除失败：' + ((err && err.message) || err));
+      });
     },
     toast: function (msg) {
       var t = document.createElement('div');
