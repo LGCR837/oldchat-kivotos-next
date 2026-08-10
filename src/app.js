@@ -1965,6 +1965,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         let highlightTab = tabName;
         if (tabName === 'music') highlightTab = 'discover';
         if (tabName === 'court') highlightTab = 'discover';
+        if (tabName === 'plaza') highlightTab = 'discover';
         if (sidebarTabs) {
             sidebarTabs.querySelectorAll('.tab-btn').forEach(b => {
                 b.classList.toggle('active', b.dataset.tab === highlightTab);
@@ -1979,6 +1980,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 切换到公开法庭面板时加载案件列表（仅首次）
         if (tabName === 'court' && !courtLoaded) {
             loadCourtCases();
+        }
+
+        // 切换到资源广场面板时加载分区列表（仅首次）
+        if (tabName === 'plaza' && !plazaLoaded) {
+            loadPlazaSections();
         }
 
         // 切换到设置面板时渲染设置页面
@@ -3749,12 +3755,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 滚动加载历史消息状态
     const convOffset = {};        // convKey → 当前已加载的消息偏移量
     const convHasMore = {};       // convKey → boolean
-    // 群消息 group_seq 增量续拉状态：记住每个群已渲染的最高序号与时间戳
-    const groupLastSeq = {};      // convKey → 已渲染的最高 group_seq
-    const groupLastSeqAt = {};    // convKey → 上次推进 groupLastSeq 的时间戳
-    const groupLastTs = {};       // convKey → 已渲染消息的最大 created_at（v1 时间戳续拉兜底用）
-    // 热窗口：距上次推进超过该时长即视为"冷"，回落为只拉最新一页（绝不翻历史）
-    const GROUP_WARM_MS = 30 * 60 * 1000; // 30 分钟
     // 会话消息 DOM 缓存（切换会话时保留旧消息 DOM）
     const convCache = {};         // convKey → { fragment, scrollTop, seenMsgIds, offset, hasMore, lastTs }
     let isLoadingMore = false;
@@ -4549,8 +4549,6 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             // 更新会话最后时间戳
             const maxTs = newMsgs.reduce((mx, m) => Math.max(mx, m.created_at || 0), 0);
             if (maxTs > lastRenderedTs) lastRenderedTs = maxTs;
-            // 推进 group_seq 记录，保持热窗口
-            recordGroupSeq(convKey, newMsgs);
             console.log('[WS] 群增量同步补回 ' + newMsgs.length + ' 条消息');
         } catch (e) {
             console.warn('[WS] 群增量同步失败:', e);
@@ -5156,7 +5154,6 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 group_seq: d.group_seq || 0,
             };
             appendMessage(msgObj, convKey, seenMsgIds[convKey]);
-            if (d.group_seq) recordGroupSeq(convKey, [msgObj]); // 实时消息推进序号，保持热窗口
             scheduleAutoScroll();
             // 节流标记已读
             debouncedMarkRead('group', groupId);
@@ -5757,28 +5754,6 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         return true;
     }
 
-    // 群消息 group_seq 记录：扫描一批消息，推进该会话的最高序号/时间戳，并刷新热窗口时间戳
-    function recordGroupSeq(convKey, msgs) {
-        if (!convKey) return;
-        let maxSeq = groupLastSeq[convKey] || 0;
-        let maxTs = groupLastTs[convKey] || 0;
-        (msgs || []).forEach(m => {
-            const s = m.group_seq || 0;
-            const t = m.created_at || 0;
-            if (s > maxSeq) maxSeq = s;
-            if (t > maxTs) maxTs = t;
-        });
-        if (maxSeq > (groupLastSeq[convKey] || 0)) groupLastSeq[convKey] = maxSeq;
-        if (maxTs > (groupLastTs[convKey] || 0)) groupLastTs[convKey] = maxTs;
-        groupLastSeqAt[convKey] = Date.now();
-    }
-
-    // 将消息数组规整为 ASC（旧→新）顺序，按 group_seq 优先、created_at 兜底
-    function sortMessagesAsc(msgs) {
-        return (msgs || []).slice().sort((a, b) =>
-            ((a.group_seq || a.created_at || 0) - (b.group_seq || b.created_at || 0)));
-    }
-
     // 后台拉取最新消息（带请求 ID 防竞态）
     // 同步完成后丢弃旧缓存，用最新消息重建 DOM，只缓存最新一页
     let fetchLatestReqId = 0;
@@ -5788,66 +5763,25 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         // 显示同步中指示器
         if (syncIndicator) syncIndicator.style.display = '';
         try {
-            // 群消息：优先按 group_seq 增量续拉（短间隙，如刚切走 / WS 重连后）；
-            // 间隔超过热窗口（GROUP_WARM_MS）或首次进入 → 回落为拉最新一页（offset=0），
-            // 绝不翻历史（与旧行为一致，避免多年未进群时全量拉取）。
-            let historyUrl;
-            let useWarm = false;
-            if (type === 'group') {
-                const lastSeq = groupLastSeq[convKey] || 0;
-                // 暖续拉的前提是：当前已有渲染好的 DOM（从缓存恢复）可追加；
-                // 若无 DOM（缓存被回收 / 首开），after=seq 只会返回"片段"，必须走冷拉取最新一页。
-                const hasDom = messagesContainer.querySelector('.message[data-msg-id]') !== null;
-                const warm = hasDom && lastSeq > 0 && (Date.now() - (groupLastSeqAt[convKey] || 0) < GROUP_WARM_MS);
-                if (warm) {
-                    const mode = getApiVersionMode();
-                    if (mode !== '仅v1') {
-                        // v2 按序号续拉（v2 优先 / v1优先 的 v2 分支 / 仅v2 均走此）
-                        historyUrl = `/v2/groups/messages/after?group_id=${encodeURIComponent(id)}&seq=${lastSeq}&limit=${PAGE_SIZE}`;
-                    } else {
-                        // 仅v1 模式无 v2 端点，回落 v1 时间戳续拉
-                        historyUrl = `/v1/groups/messages/after?group_id=${encodeURIComponent(id)}&after=${groupLastTs[convKey] || 0}&limit=${PAGE_SIZE}`;
-                    }
-                    useWarm = true;
-                }
-            }
-            if (!historyUrl) {
-                // 冷拉取：私聊按 NCUID；群拉最新一页
-                historyUrl = type === 'group'
-                    ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`
-                    : `/v1/direct/messages/v2?with_ncuid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
-            }
+            // 群 / 私聊统一：拉最新一页（offset=0）。群消息同步不做 seq 增量续拉
+            // （/v2/groups/messages/after 接口有 Bug，已回退为统一的最新一页拉取）。
+            const historyUrl = type === 'group'
+                ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`
+                : `/v1/direct/messages/v2?with_ncuid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
             let res, data;
             try {
                 res = await apiFetch(historyUrl);
                 data = await res.json();
                 if (data.error) throw new Error(String(data.error));
             } catch (e) {
-                // 增量续拉失败：回落为最新一页冷拉取（与旧行为一致，避免报错卡死）
-                if (useWarm) {
-                    console.warn('[FETCH] 群消息暖续拉失败，回落最新一页:', e);
-                    useWarm = false;
-                    historyUrl = `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
-                    res = await apiFetch(historyUrl);
-                    data = await res.json();
-                    if (data.error) {
-                        console.error('[FETCH] API error for', historyUrl, data.error);
-                        return;
-                    }
-                } else {
-                    console.error('[FETCH] API error for', historyUrl, e);
-                    return;
-                }
+                console.error('[FETCH] API error for', historyUrl, e);
+                return;
             }
             // 检查是否已切换会话或该请求已过期
             if (reqId !== fetchLatestReqId || currentConv?.key !== convKey) return;
 
-            // 冷拉取返回 DESC（最新在前）→ 反转 ASC；暖续拉返回 ASC（按 seq/时间）→ 直接排序
-            const msgs = useWarm
-                ? sortMessagesAsc(data.messages)
-                : (data.messages || []).slice().reverse();
-            // 记录已渲染的最高 group_seq / created_at，刷新热窗口
-            if (type === 'group') recordGroupSeq(convKey, msgs);
+            // 后端返回 DESC（最新在前）→ 反转为 ASC（旧→新）
+            const msgs = (data.messages || []).slice().reverse();
 
             // ====== 增量更新：检查是否已有缓存 DOM，尝试增量追加新消息 ======
             const existingMsgEls = messagesContainer.querySelectorAll('.message[data-msg-id]');
@@ -6033,6 +5967,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             isLoadingMore = true;
             const loadReqId = ++isLoadingMoreReqId;
             const currentHeight = messagesContainer.scrollHeight;
+            // 顶部插入「加载中」指示器（拉取更早消息时显示，完成后移除）
+            let historySpinner = document.createElement('div');
+            historySpinner.className = 'history-loading';
+            historySpinner.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 加载中...';
+            messagesContainer.insertBefore(historySpinner, messagesContainer.firstChild);
             try {
                 const offset = convOffset[convKey] || 0;
                 const olderUrl = type === 'group'
@@ -6081,13 +6020,16 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     if (el) frag.appendChild(el);
                     prevTs = msgTs;
                 });
-                messagesContainer.insertBefore(frag, messagesContainer.firstChild);
+                messagesContainer.insertBefore(frag, historySpinner);
 
-                // 调整滚动位置，保持可视区域不变
+                // 先移除顶部加载指示器，再调整滚动位置、保持可视区域不变
+                if (historySpinner && historySpinner.parentNode) historySpinner.remove();
+                historySpinner = null;
                 messagesContainer.scrollTop = messagesContainer.scrollHeight - scrollBottom;
             } catch (e) {
                 console.error(e);
             } finally {
+                if (historySpinner && historySpinner.parentNode) historySpinner.remove();
                 isLoadingMore = false;
             }
         };
@@ -8915,14 +8857,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     }
 
     function renderSettingsAppearance() {
-        const currentTheme = localStorage.getItem('theme') || 'light';
         settingsContent.innerHTML = `
             <h3>通用</h3>
             <div class="settings-group">
-                <div class="settings-item" id="settingsThemeToggle">
-                    <span class="label">深色模式</span>
-                    <span class="value">${currentTheme === 'dark' ? '已开启' : '已关闭'} <i class="fa-solid fa-chevron-right"></i></span>
-                </div>
                 <div class="settings-item" id="settingsApiVersion">
                     <span class="label">接口版本</span>
                     <span class="value">
@@ -8975,12 +8912,6 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 </div>
             </div>
         `;
-        document.getElementById('settingsThemeToggle')?.addEventListener('click', () => {
-            const newTheme = (localStorage.getItem('theme') || 'light') === 'dark' ? 'light' : 'dark';
-            localStorage.setItem('theme', newTheme);
-            applyTheme(newTheme);
-            renderSettingsAppearance();
-        });
         // 接口版本开关（设置 → 通用 → 接口版本）
         const apiSel = document.getElementById('apiVersionSelect');
         if (apiSel) {
@@ -9647,6 +9578,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         settingsContent.innerHTML =
             '<h3>主题</h3>' +
             '<div class="settings-group" style="margin-bottom:14px;">' +
+                '<div class="settings-item" id="settingsThemeModeToggle">' +
+                    '<span class="label">深色模式</span>' +
+                    '<span class="value" id="themeModeValue"></span>' +
+                '</div>' +
+            '</div>' +
+            '<div class="settings-group" style="margin-bottom:14px;">' +
                 '<button id="themeUploadBtn" class="btn primary" style="width:100%;">上传主题（.css 文件）</button>' +
             '</div>' +
             '<div id="themeList">加载中...</div>' +
@@ -9654,6 +9591,17 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 '<button id="themeResetBtn" style="display:inline-block!important;width:100%;padding:10px;border:1px solid var(--border-color);background:var(--panel-bg);color:var(--text);border-radius:8px;cursor:pointer;font-family:inherit;font-size:13px;">恢复默认主题</button>' +
             '</div>';
 
+        const themeModeVal = document.getElementById('themeModeValue');
+        if (themeModeVal) {
+            const curMode = localStorage.getItem('theme') || 'light';
+            themeModeVal.innerHTML = (curMode === 'dark' ? '已开启' : '已关闭') + ' <i class="fa-solid fa-chevron-right"></i>';
+        }
+        document.getElementById('settingsThemeModeToggle')?.addEventListener('click', () => {
+            const m = (localStorage.getItem('theme') || 'light') === 'dark' ? 'light' : 'dark';
+            applyTheme(m);
+            const v = document.getElementById('themeModeValue');
+            if (v) v.innerHTML = (m === 'dark' ? '已开启' : '已关闭') + ' <i class="fa-solid fa-chevron-right"></i>';
+        });
         document.getElementById('themeUploadBtn')?.addEventListener('click', uploadTheme);
         document.getElementById('themeResetBtn')?.addEventListener('click', () => {
             applyThemeById('default');
@@ -10147,6 +10095,102 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             console.error('[court] load case detail failed:', e);
             courtDetail.innerHTML = '<div class="court-error">加载失败，请稍后重试</div>';
         }
+    }
+
+    // ===== 资源广场（发现页子页：左分区列表 / 右文件列表） =====
+    const plazaSectionList = document.getElementById('plazaSectionList');
+    const plazaFileList = document.getElementById('plazaFileList');
+    let plazaLoaded = false;
+    let plazaCurrentSection = null;
+
+    // 字节数格式化（B/KB/MB/GB/TB）
+    function formatSize(bytes) {
+        bytes = Number(bytes) || 0;
+        if (bytes < 1024) return bytes + ' B';
+        const units = ['KB', 'MB', 'GB', 'TB'];
+        let i = -1, v = bytes;
+        do { v /= 1024; i++; } while (v >= 1024 && i < units.length - 1);
+        return (v >= 100 || i === 0 ? v.toFixed(0) : v.toFixed(1)) + ' ' + units[i];
+    }
+
+    // 加载分区列表（左侧）
+    async function loadPlazaSections() {
+        if (!plazaSectionList) return;
+        plazaSectionList.innerHTML = '<div class="court-loading">加载中...</div>';
+        try {
+            const res = await apiFetch('/v1/resources/sections');
+            const data = await res.json();
+            let sections = [];
+            if (data && Array.isArray(data.sections)) sections = data.sections;
+            else if (data && data.data && Array.isArray(data.data.sections)) sections = data.data.sections;
+            else if (Array.isArray(data)) sections = data;
+            plazaSectionList.innerHTML = '';
+            if (!sections.length) {
+                plazaSectionList.innerHTML = '<div class="court-loading">暂无分区</div>';
+            } else {
+                sections.forEach(s => plazaSectionList.appendChild(createPlazaSectionItem(s)));
+            }
+            plazaLoaded = true;
+        } catch (e) {
+            console.error('[plaza] load sections failed:', e);
+            plazaSectionList.innerHTML = '<div class="court-error">加载失败，请稍后重试</div>';
+        }
+    }
+
+    function createPlazaSectionItem(s) {
+        const div = document.createElement('div');
+        div.className = 'contact-item plaza-section-item';
+        div.dataset.sectionId = s.id || '';
+        const count = (s.count != null) ? '（' + s.count + '）' : '';
+        div.innerHTML = '<div class="contact-info"><div class="name">' + escapeHtml(s.name || '未命名分区') + '</div></div>' +
+            '<span class="plaza-count">' + count + '</span>';
+        div.addEventListener('click', () => {
+            plazaSectionList.querySelectorAll('.plaza-section-item').forEach(i => i.classList.remove('active'));
+            div.classList.add('active');
+            loadPlazaItems(s.id);
+        });
+        return div;
+    }
+
+    // 加载某分区的文件列表（右侧）
+    async function loadPlazaItems(sectionId) {
+        if (!plazaFileList || !sectionId) return;
+        plazaCurrentSection = sectionId;
+        plazaFileList.innerHTML = '<div class="court-loading">加载中...</div>';
+        try {
+            const res = await apiFetch('/v1/resources/items?section_id=' + encodeURIComponent(sectionId) + '&limit=50&offset=0');
+            const data = await res.json();
+            let items = [];
+            if (data && Array.isArray(data.items)) items = data.items;
+            else if (data && data.data && Array.isArray(data.data.items)) items = data.data.items;
+            else if (Array.isArray(data)) items = data;
+            plazaFileList.innerHTML = '';
+            if (!items.length) {
+                plazaFileList.innerHTML = '<div class="court-detail-empty"><i class="fa-solid fa-folder-open" style="font-size:48px;color:var(--secondary-text);margin-bottom:16px;"></i><p style="color:var(--secondary-text);">该分区暂无文件</p></div>';
+            } else {
+                items.forEach(it => plazaFileList.appendChild(createPlazaFileItem(it)));
+            }
+        } catch (e) {
+            console.error('[plaza] load items failed:', e);
+            plazaFileList.innerHTML = '<div class="court-error">加载失败，请稍后重试</div>';
+        }
+    }
+
+    function createPlazaFileItem(it) {
+        const div = document.createElement('div');
+        div.className = 'plaza-file-item';
+        const name = it.name || '未命名文件';
+        const size = formatSize(it.size_bytes);
+        const uploader = it.uploader_name ? escapeHtml(it.uploader_name) : '';
+        const time = it.created_at ? new Date(it.created_at * 1000).toLocaleString() : '';
+        div.innerHTML = '' +
+            '<div class="plaza-file-icon"><i class="fa-solid fa-file"></i></div>' +
+            '<div class="plaza-file-info">' +
+                '<div class="plaza-file-name">' + escapeHtml(name) + '</div>' +
+                '<div class="plaza-file-meta">' + size + (uploader ? ' · ' + uploader : '') + (time ? ' · ' + time : '') + '</div>' +
+            '</div>' +
+            '<button class="btn plaza-file-dl file-download-btn" data-dl-url="' + escapeHtml(it.url || '') + '" data-dl-name="' + escapeHtml(name) + '"><i class="fa-solid fa-download"></i> 下载</button>';
+        return div;
     }
 
     // ===== @ 提及点击跳转 =====

@@ -90,6 +90,10 @@
                                 <div class="msg-avatar" style="background:rgba(74,158,255,0.15);color:var(--blue-600);"><i class="fa-solid fa-gavel"></i></div>
                                 <div class="contact-info"><div class="name">公开法庭</div></div>
                             </div>
+                            <div class="contact-item" data-discover="plaza" style="cursor:pointer;">
+                                <div class="msg-avatar" style="background:rgba(74,158,255,0.15);color:var(--blue-600);"><i class="fa-solid fa-folder-open"></i></div>
+                                <div class="contact-info"><div class="name">资源广场</div></div>
+                            </div>
                         </div>
                     </div>
                     <div class="sidebar-panel" data-panel="settings">
@@ -111,6 +115,9 @@
                     </div>
                     <div class="sidebar-panel" data-panel="court">
                         <div class="contact-list" id="courtCaseList"></div>
+                    </div>
+                    <div class="sidebar-panel" data-panel="plaza">
+                        <div class="contact-list" id="plazaSectionList"></div>
                     </div>
                 </div>
             </div>
@@ -243,6 +250,17 @@
                     <div class="court-detail-empty">
                         <i class="fa-solid fa-gavel" style="font-size:48px;color:var(--secondary-text);margin-bottom:16px;"></i>
                         <p style="color:var(--secondary-text);">从左侧选择一个案件查看详情</p>
+                    </div>
+                </div>
+            </div>
+            <div class="main-panel" data-panel="plaza">
+                <div class="chat-header">
+                    <span class="chat-title">资源广场</span>
+                </div>
+                <div class="plaza-files" id="plazaFileList">
+                    <div class="court-detail-empty">
+                        <i class="fa-solid fa-folder-open" style="font-size:48px;color:var(--secondary-text);margin-bottom:16px;"></i>
+                        <p style="color:var(--secondary-text);">从左侧选择一个分区查看文件</p>
                     </div>
                 </div>
             </div>
