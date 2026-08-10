@@ -54,26 +54,16 @@
     _engine: null,
 
     open: function () {
-      var el = document.getElementById('cipDebugger');
-      if (el) el.classList.remove('hidden');
-      // 绑定「上传本地小程序」按钮（仅绑一次）
-      var up = document.getElementById('cipUploadBtn');
-      if (up && !up.dataset.bound) {
-        up.dataset.bound = '1';
-        up.addEventListener('click', function () { Controller.uploadApp(); });
-      }
-      this.refresh();
+      // 跳转到小程序页面（发现页的独立面板）
+      if (typeof window.switchTab === 'function') window.switchTab('cip');
+      else this.refresh();
     },
     close: function () {
-      var el = document.getElementById('cipDebugger');
-      if (el) el.classList.add('hidden');
       this._teardown();
       var area = document.getElementById('cipRunArea');
       if (area) area.innerHTML = '<div class="cip-placeholder">从左侧选择一个小程序</div>';
-    },
-    isOpen: function () {
-      var el = document.getElementById('cipDebugger');
-      return !!el && !el.classList.contains('hidden');
+      // 回到发现页落地页
+      if (typeof window.switchTab === 'function') window.switchTab('discover');
     },
     _teardown: function () {
       if (this._engine) {
@@ -131,24 +121,26 @@
       var self = this;
       this._list.forEach(function (app) {
         var item = document.createElement('div');
-        item.className = 'cip-app-item';
+        item.className = 'contact-item cip-app-item';
         item.dataset.id = app.id;
         item.dataset.kind = app.kind;
 
-        var head = document.createElement('div');
-        head.style.display = 'flex';
-        head.style.alignItems = 'center';
-        head.style.justifyContent = 'space-between';
-        head.style.gap = '8px';
+        // 左侧图标：与发现页「小程序」入口一致（立方体 + 主题色圆底）
+        var avatar = document.createElement('div');
+        avatar.className = 'msg-avatar';
+        avatar.innerHTML = '<i class="fa-solid fa-cube"></i>';
 
-        var nameWrap = document.createElement('div');
-        nameWrap.style.minWidth = '0';
-        var name = document.createElement('div'); name.className = 'cip-app-name';
+        // 中间信息：名称 + 描述，复用联系人列表 .name / .uid 样式
+        var info = document.createElement('div');
+        info.className = 'contact-info';
+        var name = document.createElement('div');
+        name.className = 'name';
         name.textContent = app.name || app.id;
-        var desc = document.createElement('div'); desc.className = 'cip-app-desc';
+        var desc = document.createElement('div');
+        desc.className = 'uid';
         desc.textContent = app.description || '';
-        nameWrap.appendChild(name); nameWrap.appendChild(desc);
-        head.appendChild(nameWrap);
+        info.appendChild(name);
+        info.appendChild(desc);
 
         // 右侧：来源徽标 + （本地）删除按钮
         var right = document.createElement('div');
@@ -171,9 +163,10 @@
           });
           right.appendChild(del);
         }
-        head.appendChild(right);
-        item.appendChild(head);
 
+        item.appendChild(avatar);
+        item.appendChild(info);
+        item.appendChild(right);
         item.addEventListener('click', function () { self.selectApp(app, item); });
         listEl.appendChild(item);
       });
@@ -297,12 +290,24 @@
   window.__cipClose = function () { Controller.close(); };
   window.CipController = Controller;
 
-  // ESC 关闭调试器（捕获阶段拦截，避免同时触发 app.js 的其它 ESC 逻辑）
+  // 上传按钮绑定（模块加载时绑一次，不依赖页面打开）
+  (function bindCipUpload() {
+    var up = document.getElementById('cipUploadBtn');
+    if (up && !up.dataset.bound) {
+      up.dataset.bound = '1';
+      up.addEventListener('click', function () { Controller.uploadApp(); });
+    }
+  })();
+
+  // ESC：仅当处于小程序页面时生效，回到发现页落地页（捕获阶段拦截，避免同时触发 app.js 的其它 ESC 逻辑）
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && Controller.isOpen()) {
-      e.stopPropagation();
-      e.preventDefault();
-      Controller.close();
+    if (e.key === 'Escape') {
+      var main = document.querySelector('.main-panel[data-panel="cip"]');
+      if (main && main.classList.contains('active')) {
+        e.stopPropagation();
+        e.preventDefault();
+        Controller.close();
+      }
     }
   }, true);
 })(window);

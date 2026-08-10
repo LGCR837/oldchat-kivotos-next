@@ -920,14 +920,14 @@ function startTauriDownload(opts) {
     var taskId = 'dl_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
     var ch = new ChannelCls();
     var modal = showDownloadModal(opts.displayName || '文件', taskId, function () {
-        invoke('cancel_download', { task_id: taskId }).catch(function () {});
+        invoke('cancel_download', { taskId: taskId }).catch(function () {});
     });
     ch.onmessage = function (msg) { modal.update(msg); };
     var args = {
         url: opts.url,
         headers: opts.headers || null,
-        task_id: taskId,
-        on_progress: ch,
+        taskId: taskId,
+        onProgress: ch,
     };
     if (opts.kind === 'file') args.filename = opts.filename || null;
     var cmd = opts.kind === 'image' ? 'save_image' : 'save_download';
@@ -985,6 +985,60 @@ document.addEventListener('click', function(e) {
     var url = el.getAttribute('data-dl-url');
     if (url) downloadFile(url, el.getAttribute('data-dl-name') || '');
 });
+
+// 转发聊天记录卡片：点击展开完整记录弹窗
+document.addEventListener('click', function(e) {
+    var card = e.target && e.target.closest ? e.target.closest('.forward-card') : null;
+    if (!card) return;
+    e.preventDefault();
+    var raw = card.getAttribute('data-forward');
+    if (!raw) return;
+    try {
+        openForwardModal(JSON.parse(decodeURIComponent(raw)));
+    } catch (err) { console.error('解析转发聊天记录失败', err); }
+});
+
+function openForwardModal(fwd) {
+    if (!fwd) return;
+    var items = Array.isArray(fwd.items) ? fwd.items : [];
+    var title = fwd.title || '聊天记录';
+    var overlay = document.createElement('div');
+    overlay.className = 'custom-modal-overlay';
+    overlay.style.zIndex = '22000';
+
+    var rows = items.map(function (it) {
+        var nm = it.from_name || it.from_ncuid || it.from_uid || '未知用户';
+        var avatar = it.from_avatar ? cachedResolveMediaUrl(it.from_avatar) : 'assets/default-avatar.png';
+        var bodyHtml;
+        if (it.type === 'image') {
+            var imgUrl = it.media_url ? cachedResolveMediaUrl(it.media_url) : '';
+            bodyHtml = imgUrl ? '<img class="forward-item-img" src="' + escapeHtml(imgUrl) + '" onerror="this.style.display=\'none\'">' : '[图片]';
+        } else if (it.type === 'voice' || it.type === 'audio') {
+            bodyHtml = '[语音]';
+        } else if (it.media_url && it.type && it.type !== 'text') {
+            bodyHtml = '[文件]';
+        } else {
+            bodyHtml = escapeHtml(it.text || '').replace(/\n/g, '<br>');
+        }
+        return '<div class="forward-item">'
+            + '<img class="msg-avatar" src="' + escapeHtml(avatar) + '" onerror="this.src=\'assets/default-avatar.png\'">'
+            + '<div class="forward-item-main"><div class="forward-item-name">' + escapeHtml(nm) + '</div>'
+            + '<div class="forward-item-text">' + bodyHtml + '</div></div>'
+            + '</div>';
+    }).join('');
+
+    overlay.innerHTML = '<div class="custom-modal forward-modal">'
+        + '<div class="custom-modal-title">' + escapeHtml(title) + ' <span class="forward-count">共 ' + items.length + ' 条</span></div>'
+        + '<div class="forward-modal-list">' + rows + '</div>'
+        + '<div class="custom-modal-actions"><button class="btn" data-close="1">关闭</button></div>'
+        + '</div>';
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', function (e) {
+        if (e.target === overlay || (e.target.closest && e.target.closest('[data-close]'))) {
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        }
+    });
+}
 
 function openImageViewer(src) {
 	let overlay = document.getElementById('imageOverlay');
@@ -2104,11 +2158,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 右侧主面板淡入淡出
         mainPanels.forEach(p => p.classList.toggle('active', p.dataset.panel === tabName));
 
-        // 选项卡高亮：音乐/公开法庭是从「发现」进入的子页，保持「发现」高亮
+        // 选项卡高亮：音乐/公开法庭/小程序是从「发现」进入的子页，保持「发现」高亮
         let highlightTab = tabName;
         if (tabName === 'music') highlightTab = 'discover';
         if (tabName === 'court') highlightTab = 'discover';
         if (tabName === 'plaza') highlightTab = 'discover';
+        if (tabName === 'cip') highlightTab = 'discover';
         if (sidebarTabs) {
             sidebarTabs.querySelectorAll('.tab-btn').forEach(b => {
                 b.classList.toggle('active', b.dataset.tab === highlightTab);
@@ -2130,6 +2185,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             loadPlazaSections();
         }
 
+        // 切换到小程序面板时加载清单（仅首次）
+        if (tabName === 'cip' && !cipLoaded) {
+            cipLoaded = true;
+            if (window.CipController) window.CipController.refresh();
+        }
+
         // 切换到设置面板时渲染设置页面
         if (tabName === 'settings') {
             renderSettingsPage(currentSettingsTab || 'profile');
@@ -2145,6 +2206,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             document.querySelectorAll('.sidebar-panel[data-panel="discover"] .contact-item').forEach(ci => ci.classList.remove('active'));
         }
     }
+    window.switchTab = switchTab;
 
     if (sidebarTabs) {
         sidebarTabs.addEventListener('click', (e) => {
@@ -2717,9 +2779,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (count > 0) {
             badge.textContent = count > 99 ? '99+' : count;
             badge.style.display = 'inline-flex';
+            markPrioActivity(convKey);
         } else {
             badge.style.display = 'none';
         }
+        schedulePriorityApply();
     }
 
     function openSpacePanel(uid, ncuid) {
@@ -4190,6 +4254,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   --muted: #777777;
   --surface-2: #f0f0f0;
   --overlay: rgba(0,0,0,0.5);
+  --discover-icon-bg: rgba(0,0,0,0.06);
+  --discover-icon-fg: #555555;
 }
 [data-theme-mode="dark"] {
   --bg: #000000;
@@ -4226,6 +4292,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   --muted: #888888;
   --surface-2: #1c1c1c;
   --overlay: rgba(0,0,0,0.6);
+  --discover-icon-bg: rgba(255,255,255,0.12);
+  --discover-icon-fg: #cccccc;
 }
 
 /* 2) 纯直角：去除所有圆角（仅 border-radius，不动布局） */
@@ -4382,6 +4450,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
   --muted: #8A93A2;
   --surface-2: #F0F4F8;
   --overlay: rgba(0,0,0,0.5);
+  --discover-icon-bg: rgba(74,158,255,0.15);
+  --discover-icon-fg: #4a9eff;
 }
 
 /* 其他按钮：#878B99 底 + 白字（用 :not(.primary) 避免覆盖主按钮，主按钮走 --accent） */
@@ -5135,7 +5205,18 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (msgType === 'video') return '[视频]';
         if (msgType === 'voice' || msgType === 'audio') return '[语音]';
         if (msgType === 'resource' || msgType === 'file') return '[文件]';
-        return d.body || '';
+        const body = d.body || '';
+        if (body.trim().startsWith('{')) {
+            try {
+                const obj = JSON.parse(body);
+                if (obj.v === 2 && obj.forward_v2) {
+                    const n = Array.isArray(obj.forward_v2.items) ? obj.forward_v2.items.length : 0;
+                    return (obj.forward_v2.title || obj.text || '聊天记录') + (n ? '（共' + n + '条）' : '');
+                }
+                if (obj.text) return obj.text;
+            } catch (e) {}
+        }
+        return body;
     }
 
     // 撤回消息后打断连消息链：前后消息重新重组
@@ -5524,30 +5605,252 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     }
 
     function renderContacts() {
-        // 聊天列表（原有）
         contactList.innerHTML = '';
+        // 群聊分区
+        const groupSection = document.createElement('div');
+        groupSection.className = 'contact-section';
+        groupSection.dataset.section = 'group';
         if (contacts.groups.length > 0) {
             const sep = document.createElement('div');
-            sep.style.cssText = 'padding:8px 15px;font-size:11px;color:#999;font-weight:500;';
+            sep.className = 'contact-section-header';
             sep.textContent = '群聊';
-            contactList.appendChild(sep);
-            contacts.groups.forEach(g => {
-                const div = createContactItem(g.id, g.name, 'group', g.avatar);
-                contactList.appendChild(div);
-            });
+            groupSection.appendChild(sep);
+            contacts.groups.forEach(g => groupSection.appendChild(createContactItem(g.id, g.name, 'group', g.avatar)));
         }
+        // 私聊分区
+        const directSection = document.createElement('div');
+        directSection.className = 'contact-section';
+        directSection.dataset.section = 'direct';
         if (contacts.friends.length > 0) {
             const sep = document.createElement('div');
-            sep.style.cssText = 'padding:8px 15px;font-size:11px;color:#999;font-weight:500;';
+            sep.className = 'contact-section-header';
             sep.textContent = '私聊';
-            contactList.appendChild(sep);
-            contacts.friends.forEach(f => {
-                const div = createContactItem(f.uid, f.name, 'direct', f.avatar, f.displayUid, f.user_title);
-            contactList.appendChild(div);
+            directSection.appendChild(sep);
+            contacts.friends.forEach(f => directSection.appendChild(createContactItem(f.uid, f.name, 'direct', f.avatar, f.displayUid, f.user_title)));
+        }
+        contactList.appendChild(groupSection);
+        contactList.appendChild(directSection);
+        applyPriority(false);
+        renderContactsPage();
+    }
+
+    // ===== 重点分区（侧边栏置顶分组）=====
+    const PRIORITY_LS_KEY = 'oc_priority_section';
+    let _prioClones = [];
+    let _prioRaf = 0;
+    let _prioAnimating = false;   // 动画进行中：期间新请求只标脏、不中途打断
+    let _prioDirty = false;
+
+    function isPriorityEnabled() {
+        try { return localStorage.getItem(PRIORITY_LS_KEY) === '1'; } catch (e) { return false; }
+    }
+    function _prioSection() { return contactList.querySelector('.contact-section[data-section="priority"]'); }
+    function _sectionForType(type) {
+        return contactList.querySelector('.contact-section[data-section="' + (type === 'group' ? 'group' : 'direct') + '"]');
+    }
+    function sectionForItem(it) { return _sectionForType(it.dataset.type); }
+    function _ensurePrioritySection() {
+        let sec = _prioSection();
+        if (!sec) {
+            sec = document.createElement('div');
+            sec.className = 'contact-section priority-section';
+            sec.dataset.section = 'priority';
+            const sep = document.createElement('div');
+            sep.className = 'contact-section-header priority-header';
+            sep.textContent = '重点';
+            sec.appendChild(sep);
+            contactList.insertBefore(sec, contactList.firstChild);
+        }
+        return sec;
+    }
+    function _ensureSectionHeaders() {
+        ['priority', 'group', 'direct'].forEach(t => {
+            const sec = contactList.querySelector('.contact-section[data-section="' + t + '"]');
+            if (!sec) return;
+            const has = sec.querySelector('.contact-item');
+            sec.style.display = has ? '' : 'none';
         });
     }
-    // 联系人页面
-        renderContactsPage();
+    const prioLastActivity = {};      // key -> 最近活动时间戳(ms)
+    const prioFresh = {};             // key -> 刚标记活跃（本次进入保证至少包含一次，消费即删）
+    const prioOpenTimers = {};         // key -> 群聊进入延迟后移入重点的定时器
+    // 时长设置（设置 → 通用 → 侧边栏，localStorage 秒数，滑块 0~30，默认 3s）
+    const PRIO_ENTER_LS_KEY = 'oc_priority_enter_s';
+    const PRIO_ACTIVE_LS_KEY = 'oc_priority_active_s';
+    const PRIO_MAX_SEC = 30;
+    function getPrioEnterDelay() {
+        // 0 = 立即进入；1~30 = 秒；31 = 不自动进入（Infinity，永不触发）；未设置/非法 = 默认 31
+        try {
+            const v = parseInt(localStorage.getItem(PRIO_ENTER_LS_KEY), 10);
+            if (v === 31) return Infinity;
+            if (v >= 0) return Math.min(PRIO_MAX_SEC, v) * 1000;
+            return Infinity;
+        } catch (e) { return Infinity; }
+    }
+    function getPrioActiveMs() {
+        // 0 = 立即移除（0ms，活动型会话下一次归位即移出）；1~30 = 秒；31 = 永不移除（Infinity）；未设置/非法 = 默认 0
+        try {
+            const v = parseInt(localStorage.getItem(PRIO_ACTIVE_LS_KEY), 10);
+            if (v === 31) return Infinity;
+            if (v >= 0) return Math.min(PRIO_MAX_SEC, v) * 1000;
+            return 0;
+        } catch (e) { return 0; }
+    }
+
+    function markPrioActivity(key) {
+        prioLastActivity[key] = Date.now();
+        prioFresh[key] = true; // 刚进入：下次归位保证包含，避免移除=0 时"还没进入就被移除"
+    }
+    function clearPrioOpenTimer(key) {
+        if (prioOpenTimers[key]) { clearTimeout(prioOpenTimers[key]); delete prioOpenTimers[key]; }
+    }
+    function getPrioritySet(now) {
+        now = now || Date.now();
+        const set = new Set();
+        // 任何有未读的会话都进入重点（直到被读）
+        for (const k in unreadCounts) { if (unreadCounts[k] > 0) set.add(k); }
+        // 最近活动过的会话（群聊打开后、或当前正在看的）在窗口内保留
+        const w = getPrioActiveMs();
+        for (const k in prioLastActivity) {
+            if (now - prioLastActivity[k] <= w) { set.add(k); continue; }
+            // 刚进入（标记时间戳后第一次判定必然 ≥1ms，窗口 0 会直接判死）——保证至少包含一次
+            if (prioFresh[k]) { set.add(k); delete prioFresh[k]; }
+        }
+        return set;
+    }
+    // 心跳：保持「正在看」的会话活跃（仅当它已进入重点后才刷新，避免提前把群聊拉入），并驱动过期移出
+    function prioHeartbeat() {
+        if (!isPriorityEnabled()) return;
+        if (currentConv && currentConv.key && prioLastActivity[currentConv.key]) {
+            markPrioActivity(currentConv.key);
+        }
+        schedulePriorityApply();
+    }
+    setInterval(prioHeartbeat, 15000);
+    function _resetPrioAnim() {
+        _prioClones.forEach(c => c.remove());
+        _prioClones = [];
+        contactList.querySelectorAll('.contact-item').forEach(it => {
+            it.style.transition = ''; it.style.transform = ''; it.style.opacity = ''; it.style.pointerEvents = '';
+        });
+    }
+    function applyPriority(animate) {
+        try {
+            // 动画进行中又来新请求：不中途打断（否则正在滑动的项会被瞬移归位），只标脏待补跑。
+            // 含 animate=false（renderContacts 重建列表）：否则 _resetPrioAnim 会清掉正在垂直 FLIP 的项的 transform → 上下瞬移
+            if (_prioAnimating) { _prioDirty = true; return; }
+            _resetPrioAnim();
+            const enabled = isPriorityEnabled();
+            const allItems = Array.from(contactList.querySelectorAll('.contact-item'));
+            const first = new Map();
+            allItems.forEach(it => {
+                const ps = _prioSection();
+                first.set(it, { rect: it.getBoundingClientRect(), inPrio: !!(ps && ps.contains(it)) });
+            });
+            if (!enabled) {
+                const prioSec = _prioSection();
+                if (prioSec) {
+                    Array.from(prioSec.querySelectorAll('.contact-item')).forEach(it => sectionForItem(it).appendChild(it));
+                    prioSec.remove();
+                }
+                _ensureSectionHeaders();
+                return;
+            }
+            const prioSet = getPrioritySet();
+            const prioSec = _ensurePrioritySection();
+            const prioItems = [];
+            const normalItems = [];
+            allItems.forEach(it => { if (prioSet.has(it.dataset.convKey)) prioItems.push(it); else normalItems.push(it); });
+            const currentKey = currentConv && currentConv.key;
+            const currentItem = currentKey ? allItems.find(it => it.dataset.convKey === currentKey) : null;
+            const wasCurrentInPrio = !!(currentItem && first.get(currentItem) && first.get(currentItem).inPrio);
+            prioItems.forEach(it => { if (it === currentItem && wasCurrentInPrio) return; prioSec.appendChild(it); });
+            normalItems.forEach(it => sectionForItem(it).appendChild(it));
+            _ensureSectionHeaders();
+            if (!animate) return;
+            if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+            const moved = [];
+            allItems.forEach(it => {
+                if (currentItem && it === currentItem) return;
+                const f = first.get(it);
+                const nowPrio = prioSec.contains(it);
+                if (f && f.inPrio !== nowPrio) moved.push({ it, fromRect: f.rect });
+            });
+            if (moved.length > 15) {
+                contactList.querySelectorAll('.contact-item').forEach(it => { it.style.transition=''; it.style.transform=''; it.style.opacity=''; });
+                return;
+            }
+            let _hasAnim = moved.length > 0;
+            moved.forEach(({ it, fromRect }) => {
+                it.style.pointerEvents = 'none';
+                const clone = it.cloneNode(true);
+                clone.classList.add('prio-anim-clone');
+                clone.style.position = 'fixed';
+                clone.style.left = fromRect.left + 'px';
+                clone.style.top = fromRect.top + 'px';
+                clone.style.width = fromRect.width + 'px';
+                clone.style.height = fromRect.height + 'px';
+                clone.style.margin = '0';
+                clone.style.zIndex = '60';
+                clone.style.pointerEvents = 'none';
+                clone.style.transition = 'transform .42s cubic-bezier(.4,0,.2,1), opacity .42s';
+                document.body.appendChild(clone);
+                _prioClones.push(clone);
+                it.style.transition = 'none';
+                it.style.transform = 'translateX(' + window.innerWidth + 'px)';
+                it.style.opacity = '0';
+                requestAnimationFrame(() => requestAnimationFrame(() => {
+                    clone.style.transform = 'translateX(-' + (fromRect.left + fromRect.width + 40) + 'px)';
+                    clone.style.opacity = '0';
+                    it.style.transition = 'transform .42s cubic-bezier(.4,0,.2,1), opacity .42s';
+                    it.style.transform = 'translateX(0)';
+                    it.style.opacity = '1';
+                }));
+                setTimeout(() => {
+                    clone.remove();
+                    _prioClones = _prioClones.filter(c => c !== clone);
+                    it.style.transition = ''; it.style.transform = ''; it.style.opacity = ''; it.style.pointerEvents = '';
+                }, 480);
+            });
+            const lastItems = Array.from(contactList.querySelectorAll('.contact-item'));
+            lastItems.forEach(it => {
+                if (moved.some(m => m.it === it)) return;
+                if (currentItem && it === currentItem) return;
+                const f = first.get(it);
+                if (!f) return;
+                const dy = f.rect.top - it.getBoundingClientRect().top;
+                if (Math.abs(dy) > 1) {
+                    _hasAnim = true;
+                    it.style.transition = 'none';
+                    it.style.transform = 'translateY(' + dy + 'px)';
+                    requestAnimationFrame(() => requestAnimationFrame(() => {
+                        it.style.transition = 'transform .42s cubic-bezier(.4,0,.2,1)';
+                        it.style.transform = 'translateY(0)';
+                        setTimeout(() => { it.style.transition = ''; it.style.transform = ''; }, 460);
+                    }));
+                }
+            });
+            // 动画进行中上锁；结束后若期间有新的归位请求，补跑一次（合并爆发，避免中途打断瞬移）
+            if (_hasAnim) {
+                _prioAnimating = true;
+                setTimeout(() => {
+                    _prioAnimating = false;
+                    if (_prioDirty) { _prioDirty = false; applyPriority(true); }
+                }, 500);
+            }
+        } catch (e) {
+            console.error('[applyPriority]', e);
+            // 复位锁，避免异常后永久卡在"动画中"导致所有归位请求被吞
+            _prioAnimating = false; _prioDirty = false;
+            contactList.querySelectorAll('.contact-item').forEach(it => { it.style.transition=''; it.style.transform=''; it.style.opacity=''; it.style.pointerEvents=''; });
+        }
+    }
+    function schedulePriorityApply() {
+        if (!isPriorityEnabled()) return;
+        // 动画进行中：只标脏、不排队新 rAF，等本次动画结束后由 applyPriority 补跑；避免中途打断瞬移
+        if (_prioAnimating) { _prioDirty = true; return; }
+        if (_prioRaf) return;
+        _prioRaf = requestAnimationFrame(() => { _prioRaf = 0; applyPriority(true); });
     }
 
     async function renderContactsPage() {
@@ -6225,7 +6528,23 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const friend = contacts.friends.find(f => f.uid === id || f.displayUid === id);
             displayUid = friend ? (friend.displayUid || id) : id;
         }
+        const prevConvKey = (currentConv && currentConv.key) || null;
+        // 离开旧会话：取消其待定的延迟移入定时器（避免快速预览也被拉入重点）
+        if (prevConvKey && prioOpenTimers[prevConvKey]) clearPrioOpenTimer(prevConvKey);
         currentConv = { type, id, name, key: convKey, _sendToUid: displayUid || id };
+        // 群聊：进入延迟（0=立即，1~30=秒，31=不自动进入，可在设置调整）后才移入重点区域（私聊仅通过未读进入，读后即自然移出）
+        if (type === 'group') {
+            clearPrioOpenTimer(convKey);
+            const delay = getPrioEnterDelay();
+            if (delay !== Infinity) {
+                prioOpenTimers[convKey] = setTimeout(() => {
+                    delete prioOpenTimers[convKey];
+                    markPrioActivity(convKey);
+                    schedulePriorityApply();
+                }, delay);
+            }
+        }
+        schedulePriorityApply();
 
         // 加载群成员（用于 @mention）
         if (type === 'group') {
@@ -6582,6 +6901,27 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                                     `<span class="mention-highlight" data-uid="${escapeHtml(m.ncuid || m.uid || '')}">@${escapeHtml(name)}</span>`);
                             });
                         }
+                        if (obj.forward_v2) {
+                            // 转发聊天记录（v2）：折叠卡片，点击展开完整记录
+                            const fwd = obj.forward_v2;
+                            const fwdItems = Array.isArray(fwd.items) ? fwd.items : [];
+                            const fwdTitle = fwd.title || obj.text || '聊天记录';
+                            const preview = fwdItems.slice(0, 3).map(function (it) {
+                                const nm = it.from_name || it.from_ncuid || it.from_uid || '未知';
+                                let tx = it.text || '';
+                                if (it.type === 'image') tx = '[图片]';
+                                else if (it.type === 'voice' || it.type === 'audio') tx = '[语音]';
+                                else if (it.type === 'video') tx = '[视频]';
+                                else if (it.media_url && it.type && it.type !== 'text') tx = '[文件]';
+                                return escapeHtml(nm + '：' + tx);
+                            }).join('\n');
+                            const fwdData = encodeURIComponent(JSON.stringify(fwd));
+                            content = '<div class="forward-card" data-forward="' + fwdData + '">'
+                                + '<div class="forward-card-head"><i class="fa-solid fa-clock-rotate-left"></i><span class="forward-card-title">' + escapeHtml(fwdTitle) + '</span></div>'
+                                + '<div class="forward-card-preview">' + preview.replace(/\n/g, '<br>') + (fwdItems.length > 3 ? '<br>…' : '') + '</div>'
+                                + '<div class="forward-card-hint">点击查看完整聊天记录 ›</div>'
+                                + '</div>';
+                        } else {
                         textBody = textBody.replace(/\n/g, '<br>');
                         // 检查 v2 JSON 中的嵌套文件（如音频文件）
                         let nestedFileHtml = '';
@@ -6616,6 +6956,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                             }
                         }
                         content = quoteHtml + (textBody ? `<div style="white-space: pre-wrap; word-break: break-word;">${textBody}</div>` : '') + nestedFileHtml;
+                        }
                     } else if (obj.v === 3 || (obj.buttons && Array.isArray(obj.buttons))) {
                         // v3 按钮消息：文本 + 内联按钮（Telegram 风格）
                         let textBody = escapeHtml(obj.text || '');
@@ -6741,8 +7082,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const bubble = document.createElement('div');
         bubble.className = 'message-bubble';
         bubble.innerHTML = content;
-        // 红包/视频消息不显示气泡外框（去掉背景/内边距/小箭头），仅保留卡片或播放器本身
-        if (bubble.querySelector('.red-packet-card') || bubble.querySelector('.video-message')) {
+        // 红包/视频/转发聊天记录：不显示气泡外框（去掉背景/内边距/小箭头），仅保留卡片或播放器本身
+        if (bubble.querySelector('.red-packet-card') || bubble.querySelector('.video-message') || bubble.querySelector('.forward-card')) {
             bubble.classList.add('no-frame');
         }
         // v3 按钮消息：为内联按钮绑定点击事件
@@ -6833,9 +7174,13 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const isPlainText = (msg.msg_type || 'text') === 'text' && !(msg.body || '').trim().startsWith('{');
         const msgTs = msg.created_at || 0;
 
+        // 「连消息」开关：同一发送者、5 分钟内的连续消息合并为一组（设置 → 主题，默认开启）
+        let consecutiveEnabled = true;
+        try { consecutiveEnabled = localStorage.getItem('oc_consecutive_messages') !== '0'; } catch (e) {}
+
         // 检查是否为连续消息（同发送者、5分钟内、同会话）
         // 使用 uidEq 兼容 uid/ncuid 两种格式
-        const isConsecutive = lastRenderedMsg &&
+        const isConsecutive = consecutiveEnabled && lastRenderedMsg &&
             lastRenderedMsg.convKey === convKey &&
             uidEq(lastRenderedMsg.from_uid, fromUid) &&
             msgTs && lastRenderedTs && (msgTs - lastRenderedTs) <= 300;
@@ -9015,6 +9360,35 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     </span>
                 </div>
             </div>
+            <h3 style="margin-top:20px;">侧边栏</h3>
+            <div class="settings-group">
+                <div class="settings-item" id="settingsPrioritySection">
+                    <span class="label">重点分区</span>
+                    <span class="value">
+                        <label class="oc-switch">
+                            <input type="checkbox" id="prioritySectionToggle">
+                            <span class="oc-switch-slider"></span>
+                        </label>
+                    </span>
+                </div>
+                <div class="settings-item" id="settingsPrioEnter" style="cursor:default;">
+                    <span class="label">进入延迟</span>
+                    <span class="value">
+                        <input type="range" id="prioEnterInput" min="0" max="31" step="1" style="width:140px;accent-color:var(--accent);">
+                        <span id="prioEnterVal" style="min-width:72px;text-align:right;">31</span>
+                    </span>
+                </div>
+                <div class="settings-item" id="settingsPrioActive" style="cursor:default;">
+                    <span class="label">闲置移除</span>
+                    <span class="value">
+                        <input type="range" id="prioActiveInput" min="0" max="31" step="1" style="width:140px;accent-color:var(--accent);">
+                        <span id="prioActiveVal" style="min-width:72px;text-align:right;">0</span>
+                    </span>
+                </div>
+                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
+                    有未读的会话、以及最近打开过的群聊会进入「重点」分组（默认关闭）：进入延迟 0~31 秒（0=立即，31=不自动进入，默认 31），闲置移除 0~31 秒（0=立即，31=永不移除，默认 0）；未读会话不受滑块影响、始终立即进入；移动时带滑动动画。
+                </div>
+            </div>
             <h3 style="margin-top:20px;">服务器配置</h3>
             <div class="settings-group">
                 <div style="font-size:12px;color:var(--secondary-text);margin-bottom:6px;">API 地址（普通内容，按列表顺序降级；<span style="color:var(--text);">★ 为首选地址，最先尝试</span>）</div>
@@ -9054,16 +9428,6 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     <span id="settingsCacheSize">计算中...</span>
                 </div>
             </div>
-            <h3 style="margin-top:20px;">开发者</h3>
-            <div class="settings-group">
-                <div class="settings-item" id="settingsCipDebugger">
-                    <span class="label">Lua 小程序调试器</span>
-                    <span class="value">实验性 <i class="fa-solid fa-chevron-right"></i></span>
-                </div>
-                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
-                    从服务器拉取 Lua 小程序清单并在本地沙箱中运行（P0 预览版，功能不完整）
-                </div>
-            </div>
         `;
         // 接口版本开关（设置 → 通用 → 接口版本）
         const apiSel = document.getElementById('apiVersionSelect');
@@ -9075,6 +9439,39 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 if (typeof showAlert === 'function') showAlert('接口版本已切换为「' + apiSel.value + '」，后续请求即时生效');
             });
         }
+        // 重点分区开关（设置 → 通用 → 侧边栏 → 重点分区，默认关闭）
+        const pToggle = document.getElementById('prioritySectionToggle');
+        const prioSliderRows = ['settingsPrioEnter', 'settingsPrioActive'].map(id => document.getElementById(id));
+        function updatePrioSliderVisibility() {
+            const on = isPriorityEnabled();
+            prioSliderRows.forEach(el => { if (el) el.style.display = on ? '' : 'none'; });
+        }
+        if (pToggle) {
+            pToggle.checked = isPriorityEnabled();
+            updatePrioSliderVisibility();
+            pToggle.addEventListener('change', () => {
+                try { localStorage.setItem(PRIORITY_LS_KEY, pToggle.checked ? '1' : '0'); } catch (e) {}
+                updatePrioSliderVisibility();
+                applyPriority(true);
+            });
+        }
+        // 重点分区时长设置（滑块：进入 0~31s（0=立即，31=不自动进入）；移除 0~31s（0=立即，31=永不移除））
+        function bindPrioTimeSlider(id, valId, lsKey, getter, fmt, maxSec) {
+            const inp = document.getElementById(id);
+            const valEl = document.getElementById(valId);
+            if (!inp || !valEl) return;
+            const ms = getter();
+            inp.value = String(Math.min(maxSec, Math.max(0, ms === Infinity ? maxSec : Math.round(ms / 1000))));
+            valEl.textContent = fmt(inp.value);
+            inp.addEventListener('input', () => {
+                valEl.textContent = fmt(inp.value);
+                try { localStorage.setItem(lsKey, String(inp.value)); } catch (e) {}
+                // 实时重排：缩短闲置窗口时过期项立即滑出
+                schedulePriorityApply();
+            });
+        }
+        bindPrioTimeSlider('prioEnterInput', 'prioEnterVal', PRIO_ENTER_LS_KEY, getPrioEnterDelay, v => v === '31' ? '不自动进入' : (v === '0' ? '立即' : v + ' 秒'), PRIO_MAX_SEC + 1);
+        bindPrioTimeSlider('prioActiveInput', 'prioActiveVal', PRIO_ACTIVE_LS_KEY, getPrioActiveMs, v => v === '31' ? '永不移除' : (v === '0' ? '立即' : v + ' 秒'), PRIO_MAX_SEC + 1);
         // 服务器配置：候选列表管理 / 保存 / 恢复默认
         {
             const baseCands = BACKEND_CANDIDATES.slice();
@@ -9164,14 +9561,6 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 loadCacheSize();
             } catch (e) {
                 showAlert('清除失败: ' + (e.message || e));
-            }
-        });
-        // 开发者：Lua 小程序调试器
-        document.getElementById('settingsCipDebugger')?.addEventListener('click', () => {
-            if (window.CipController && typeof window.CipController.open === 'function') {
-                window.CipController.open();
-            } else {
-                showAlert('Lua 运行时未加载（fengari 缺失或加载失败），请查看控制台');
             }
         });
         // 加载缓存大小
@@ -9745,6 +10134,18 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 '</div>' +
             '</div>' +
             '<div class="settings-group" style="margin-bottom:14px;">' +
+                '<div class="settings-item" id="settingsConsecutiveMessages">' +
+                    '<span class="label">连消息</span>' +
+                    '<span class="value">' +
+                        '<label class="oc-switch">' +
+                            '<input type="checkbox" id="consecutiveMessagesToggle">' +
+                            '<span class="oc-switch-slider"></span>' +
+                        '</label>' +
+                    '</span>' +
+                '</div>' +
+                '<div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">同一发送者、间隔 5 分钟内的连续消息合并为一组，隐藏重复头像与昵称。</div>' +
+            '</div>' +
+            '<div class="settings-group" style="margin-bottom:14px;">' +
                 '<button id="themeUploadBtn" class="btn primary" style="width:100%;">上传主题（.css 文件）</button>' +
             '</div>' +
             '<div id="themeList">加载中...</div>' +
@@ -9768,6 +10169,29 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             applyThemeById('default');
             renderSettingsTheme();
         });
+
+        // 连消息开关（设置 → 主题，默认开启）：合并同一发送者、5 分钟内的连续消息
+        const cmToggle = document.getElementById('consecutiveMessagesToggle');
+        if (cmToggle) {
+            let cmOn = true;
+            try { cmOn = localStorage.getItem('oc_consecutive_messages') !== '0'; } catch (e) {}
+            cmToggle.checked = cmOn;
+            cmToggle.addEventListener('change', () => {
+                try { localStorage.setItem('oc_consecutive_messages', cmToggle.checked ? '1' : '0'); } catch (e) {}
+                if (!currentConv) return;
+                const ck = currentConv.key;
+                // 强制全量重建：清除会话缓存与现有 DOM，使连消息分组立即生效。
+                // 否则 fetchLatestMessages 会走增量路径（DOM 已有消息且服务端无新消息时直接保留旧分组，需重启才刷新）。
+                delete convCache[ck];
+                messagesContainer.innerHTML = '';
+                lastRenderedMsg = null;
+                lastRenderedTs = 0;
+                delete seenMsgIds[ck];
+                convOffset[ck] = 0;
+                convHasMore[ck] = true;
+                fetchLatestMessages(currentConv.type, currentConv.id, ck);
+            });
+        }
 
         renderThemeList(all, savedId);
     }
@@ -10262,6 +10686,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     const plazaSectionList = document.getElementById('plazaSectionList');
     const plazaFileList = document.getElementById('plazaFileList');
     let plazaLoaded = false;
+    let cipLoaded = false;
     let plazaCurrentSection = null;
 
     // 字节数格式化（B/KB/MB/GB/TB）

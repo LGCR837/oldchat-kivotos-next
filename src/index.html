@@ -75,24 +75,28 @@
                     <div class="sidebar-panel" data-panel="discover">
                         <div class="discover-list" id="discoverList">
                             <div class="contact-item" data-discover="music" style="cursor:pointer;">
-                                <div class="msg-avatar" style="background:rgba(74,158,255,0.15);color:var(--blue-600);"><i class="fa-solid fa-music"></i></div>
+                                <div class="msg-avatar"><i class="fa-solid fa-music"></i></div>
                                 <div class="contact-info"><div class="name">音乐广场</div></div>
                             </div>
                             <div class="contact-item" data-discover="checkin" style="cursor:pointer;">
-                                <div class="msg-avatar" style="background:rgba(74,158,255,0.15);color:var(--blue-600);"><i class="fa-solid fa-calendar-check"></i></div>
+                                <div class="msg-avatar"><i class="fa-solid fa-calendar-check"></i></div>
                                 <div class="contact-info"><div class="name">签到墙</div></div>
                             </div>
                             <div class="contact-item" data-discover="notice" style="cursor:pointer;">
-                                <div class="msg-avatar" style="background:rgba(74,158,255,0.15);color:var(--blue-600);"><i class="fa-solid fa-bell"></i></div>
+                                <div class="msg-avatar"><i class="fa-solid fa-bell"></i></div>
                                 <div class="contact-info"><div class="name">系统通知</div></div>
                             </div>
                             <div class="contact-item" data-discover="court" style="cursor:pointer;">
-                                <div class="msg-avatar" style="background:rgba(74,158,255,0.15);color:var(--blue-600);"><i class="fa-solid fa-gavel"></i></div>
+                                <div class="msg-avatar"><i class="fa-solid fa-gavel"></i></div>
                                 <div class="contact-info"><div class="name">公开法庭</div></div>
                             </div>
                             <div class="contact-item" data-discover="plaza" style="cursor:pointer;">
-                                <div class="msg-avatar" style="background:rgba(74,158,255,0.15);color:var(--blue-600);"><i class="fa-solid fa-folder-open"></i></div>
+                                <div class="msg-avatar"><i class="fa-solid fa-folder-open"></i></div>
                                 <div class="contact-info"><div class="name">资源广场</div></div>
+                            </div>
+                            <div class="contact-item" data-discover="cip" style="cursor:pointer;">
+                                <div class="msg-avatar"><i class="fa-solid fa-cube"></i></div>
+                                <div class="contact-info"><div class="name">小程序</div></div>
                             </div>
                         </div>
                     </div>
@@ -118,6 +122,12 @@
                     </div>
                     <div class="sidebar-panel" data-panel="plaza">
                         <div class="contact-list" id="plazaSectionList"></div>
+                    </div>
+                    <div class="sidebar-panel" data-panel="cip">
+                        <div class="cip-list-actions">
+                            <button id="cipUploadBtn" class="cip-upload-btn"><i class="fa-solid fa-upload"></i> 上传本地小程序</button>
+                        </div>
+                        <div class="cip-app-list" id="cipAppList"></div>
                     </div>
                 </div>
             </div>
@@ -271,6 +281,21 @@
                     </div>
                 </div>
             </div>
+            <div class="main-panel" data-panel="cip">
+                <div class="chat-header">
+                    <span class="chat-title">小程序</span>
+                    <div class="header-right">
+                        <div class="window-controls" id="cipWinControls">
+                            <button class="win-ctrl-btn" id="cipWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
+                            <button class="win-ctrl-btn" id="cipWinMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
+                            <button class="win-ctrl-btn" id="cipWinCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+                        </div>
+                    </div>
+                </div>
+                <div class="cip-run-area" id="cipRunArea">
+                    <div class="cip-placeholder">从左侧选择一个小程序</div>
+                </div>
+            </div>
         </main>
     </div>
     <div class="url-input-overlay" id="urlInputOverlay" style="display:none;">
@@ -338,29 +363,6 @@
             </div>
         </div>
     </div>
-    <!-- CIP 调试器 overlay (Lua 小程序) -->
-    <div id="cipDebugger" class="cip-overlay hidden">
-        <div class="cip-overlay-header">
-            <span class="cip-overlay-title">Lua 小程序调试器</span>
-            <div class="window-controls">
-                <button class="win-ctrl-btn" id="cipWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
-                <button class="win-ctrl-btn" id="cipWinMaxBtn" title="最大化"><i class="fa-solid fa-square"></i></button>
-                <button class="win-ctrl-btn" id="cipWinCloseBtn" title="关闭调试器"><i class="fa-solid fa-xmark"></i></button>
-            </div>
-        </div>
-        <div class="cip-overlay-body">
-            <div class="cip-side">
-                <div class="cip-list-actions">
-                    <button id="cipUploadBtn" class="cip-upload-btn"><i class="fa-solid fa-upload"></i> 上传本地小程序</button>
-                </div>
-                <div class="cip-app-list" id="cipAppList"></div>
-            </div>
-            <div class="cip-run-area" id="cipRunArea">
-                <div class="cip-placeholder">从左侧选择一个小程序</div>
-            </div>
-        </div>
-    </div>
-
     <script src="dumogu-scrollbar.umd.min.js"></script>
     <script src="assets/artplayer/artplayer.js"></script>
     <!-- CIP (Lua 小程序) 运行时：fengari 必须在 engine 之前加载 -->

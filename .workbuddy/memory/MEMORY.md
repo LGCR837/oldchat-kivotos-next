@@ -15,10 +15,10 @@ Tauri v2 跨平台桌面 IM 客户端，连接 OldChat 后端（Android `com.im.
 前端：纯原生 HTML/CSS/JS（无框架/无构建/无 TS）。壳层：Tauri v2（Rust）。图标 Font Awesome 6.x。
 
 ## 版本号（2026-08-09 起：本地写死，不再 CI 注入）
-- `src-tauri/src/lib.rs` 的 `app_version` 命令**直接返回字符串 `"v7"`**（无 DEV 分支、不读 package_info）。关于页与检查更新均用此值。
-- `src-tauri/tauri.conf.json` 的 `version` 字段固定 `"7.0.0"`（Tauri 要求合法 semver；仅构建内部用，与展示的 `v7` 解耦）。
+- `src-tauri/src/lib.rs` 的 `app_version` 命令**直接返回字符串 `"v8"`**（无 DEV 分支、不读 package_info）。关于页与检查更新均用此值。
+- `src-tauri/tauri.conf.json` 的 `version` 字段固定 `"8.0.0"`（Tauri 要求合法 semver；仅构建内部用，与展示的 `v8` 解耦）。
 - **已彻底移除**动态注入机制：`scripts/set-version.mjs` 已删除；`.github/workflows/release.yml` 两处 `node scripts/set-version.mjs` 步骤已删；`src/app.js` 的 `checkForUpdates` 恢复为原始字符串比对（`currentVersion === latestTag` / `findIndex(r => r.tag === currentVersion)`），`normVer()` 已移除。
-- 下次发版若要升版本：改这两处（`"v7"` 与 `"7.0.0"`）即可，无需改 CI。
+- 下次发版若要升版本：改这两处（`"v8"` 与 `"8.0.0"`）即可，无需改 CI。
 
 ## 关键架构约束
 1. **单文件前端**：所有逻辑在 `src/app.js`（约 7.4k 行）、`src/app.css`（约 3k 行），全局函数走 `window.xxx`。有意设计，勿引打包工具。
@@ -51,7 +51,7 @@ API 根 `http://oc.mcl0.dpdns.org/v1`；头像 `http://60.205.94.101:8080/v1/upl
 ## 构建与运行
 - 开发：`npm run tauri dev`（Rust 增量；前端 Ctrl+R；capabilities/tauri.conf 改需重启）。DevTools：Ctrl+Alt+Shift+F12
 - 纯浏览器调试不再支持，一律 `npm run tauri dev`
-- Rust 命令：greet, toggle_devtools, minimize_window, toggle_maximize_window, close_window(隐藏托盘), is_window_maximized, notify_new_message, save_image, save_download, save_image_data, env_report, **app_version(固定返回 "v7")**, import_theme/list_user_themes/delete_user_theme, import_plugin/list_user_plugins/read_plugin_source/delete_user_plugin
+- Rust 命令：greet, toggle_devtools, minimize_window, toggle_maximize_window, close_window(隐藏托盘), is_window_maximized, notify_new_message, save_image, save_download, save_image_data, env_report, **app_version(固定返回 "v8")**, import_theme/list_user_themes/delete_user_theme, import_plugin/list_user_plugins/read_plugin_source/delete_user_plugin
 
 ## 插件系统
 用户插件 = 任意 .js，存 `<app_config_dir>/plugins/<id>.js`。启用状态 localStorage `oc_plugin_states`（新导入默认启用）。启动 `refreshUserPlugins()` 对启用者 `loadPlugin(id)`：`read_plugin_source` 取源码 → `(0,eval)(src)` 间接 eval 全局执行，try/catch 隔离。禁用需 `location.reload()` 生效。元数据文件头 `/* @plugin name: xxx */`（支持 description/author/version/id）。
