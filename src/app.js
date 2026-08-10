@@ -710,14 +710,12 @@ function downloadImage(src) {
             img.onerror = function() { console.error('图片加载失败'); };
             img.src = src;
         } else {
-            // HTTP URL：带鉴权头传给 Rust 用 reqwest 下载（媒体接口已加权鉴）
+            // HTTP URL：带鉴权头传给 Rust 用 reqwest 流式下载（媒体接口已加权鉴）
             var dlHeaders = null;
             var dlToken = localStorage.getItem('oc_access_token');
             if (dlToken) dlHeaders = [['Authorization', 'Bearer ' + dlToken]];
-            window.__TAURI_INTERNALS__.invoke('save_image', { url: src, headers: dlHeaders })
-                .catch(function(err) {
-                    console.error('Tauri save_image 失败:', err);
-                });
+            var imgName = src.split('/').pop() || 'image';
+            startTauriDownload({ kind: 'image', url: src, headers: dlHeaders, displayName: imgName });
         }
         return;
     }
@@ -825,14 +823,120 @@ function initArtPlayers(root) {
     });
 }
 
+// 显示下载进度弹窗，返回 { update(progress), close(), setError(msg) }
+function showDownloadModal(displayName, taskId, onCancel) {
+    var mask = document.createElement('div');
+    mask.className = 'dl-modal-mask';
+    var box = document.createElement('div');
+    box.className = 'dl-modal';
+    box.innerHTML =
+        '<div class="dl-title">' + escapeHtml(displayName) + ' 下载中…</div>' +
+        '<div class="dl-bar"><div class="dl-bar-fill"></div></div>' +
+        '<div class="dl-info">准备中…</div>' +
+        '<button class="dl-cancel" type="button">取消</button>';
+    mask.appendChild(box);
+    document.body.appendChild(mask);
+
+    var fill = box.querySelector('.dl-bar-fill');
+    var info = box.querySelector('.dl-info');
+    var cancelBtn = box.querySelector('.dl-cancel');
+    var closed = false;
+
+    cancelBtn.addEventListener('click', function () {
+        if (closed) return;
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = '取消中…';
+        if (onCancel) onCancel();
+    });
+
+    function fmt(b) {
+        if (b < 1024) return b + ' B';
+        if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+        return (b / 1024 / 1024).toFixed(1) + ' MB';
+    }
+
+    return {
+        update: function (p) {
+            if (closed) return;
+            if (p.error) { this.setError(p.error); return; }
+            if (p.done) {
+                box.classList.add('dl-done');
+                info.textContent = '完成，请选择保存位置…';
+                fill.style.width = '100%';
+                return;
+            }
+            if (p.total && p.total > 0) {
+                var pct = Math.min(100, Math.round((p.downloaded / p.total) * 100));
+                fill.style.width = pct + '%';
+                info.textContent = pct + '%  (' + fmt(p.downloaded) + ' / ' + fmt(p.total) + ')';
+            } else {
+                // 未知总大小：indeterminate 转圈
+                box.classList.add('dl-indeterminate');
+                info.textContent = '下载中… ' + fmt(p.downloaded);
+            }
+        },
+        setError: function (msg) {
+            if (closed) return;
+            box.classList.add('dl-error');
+            box.querySelector('.dl-title').textContent = displayName + ' 下载失败';
+            info.textContent = String(msg || '未知错误');
+            cancelBtn.textContent = '关闭';
+            cancelBtn.disabled = false;
+        },
+        close: function () {
+            if (closed) return;
+            closed = true;
+            if (mask.parentNode) mask.parentNode.removeChild(mask);
+        }
+    };
+}
+
+// 统一发起 Tauri 下载（带进度弹窗 + 取消）；opts: { kind:'file'|'image', url, filename, headers, displayName }
+function startTauriDownload(opts) {
+    var invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+    var ChannelCls = window.__TAURI__?.core?.Channel;
+    if (!invoke || !ChannelCls) {
+        // 兜底：无 Channel 支持时直接走旧命令（无进度反馈）
+        if (opts.kind === 'image') {
+            invoke('save_image', { url: opts.url, headers: opts.headers || null })
+                .catch(function (e) { console.error('save_image 失败:', e); });
+        } else {
+            invoke('save_download', { url: opts.url, filename: opts.filename || null, headers: opts.headers || null })
+                .catch(function (e) { console.error('save_download 失败:', e); });
+        }
+        return;
+    }
+    var taskId = 'dl_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
+    var ch = new ChannelCls();
+    var modal = showDownloadModal(opts.displayName || '文件', taskId, function () {
+        invoke('cancel_download', { task_id: taskId }).catch(function () {});
+    });
+    ch.onmessage = function (msg) { modal.update(msg); };
+    var args = {
+        url: opts.url,
+        headers: opts.headers || null,
+        task_id: taskId,
+        on_progress: ch,
+    };
+    if (opts.kind === 'file') args.filename = opts.filename || null;
+    var cmd = opts.kind === 'image' ? 'save_image' : 'save_download';
+    invoke(cmd, args)
+        .then(function () { modal.close(); })
+        .catch(function (e) {
+            var m = (e && e.message) ? e.message : String(e);
+            if (m === '已取消') modal.close();
+            else modal.setError(m);
+        });
+}
+
 // 下载文件（带鉴权，不再用浏览器直接打开）——文件接口已加权鉴
 function downloadFile(url, filename) {
     if (!url) return;
     if (IS_TAURI) {
         var token = localStorage.getItem('oc_access_token');
         var headers = token ? [['Authorization', 'Bearer ' + token]] : [];
-        window.__TAURI_INTERNALS__.invoke('save_download', { url: url, filename: filename || null, headers: headers })
-            .catch(function(e) { console.error('save_download 失败:', e); });
+        var displayName = filename || (url.split('/').pop() || '文件');
+        startTauriDownload({ kind: 'file', url: url, filename: filename || null, headers: headers, displayName: displayName });
         return;
     }
     // 非 Tauri 回退：带鉴权 fetch → blob 保存

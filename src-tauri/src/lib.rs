@@ -7,6 +7,9 @@ use tauri::{
     Manager, WebviewWindow,
 };
 use tauri_plugin_dialog::{DialogExt, FilePath};
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -161,22 +164,126 @@ fn save_with_dialog(
     Ok(())
 }
 
+// 下载进度上报消息（经 Tauri Channel 推到前端）
+#[derive(Clone, serde::Serialize)]
+struct DlProgress {
+    downloaded: u64,
+    total: u64,
+    done: bool,
+    error: Option<String>,
+}
+
+// 取消标志表：task_id -> Arc<AtomicBool>，前端点取消时置位，流式循环里检测
+static DL_CANCEL: OnceLock<Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>> =
+    OnceLock::new();
+fn dl_cancel_map(
+) -> &'static Mutex<std::collections::HashMap<String, Arc<AtomicBool>>> {
+    DL_CANCEL.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+// 流式下载：边下边写临时文件，按块上报进度；支持取消。完成后弹系统保存框。
+async fn stream_download(
+    app: &tauri::AppHandle,
+    url: String,
+    headers: Option<Vec<(String, String)>>,
+    task_id: String,
+    on_progress: tauri::ipc::Channel<DlProgress>,
+    filename: Option<String>,
+    filter: Option<(&str, &[&str])>,
+) -> Result<(), String> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    dl_cancel_map()
+        .lock()
+        .map_err(|_| "内部锁异常".to_string())?
+        .insert(task_id.clone(), cancel.clone());
+
+    let client = reqwest::Client::new();
+    let mut req = client.get(&url);
+    if let Some(hs) = headers {
+        for (k, v) in hs {
+            req = req.header(&k, &v);
+        }
+    }
+    let mut resp = req.send().await.map_err(|e| format!("下载失败: {}", e))?;
+    let total = resp.content_length().unwrap_or(0);
+    on_progress
+        .send(DlProgress {
+            downloaded: 0,
+            total,
+            done: false,
+            error: None,
+        })
+        .ok();
+
+    // 流式写入临时文件，避免一次性把大文件读进内存
+    let tmp = std::env::temp_dir().join(format!("oc_dl_{}.part", task_id));
+    let mut downloaded: u64 = 0;
+    {
+        let mut f =
+            std::fs::File::create(&tmp).map_err(|e| format!("创建临时文件失败: {}", e))?;
+        while let Some(chunk) = resp
+            .chunk()
+            .await
+            .map_err(|e| format!("读取失败: {}", e))?
+        {
+            if cancel.load(Ordering::SeqCst) {
+                let _ = std::fs::remove_file(&tmp);
+                dl_cancel_map()
+                    .lock()
+                    .ok()
+                    .and_then(|mut m| m.remove(&task_id));
+                return Err("已取消".into());
+            }
+            f.write_all(&chunk).map_err(|e| format!("写入失败: {}", e))?;
+            downloaded += chunk.len() as u64;
+            on_progress
+                .send(DlProgress {
+                    downloaded,
+                    total,
+                    done: false,
+                    error: None,
+                })
+                .ok();
+        }
+    }
+
+    let data = std::fs::read(&tmp).map_err(|e| format!("读取临时文件失败: {}", e))?;
+    let _ = std::fs::remove_file(&tmp);
+    dl_cancel_map()
+        .lock()
+        .ok()
+        .and_then(|mut m| m.remove(&task_id));
+    on_progress
+        .send(DlProgress {
+            downloaded,
+            total: if total == 0 { downloaded } else { total },
+            done: true,
+            error: None,
+        })
+        .ok();
+
+    save_with_dialog(app, &data, filename.as_deref(), filter)
+}
+
 // 通过 URL 下载图片（HTTP / HTTPS），可带请求头（媒体接口已加权鉴，需传 Authorization）
 #[tauri::command]
 async fn save_image(
     app: tauri::AppHandle,
     url: String,
     headers: Option<Vec<(String, String)>>,
+    task_id: String,
+    on_progress: tauri::ipc::Channel<DlProgress>,
 ) -> Result<(), String> {
-    let mut req = reqwest::Client::new().get(&url);
-    if let Some(hs) = headers {
-        for (k, v) in hs {
-            req = req.header(&k, &v);
-        }
-    }
-    let response = req.send().await.map_err(|e| format!("下载失败: {}", e))?;
-    let bytes = response.bytes().await.map_err(|e| format!("读取失败: {}", e))?;
-    save_with_dialog(&app, &bytes, None, Some(("图片", &["jpg", "jpeg", "png", "gif", "webp", "bmp"])))
+    stream_download(
+        &app,
+        url,
+        headers,
+        task_id,
+        on_progress,
+        None,
+        Some(("图片", &["jpg", "jpeg", "png", "gif", "webp", "bmp"])),
+    )
+    .await
 }
 
 // 通用文件下载（文件消息；可带默认文件名与鉴权头，不限制扩展名）
@@ -186,16 +293,29 @@ async fn save_download(
     url: String,
     filename: Option<String>,
     headers: Option<Vec<(String, String)>>,
+    task_id: String,
+    on_progress: tauri::ipc::Channel<DlProgress>,
 ) -> Result<(), String> {
-    let mut req = reqwest::Client::new().get(&url);
-    if let Some(hs) = headers {
-        for (k, v) in hs {
-            req = req.header(&k, &v);
+    stream_download(
+        &app,
+        url,
+        headers,
+        task_id,
+        on_progress,
+        filename,
+        None,
+    )
+    .await
+}
+
+// 取消正在进行的下载（前端进度弹窗点「取消」时调用）
+#[tauri::command]
+fn cancel_download(task_id: String) {
+    if let Ok(m) = dl_cancel_map().lock() {
+        if let Some(flag) = m.get(&task_id) {
+            flag.store(true, Ordering::SeqCst);
         }
     }
-    let response = req.send().await.map_err(|e| format!("下载失败: {}", e))?;
-    let bytes = response.bytes().await.map_err(|e| format!("读取失败: {}", e))?;
-    save_with_dialog(&app, &bytes, filename.as_deref(), None)
 }
 
 // 直接保存二进制数据（blob URL 用 canvas 读出后传过来）
@@ -737,6 +857,7 @@ pub fn run() {
             notify_new_message,
             save_image,
             save_download,
+            cancel_download,
             save_image_data,
             env_report,
             app_version,

@@ -3742,3 +3742,82 @@ body::-webkit-scrollbar {
 }
 .cip-app-del:hover { background: rgba(255, 80, 80, 0.15); color: #ff6b6b; }
 
+/* ===== 下载进度弹窗（点击下载按钮即时反馈）===== */
+.dl-modal-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+}
+.dl-modal {
+    width: 320px;
+    max-width: 86vw;
+    background: var(--bg-secondary, #1f2530);
+    color: var(--text-color, #eceff4);
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+    border-radius: 12px;
+    padding: 18px 18px 14px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    box-sizing: border-box;
+}
+.dl-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.dl-bar {
+    position: relative;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+}
+.dl-bar-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #4f9dff, #7c5cff);
+    transition: width 0.2s ease;
+}
+/* 未知总大小：indeterminate 转圈动画 */
+.dl-indeterminate .dl-bar-fill {
+    width: 40% !important;
+    position: absolute;
+    left: 0;
+    animation: dl-slide 1.1s ease-in-out infinite;
+}
+@keyframes dl-slide {
+    0%   { left: -40%; }
+    100% { left: 100%; }
+}
+.dl-info {
+    font-size: 12px;
+    color: var(--secondary-text, #9aa4b2);
+    margin: 10px 0 14px;
+    min-height: 16px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.dl-cancel {
+    width: 100%;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.18));
+    background: transparent;
+    color: var(--text-color, #eceff4);
+    border-radius: 8px;
+    padding: 7px 0;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.dl-cancel:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); }
+.dl-cancel:disabled { opacity: 0.55; cursor: default; }
+.dl-error .dl-bar-fill { background: #ff6b6b; }
+.dl-done .dl-bar-fill { background: #46d18a; }
+
