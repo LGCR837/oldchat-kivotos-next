@@ -164,6 +164,18 @@ const IS_TAURI = _detectIsTauri();
     bindWinControls('courtWin');
     bindWinControls('plaza');
 
+    // CIP 调试器 overlay：最小化/最大化同普通窗口，关闭键只关 overlay
+    (function bindCipWinControls() {
+        var minBtn = document.getElementById('cipWinMinBtn');
+        var maxBtn = document.getElementById('cipWinMaxBtn');
+        var closeBtn = document.getElementById('cipWinCloseBtn');
+        if (minBtn) minBtn.addEventListener('click', function() { invoke('minimize_window').catch(function(){}); });
+        if (maxBtn) maxBtn.addEventListener('click', function() { invoke('toggle_maximize_window').then(syncMaximizeState).catch(function(){}); });
+        if (closeBtn) closeBtn.addEventListener('click', function() {
+            if (window.CipController && typeof window.CipController.close === 'function') window.CipController.close();
+        });
+    })();
+
     // 监听窗口尺寸变化（拖动边缘最大化 / 系统快捷键还原等场景）
     window.addEventListener('resize', syncMaximizeState);
     // 初始化一次
@@ -8919,6 +8931,16 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     <span id="settingsCacheSize">计算中...</span>
                 </div>
             </div>
+            <h3 style="margin-top:20px;">开发者</h3>
+            <div class="settings-group">
+                <div class="settings-item" id="settingsCipDebugger">
+                    <span class="label">Lua 小程序调试器</span>
+                    <span class="value">实验性 <i class="fa-solid fa-chevron-right"></i></span>
+                </div>
+                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
+                    从服务器拉取 Lua 小程序清单并在本地沙箱中运行（P0 预览版，功能不完整）
+                </div>
+            </div>
         `;
         // 接口版本开关（设置 → 通用 → 接口版本）
         const apiSel = document.getElementById('apiVersionSelect');
@@ -9019,6 +9041,14 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 loadCacheSize();
             } catch (e) {
                 showAlert('清除失败: ' + (e.message || e));
+            }
+        });
+        // 开发者：Lua 小程序调试器
+        document.getElementById('settingsCipDebugger')?.addEventListener('click', () => {
+            if (window.CipController && typeof window.CipController.open === 'function') {
+                window.CipController.open();
+            } else {
+                showAlert('Lua 运行时未加载（fengari 缺失或加载失败），请查看控制台');
             }
         });
         // 加载缓存大小

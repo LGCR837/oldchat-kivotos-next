@@ -24,3 +24,12 @@ dist-ssr
 
 # Build output
 build/
+
+# fengari (Lua VM) 打包中间产物 —— 用 scripts/build-fengari.mjs 重新生成
+.fengari-build/
+_cipbuild/
+_fengari_ext/
+_fengari.tgz
+_fw.js
+.fgorig/
+_probe/
