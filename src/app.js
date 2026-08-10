@@ -823,23 +823,29 @@ function initArtPlayers(root) {
     });
 }
 
-// 显示下载进度弹窗，返回 { update(progress), close(), setError(msg) }
+// 显示下载进度弹窗（复用现有 .custom-modal 样式），返回 { update, setFallback, setError, close }
 function showDownloadModal(displayName, taskId, onCancel) {
-    var mask = document.createElement('div');
-    mask.className = 'dl-modal-mask';
-    var box = document.createElement('div');
-    box.className = 'dl-modal';
-    box.innerHTML =
-        '<div class="dl-title">' + escapeHtml(displayName) + ' 下载中…</div>' +
-        '<div class="dl-bar"><div class="dl-bar-fill"></div></div>' +
-        '<div class="dl-info">准备中…</div>' +
-        '<button class="dl-cancel" type="button">取消</button>';
-    mask.appendChild(box);
-    document.body.appendChild(mask);
+    var overlay = document.createElement('div');
+    overlay.className = 'custom-modal-overlay';
+    overlay.style.zIndex = '21000'; // 略高于普通弹窗
+    overlay.innerHTML =
+        '<div class="custom-modal" style="max-width:360px;">' +
+            '<div class="custom-modal-title">' + escapeHtml(displayName) + ' 下载中…</div>' +
+            '<div class="custom-modal-body">' +
+                '<div class="dl-progress"><div class="dl-progress-fill"></div></div>' +
+                '<div class="dl-info">准备中…</div>' +
+            '</div>' +
+            '<div class="custom-modal-actions">' +
+                '<button class="btn" type="button">取消</button>' +
+            '</div>' +
+        '</div>';
+    document.body.appendChild(overlay);
 
-    var fill = box.querySelector('.dl-bar-fill');
-    var info = box.querySelector('.dl-info');
-    var cancelBtn = box.querySelector('.dl-cancel');
+    var progressEl = overlay.querySelector('.dl-progress');
+    var fill = overlay.querySelector('.dl-progress-fill');
+    var info = overlay.querySelector('.dl-info');
+    var titleEl = overlay.querySelector('.custom-modal-title');
+    var cancelBtn = overlay.querySelector('.btn');
     var closed = false;
 
     cancelBtn.addEventListener('click', function () {
@@ -860,7 +866,6 @@ function showDownloadModal(displayName, taskId, onCancel) {
             if (closed) return;
             if (p.error) { this.setError(p.error); return; }
             if (p.done) {
-                box.classList.add('dl-done');
                 info.textContent = '完成，请选择保存位置…';
                 fill.style.width = '100%';
                 return;
@@ -870,15 +875,18 @@ function showDownloadModal(displayName, taskId, onCancel) {
                 fill.style.width = pct + '%';
                 info.textContent = pct + '%  (' + fmt(p.downloaded) + ' / ' + fmt(p.total) + ')';
             } else {
-                // 未知总大小：indeterminate 转圈
-                box.classList.add('dl-indeterminate');
+                progressEl.classList.add('dl-indeterminate');
                 info.textContent = '下载中… ' + fmt(p.downloaded);
             }
         },
+        setFallback: function () {
+            if (closed) return;
+            progressEl.classList.add('dl-indeterminate');
+            info.textContent = '下载中…';
+        },
         setError: function (msg) {
             if (closed) return;
-            box.classList.add('dl-error');
-            box.querySelector('.dl-title').textContent = displayName + ' 下载失败';
+            titleEl.textContent = displayName + ' 下载失败';
             info.textContent = String(msg || '未知错误');
             cancelBtn.textContent = '关闭';
             cancelBtn.disabled = false;
@@ -886,9 +894,18 @@ function showDownloadModal(displayName, taskId, onCancel) {
         close: function () {
             if (closed) return;
             closed = true;
-            if (mask.parentNode) mask.parentNode.removeChild(mask);
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
         }
     };
+}
+
+// 旧二进制回退：不带 task_id/on_progress 直接调原命令（无进度，最后弹系统保存框）
+function _fallbackDownload(opts) {
+    var invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+    var args = { url: opts.url, headers: opts.headers || null };
+    if (opts.kind === 'file') args.filename = opts.filename || null;
+    var cmd = opts.kind === 'image' ? 'save_image' : 'save_download';
+    return invoke(cmd, args);
 }
 
 // 统一发起 Tauri 下载（带进度弹窗 + 取消）；opts: { kind:'file'|'image', url, filename, headers, displayName }
@@ -897,13 +914,7 @@ function startTauriDownload(opts) {
     var ChannelCls = window.__TAURI__?.core?.Channel;
     if (!invoke || !ChannelCls) {
         // 兜底：无 Channel 支持时直接走旧命令（无进度反馈）
-        if (opts.kind === 'image') {
-            invoke('save_image', { url: opts.url, headers: opts.headers || null })
-                .catch(function (e) { console.error('save_image 失败:', e); });
-        } else {
-            invoke('save_download', { url: opts.url, filename: opts.filename || null, headers: opts.headers || null })
-                .catch(function (e) { console.error('save_download 失败:', e); });
-        }
+        _fallbackDownload(opts).catch(function (e) { console.error('下载失败:', e); });
         return;
     }
     var taskId = 'dl_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
@@ -924,6 +935,14 @@ function startTauriDownload(opts) {
         .then(function () { modal.close(); })
         .catch(function (e) {
             var m = (e && e.message) ? e.message : String(e);
+            // 当前运行的是旧二进制（save_download 不认 task_id）：自动回退到无进度调用
+            if (/invalid args|task_id|taskId|unknown command/i.test(m)) {
+                modal.setFallback();
+                _fallbackDownload(opts)
+                    .then(function () { modal.close(); })
+                    .catch(function (e2) { modal.setError((e2 && e2.message) || e2); });
+                return;
+            }
             if (m === '已取消') modal.close();
             else modal.setError(m);
         });
