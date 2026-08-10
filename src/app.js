@@ -162,6 +162,7 @@ const IS_TAURI = _detectIsTauri();
     bindWinControls('musicWin');
     bindWinControls('discover');
     bindWinControls('courtWin');
+    bindWinControls('plaza');
 
     // 监听窗口尺寸变化（拖动边缘最大化 / 系统快捷键还原等场景）
     window.addEventListener('resize', syncMaximizeState);
@@ -1942,6 +1943,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const tabBtns = sidebarTabs ? sidebarTabs.querySelectorAll('.tab-btn') : [];
     const sidebarPanels = sidebarPanelsTrack ? sidebarPanelsTrack.querySelectorAll('.sidebar-panel') : [];
     const mainPanels = document.querySelectorAll('.chat-area > .main-panel');
+
+    // 轨道与面板宽度按实际面板数量计算（不能写死 6 个），
+    // 否则新增面板（如资源广场）后 translateX 与面板宽度不匹配，
+    // 切换标签页时面板会错位、看起来宽度不一致。
+    const sidebarPanelCount = sidebarPanels.length || 1;
+    if (sidebarPanelsTrack) sidebarPanelsTrack.style.width = (sidebarPanelCount * 100) + '%';
+    sidebarPanels.forEach(p => { p.style.width = (100 / sidebarPanelCount) + '%'; });
 
     function switchTab(tabName) {
         if (!sidebarPanelsTrack) return;
