@@ -5674,10 +5674,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         groupSection.className = 'contact-section';
         groupSection.dataset.section = 'group';
         if (contacts.groups.length > 0) {
-            const sep = document.createElement('div');
-            sep.className = 'contact-section-header';
-            sep.textContent = '群聊';
-            groupSection.appendChild(sep);
+            groupSection.appendChild(makeSectionHeader('群聊', ''));
             contacts.groups.forEach(g => groupSection.appendChild(createContactItem(g.id, g.name, 'group', g.avatar)));
         }
         // 私聊分区
@@ -5685,14 +5682,15 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         directSection.className = 'contact-section';
         directSection.dataset.section = 'direct';
         if (contacts.friends.length > 0) {
-            const sep = document.createElement('div');
-            sep.className = 'contact-section-header';
-            sep.textContent = '私聊';
-            directSection.appendChild(sep);
+            directSection.appendChild(makeSectionHeader('私聊', ''));
             contacts.friends.forEach(f => directSection.appendChild(createContactItem(f.uid, f.name, 'direct', f.avatar, f.displayUid, f.user_title)));
         }
         contactList.appendChild(groupSection);
         contactList.appendChild(directSection);
+        if (!contactList._collapseBound) {
+            contactList._collapseBound = true;
+            contactList.addEventListener('click', onSectionHeaderClick);
+        }
         applyPriority(false);
         renderContactsPage();
     }
@@ -5703,6 +5701,106 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     let _prioRaf = 0;
     let _prioAnimating = false;   // 动画进行中：期间新请求只标脏、不中途打断
     let _prioDirty = false;
+
+    // ===== 置顶 / 折叠（侧边栏会话管理）=====
+    const PINNED_LS_KEY = 'oc_pinned_convs';
+    const FOLDED_LS_KEY = 'oc_folded_convs';
+    const SECTION_COLLAPSED_LS_KEY = 'oc_section_collapsed';
+    let _pinnedSet = _loadJsonSet(PINNED_LS_KEY);
+    let _foldedSet = _loadJsonSet(FOLDED_LS_KEY);
+    function _loadJsonSet(key) { try { const a = JSON.parse(localStorage.getItem(key)); return new Set(Array.isArray(a) ? a : []); } catch (e) { return new Set(); } }
+    function _saveJsonSet(key, set) { try { localStorage.setItem(key, JSON.stringify(Array.from(set))); } catch (e) {} }
+    function getPinnedSet() { return _pinnedSet; }
+    function getFoldedSet() { return _foldedSet; }
+    function isPinned(k) { return _pinnedSet.has(k); }
+    function isFolded(k) { return _foldedSet.has(k); }
+    function togglePinned(k) { if (_pinnedSet.has(k)) _pinnedSet.delete(k); else _pinnedSet.add(k); _saveJsonSet(PINNED_LS_KEY, _pinnedSet); applyPriority(true); }
+    function toggleFolded(k) { if (_foldedSet.has(k)) _foldedSet.delete(k); else _foldedSet.add(k); _saveJsonSet(FOLDED_LS_KEY, _foldedSet); applyPriority(true); }
+
+    // 分区标题（带可折叠箭头）
+    function makeSectionHeader(title, extraClass) {
+        const sep = document.createElement('div');
+        sep.className = 'contact-section-header' + (extraClass ? ' ' + extraClass : '');
+        sep.innerHTML = '<span class="section-chevron">▾</span><span class="section-title">' + escapeHtml(title) + '</span>';
+        return sep;
+    }
+
+    // 点击分区标题平滑收起/展开，状态持久化
+    function onSectionHeaderClick(e) {
+        const hdr = e.target.closest('.contact-section-header');
+        if (!hdr || !contactList.contains(hdr)) return;
+        const sec = hdr.closest('.contact-section');
+        if (!sec) return;
+        const name = sec.dataset.section;
+        if (!name) return;
+        const state = _loadCollapsedState();
+        const nowCollapsed = !(state[name] === true);
+        state[name] = nowCollapsed;
+        _saveCollapsedState(state);
+        setSectionCollapsed(sec, nowCollapsed, true);
+    }
+    function _loadCollapsedState() {
+        let s = {};
+        try { s = JSON.parse(localStorage.getItem(SECTION_COLLAPSED_LS_KEY)) || {}; } catch (e) { s = {}; }
+        if (!('fold' in s)) s.fold = true;  // 折叠板块默认收起
+        return s;
+    }
+    function _saveCollapsedState(s) { try { localStorage.setItem(SECTION_COLLAPSED_LS_KEY, JSON.stringify(s)); } catch (e) {} }
+    function applySectionCollapsed(animate) {
+        const state = _loadCollapsedState();
+        contactList.querySelectorAll('.contact-section').forEach(sec => {
+            const name = sec.dataset.section;
+            const collapsed = !!(name && state[name] === true);
+            setSectionCollapsed(sec, collapsed, false);
+        });
+    }
+    function setSectionCollapsed(sec, collapsed, animate) {
+        const hdr = sec.querySelector('.contact-section-header');
+        const headerH = hdr ? hdr.offsetHeight : 0;
+        sec.classList.toggle('collapsed', collapsed);
+        if (!animate) {
+            sec.style.transition = 'none';
+            sec.style.maxHeight = collapsed ? (headerH + 'px') : '';
+            requestAnimationFrame(() => requestAnimationFrame(() => { sec.style.transition = ''; }));
+            return;
+        }
+        if (collapsed) {
+            sec.style.maxHeight = sec.scrollHeight + 'px';
+            sec.offsetHeight;               // 强制回流，从当前高度起步
+            sec.style.maxHeight = headerH + 'px';
+        } else {
+            sec.style.maxHeight = sec.scrollHeight + 'px';
+            const onEnd = () => { sec.style.maxHeight = ''; sec.removeEventListener('transitionend', onEnd); };
+            sec.addEventListener('transitionend', onEnd);
+        }
+    }
+
+    // 折叠板块：被折叠的会话移入其下（位于私聊之后）
+    function _ensureFoldSection() {
+        let sec = contactList.querySelector('.contact-section[data-section="fold"]');
+        if (!sec) {
+            sec = document.createElement('div');
+            sec.className = 'contact-section fold-section';
+            sec.dataset.section = 'fold';
+            sec.appendChild(makeSectionHeader('折叠', 'fold-header'));
+            const directSec = contactList.querySelector('.contact-section[data-section="direct"]');
+            if (directSec && directSec.nextSibling) contactList.insertBefore(sec, directSec.nextSibling);
+            else contactList.appendChild(sec);
+        }
+        return sec;
+    }
+    function layoutFoldSection() {
+        const folded = getFoldedSet();
+        if (folded.size === 0) {
+            const existing = contactList.querySelector('.contact-section[data-section="fold"]');
+            if (existing) existing.remove();
+            return;
+        }
+        const foldSec = _ensureFoldSection();
+        Array.from(contactList.querySelectorAll('.contact-item')).forEach(it => {
+            if (folded.has(it.dataset.convKey)) foldSec.appendChild(it);
+        });
+    }
 
     function isPriorityEnabled() {
         try { return localStorage.getItem(PRIORITY_LS_KEY) === '1'; } catch (e) { return false; }
@@ -5718,16 +5816,13 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             sec = document.createElement('div');
             sec.className = 'contact-section priority-section';
             sec.dataset.section = 'priority';
-            const sep = document.createElement('div');
-            sep.className = 'contact-section-header priority-header';
-            sep.textContent = '重点';
-            sec.appendChild(sep);
+            sec.appendChild(makeSectionHeader('重点', 'priority-header'));
             contactList.insertBefore(sec, contactList.firstChild);
         }
         return sec;
     }
     function _ensureSectionHeaders() {
-        ['priority', 'group', 'direct'].forEach(t => {
+        ['priority', 'group', 'direct', 'fold'].forEach(t => {
             const sec = contactList.querySelector('.contact-section[data-section="' + t + '"]');
             if (!sec) return;
             const has = sec.querySelector('.contact-item');
@@ -5779,6 +5874,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             // 刚进入（标记时间戳后第一次判定必然 ≥1ms，窗口 0 会直接判死）——保证至少包含一次
             if (prioFresh[k]) { set.add(k); delete prioFresh[k]; }
         }
+        // 置顶内容始终进入重点区域（忽略是否开启重点功能）
+        getPinnedSet().forEach(k => set.add(k));
+        // 被折叠的会话不进入重点（移入折叠板块）
+        getFoldedSet().forEach(k => set.delete(k));
         return set;
     }
     // 心跳：保持「正在看」的会话活跃（仅当它已进入重点后才刷新，避免提前把群聊拉入），并驱动过期移出
@@ -5810,33 +5909,46 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 const ps = _prioSection();
                 first.set(it, { rect: it.getBoundingClientRect(), inPrio: !!(ps && ps.contains(it)) });
             });
-            if (!enabled) {
-                const prioSec = _prioSection();
-                if (prioSec) {
-                    Array.from(prioSec.querySelectorAll('.contact-item')).forEach(it => sectionForItem(it).appendChild(it));
-                    prioSec.remove();
+            const pinnedSet = getPinnedSet();
+            const foldedSet = getFoldedSet();
+            const effectiveEnabled = enabled || pinnedSet.size > 0;
+            let prioSec = null;
+            let currentItem = null;
+            let wasCurrentInPrio = false;
+            if (!effectiveEnabled) {
+                const existing = _prioSection();
+                if (existing) {
+                    Array.from(existing.querySelectorAll('.contact-item')).forEach(it => sectionForItem(it).appendChild(it));
+                    existing.remove();
                 }
-                _ensureSectionHeaders();
-                return;
+            } else {
+                const prioSet = getPrioritySet();
+                prioSec = _ensurePrioritySection();
+                const prioItems = [];
+                const normalItems = [];
+                allItems.forEach(it => { if (prioSet.has(it.dataset.convKey) && !foldedSet.has(it.dataset.convKey)) prioItems.push(it); else normalItems.push(it); });
+                const currentKey = currentConv && currentConv.key;
+                currentItem = currentKey ? allItems.find(it => it.dataset.convKey === currentKey) : null;
+                wasCurrentInPrio = !!(currentItem && first.get(currentItem) && first.get(currentItem).inPrio);
+                prioItems.forEach(it => { if (it === currentItem && wasCurrentInPrio) return; prioSec.appendChild(it); });
+                normalItems.forEach(it => sectionForItem(it).appendChild(it));
             }
-            const prioSet = getPrioritySet();
-            const prioSec = _ensurePrioritySection();
-            const prioItems = [];
-            const normalItems = [];
-            allItems.forEach(it => { if (prioSet.has(it.dataset.convKey)) prioItems.push(it); else normalItems.push(it); });
-            const currentKey = currentConv && currentConv.key;
-            const currentItem = currentKey ? allItems.find(it => it.dataset.convKey === currentKey) : null;
-            const wasCurrentInPrio = !!(currentItem && first.get(currentItem) && first.get(currentItem).inPrio);
-            prioItems.forEach(it => { if (it === currentItem && wasCurrentInPrio) return; prioSec.appendChild(it); });
-            normalItems.forEach(it => sectionForItem(it).appendChild(it));
+            // 折叠：被折叠的会话移入「折叠」板块（位于私聊之下）
+            layoutFoldSection();
+            // 置顶 / 折叠 视觉标记
+            allItems.forEach(it => {
+                it.classList.toggle('is-pinned', pinnedSet.has(it.dataset.convKey));
+                it.classList.toggle('is-folded', foldedSet.has(it.dataset.convKey));
+            });
             _ensureSectionHeaders();
+            applySectionCollapsed(false);
             if (!animate) return;
             if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
             const moved = [];
             allItems.forEach(it => {
                 if (currentItem && it === currentItem) return;
                 const f = first.get(it);
-                const nowPrio = prioSec.contains(it);
+                const nowPrio = !!(prioSec && prioSec.contains(it));
                 if (f && f.inPrio !== nowPrio) moved.push({ it, fromRect: f.rect });
             });
             if (moved.length > 15) {
@@ -8443,6 +8555,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const convType = contactItem.dataset.type;
             const convId = contactItem.dataset.id;
             const convName = contactItem.dataset.name;
+            const convKey = convType + ':' + convId;
 
             // 设置 / 发现面板：导航项，无右键菜单
             if (panelName === 'settings' || panelName === 'discover') { return; }
@@ -8457,21 +8570,31 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 menuHtml = '<div class="context-menu-item" data-action="play">播放</div>' +
                     '<div class="context-menu-item" data-action="copy-link">复制链接</div>';
             } else if (panelName === 'contacts') {
+                const pinItem = isPinned(convKey) ? '<div class="context-menu-item" data-action="unpin">取消置顶</div>' : '<div class="context-menu-item" data-action="pin">置顶</div>';
+                const foldItem = isFolded(convKey) ? '<div class="context-menu-item" data-action="unfold">取消折叠</div>' : '<div class="context-menu-item" data-action="fold">折叠</div>';
                 if (convType === 'group') {
                     menuHtml = '<div class="context-menu-item" data-action="send-msg">发消息</div>' +
                         '<div class="context-menu-item" data-action="group-manage">群聊管理</div>' +
+                        '<div class="context-menu-divider"></div>' +
+                        pinItem + foldItem +
                         '<div class="context-menu-divider"></div>' +
                         '<div class="context-menu-item" data-action="copy-id">复制ID</div>';
                 } else {
                     menuHtml = '<div class="context-menu-item" data-action="send-msg">发消息</div>' +
                         '<div class="context-menu-item" data-action="profile">查看主页</div>' +
                         '<div class="context-menu-divider"></div>' +
+                        pinItem + foldItem +
+                        '<div class="context-menu-divider"></div>' +
                         '<div class="context-menu-item" data-action="copy-id">复制ID</div>';
                 }
             } else {
                 // chat 面板：会话级操作
                 if (convType === 'group') {
+                    const pinItem = isPinned(convKey) ? '<div class="context-menu-item" data-action="unpin">取消置顶</div>' : '<div class="context-menu-item" data-action="pin">置顶</div>';
+                    const foldItem = isFolded(convKey) ? '<div class="context-menu-item" data-action="unfold">取消折叠</div>' : '<div class="context-menu-item" data-action="fold">折叠</div>';
                     menuHtml = '<div class="context-menu-item" data-action="group-manage">群聊管理</div>' +
+                        '<div class="context-menu-divider"></div>' +
+                        pinItem + foldItem +
                         '<div class="context-menu-divider"></div>' +
                         '<div class="context-menu-item" data-action="mark-read">全部已读</div>';
                 } else {
@@ -8500,6 +8623,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     if (navigator.clipboard && navigator.clipboard.writeText) {
                         navigator.clipboard.writeText(text).catch(() => fallbackCopyText(text));
                     } else { fallbackCopyText(text); }
+                } else if (action === 'pin' || action === 'unpin') {
+                    togglePinned(convKey);
+                } else if (action === 'fold' || action === 'unfold') {
+                    toggleFolded(convKey);
                 } else if (action === 'play') {
                     const m = musicData.find(m => (m.id || '') === contactItem.dataset.musicId);
                     if (m) playMusic(m);

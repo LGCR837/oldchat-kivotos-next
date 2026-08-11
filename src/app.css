@@ -3911,6 +3911,14 @@ body::-webkit-scrollbar {
 }
 .prio-anim-clone { will-change: transform, opacity; pointer-events: none; }
 
+/* 分区可折叠（置顶/折叠板块点击标题收起） */
+.contact-section { transition: max-height .3s ease; }
+.contact-section.collapsed { overflow: hidden; }
+.contact-section-header { cursor: pointer; display: flex; align-items: center; gap: 4px; }
+.section-chevron { display: inline-block; font-size: 9px; line-height: 1; transition: transform .2s ease; transform: rotate(0deg); }
+.contact-section.collapsed .section-chevron { transform: rotate(-90deg); }
+.contact-item.is-pinned { box-shadow: inset 3px 0 0 0 var(--accent); }
+
 /* 设置页开关（重点分区等） */
 .oc-switch { position: relative; display: inline-block; width: 40px; height: 22px; }
 .oc-switch input { opacity: 0; width: 0; height: 0; }
