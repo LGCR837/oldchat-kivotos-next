@@ -4954,10 +4954,20 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // 应用某个主题：default 清除覆盖回退 app.css；内置/用户主题注入其 CSS
     function applyThemeById(id) {
         localStorage.setItem('themeId', id);
-        if (id === 'default') { clearThemeStyle(); updateThemeToggleVisibility(id); return; }
+        if (id === 'default') {
+            clearThemeStyle();
+            document.documentElement.removeAttribute('data-custom-theme');
+            updateThemeToggleVisibility(id);
+            return;
+        }
         const css = USER_THEMES[id] || (BUILTIN_THEMES[id] && BUILTIN_THEMES[id].css);
-        if (css) injectThemeStyle(css);
-        else clearThemeStyle();
+        if (css) {
+            injectThemeStyle(css);
+            document.documentElement.setAttribute('data-custom-theme', id);
+        } else {
+            clearThemeStyle();
+            document.documentElement.removeAttribute('data-custom-theme');
+        }
         updateThemeToggleVisibility(id);
     }
 
@@ -6076,6 +6086,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         let s = {};
         try { s = JSON.parse(localStorage.getItem(SECTION_COLLAPSED_LS_KEY)) || {}; } catch (e) { s = {}; }
         if (!('fold' in s)) s.fold = true;  // 折叠板块默认收起
+        if (!('channel' in s)) s.channel = true;  // 频道板块默认收起
         return s;
     }
     function _saveCollapsedState(s) { try { localStorage.setItem(SECTION_COLLAPSED_LS_KEY, JSON.stringify(s)); } catch (e) {} }
@@ -8952,7 +8963,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     menuHtml = '<div class="context-menu-item" data-action="view-channel">查看频道</div>' +
                         subItem + '<div class="context-menu-divider"></div>' + pinItem + foldItem;
                 } else {
-                    menuHtml = '<div class="context-menu-item" data-action="mark-read">全部已读</div>';
+                    // 私聊(direct)：同样支持置顶与折叠（与群聊/频道一致）
+                    const pinItem = isPinned(convKey) ? '<div class="context-menu-item" data-action="unpin">取消置顶</div>' : '<div class="context-menu-item" data-action="pin">置顶</div>';
+                    const foldItem = isFolded(convKey) ? '<div class="context-menu-item" data-action="unfold">取消折叠</div>' : '<div class="context-menu-item" data-action="fold">折叠</div>';
+                    menuHtml = pinItem + foldItem + '<div class="context-menu-divider"></div>' +
+                        '<div class="context-menu-item" data-action="mark-read">全部已读</div>';
                 }
             }
 

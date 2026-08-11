@@ -615,6 +615,29 @@ body::-webkit-scrollbar {
 .messages::-webkit-scrollbar{display:none}
 .messages{-ms-overflow-style:none;scrollbar-width:none}
 
+/* 默认主题 + 深色模式：messagesContainer 左上角补一个 1/4 圆填充件，
+   用于平滑标题栏(#16213e)与消息区(#1a1a2e)在左上直角处的硬接缝。
+   对应结构：外层盒子(14×14) = 标题栏色(var(--header-bg)，即「外侧不规则区域」)；
+   左上角一个半径≥14 的大透明圆(circle at bottom right)抠出 1/4 = 透明，透出消息区色。
+   即：外侧不规则区域=标题色，左上角 1/4 扇形=透明（与你给的示例一致）。
+   仅默认主题（data-custom-theme 不存在）且深色模式生效；浅色模式与其他主题不变。
+   补丁挂在 .chat-area（不随消息滚动、被 overflow:hidden 裁切在边角内）。
+   侧边栏收起（.sidebar.collapsed ~ .chat-area）则不显示。 */
+:root:not([data-custom-theme])[data-theme-mode="dark"] .chat-area::before {
+    content: '';
+    position: absolute;
+    top: var(--header-height);
+    left: 0;
+    width: 10px;
+    height: 10px;
+    background: radial-gradient(circle at bottom right, transparent 10px, var(--header-bg) 10px);
+    pointer-events: none;
+    z-index: 5;
+}
+:root:not([data-custom-theme])[data-theme-mode="dark"] .sidebar.collapsed ~ .chat-area::before {
+    display: none;
+}
+
 .message {
 	display: flex;
 	flex-direction: column;
@@ -4131,7 +4154,27 @@ body::-webkit-scrollbar {
 .contact-section { transition: max-height .3s ease; }
 .contact-section.collapsed { overflow: hidden; }
 .contact-section-header { cursor: pointer; display: flex; align-items: center; gap: 4px; }
-.contact-item.is-pinned { box-shadow: inset 3px 0 0 0 var(--accent); }
+/* 置顶会话：左侧高亮条，仅鼠标悬停在该卡片时显示。
+   高度从 0 到满用 transform:scaleY（GPU 友好，等价视觉为高度生长），
+   非线性缓动：展开弹性、收起略快，避免土味渐变。 */
+.contact-item.is-pinned { position: relative; }
+.contact-item.is-pinned::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--accent);
+    border-radius: 0 3px 3px 0;
+    transform: scaleY(0);
+    transform-origin: center;
+    will-change: transform;
+    pointer-events: none;
+    transition: transform .24s cubic-bezier(0.4, 0, 0.2, 1); /* 隐藏：平滑收起 */
+}
+.contact-item.is-pinned:hover::before {
+    transform: scaleY(1);
+    transition: transform .36s cubic-bezier(0.22, 1, 0.36, 1); /* 显示：弹性展开 */
+}
 
 /* 设置页开关（重点分区等） */
 .oc-switch { position: relative; display: inline-block; width: 40px; height: 22px; }
