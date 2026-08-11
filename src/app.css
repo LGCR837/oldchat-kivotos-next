@@ -3900,6 +3900,96 @@ body::-webkit-scrollbar {
     text-overflow: ellipsis;
 }
 
+/* 下载弹窗「后台下载」按钮 */
+.oc-dl-bg-btn { background: var(--accent); color: #fff; border: none; }
+.oc-dl-bg-btn:hover { filter: brightness(1.08); }
+
+/* ===== 左下角后台下载悬浮停靠区 ===== */
+.oc-dl-dock {
+    position: fixed;
+    left: 16px;
+    bottom: 16px;
+    z-index: 19000;
+    display: flex;
+    flex-direction: column-reverse; /* 最新任务贴底 */
+    gap: 10px;
+    pointer-events: none;            /* 容器本身不拦截，仅任务项可点 */
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity .2s ease, transform .2s ease;
+}
+.oc-dl-dock.visible { opacity: 1; transform: none; pointer-events: none; }
+
+.oc-dl-dock-item {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    height: 44px;
+    width: 44px;                     /* 默认仅显示图标方块 */
+    padding: 0 10px;
+    box-sizing: border-box;
+    gap: 10px;
+    border-radius: 12px;
+    background: rgba(30, 34, 42, 0.62);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.32);
+    color: #fff;
+    cursor: pointer;
+    overflow: hidden;
+    white-space: nowrap;
+    opacity: 0;
+    transform: scale(0.6);
+    transition: width .25s cubic-bezier(.4,0,.2,1), opacity .2s ease, transform .2s ease, background .2s ease;
+}
+.oc-dl-dock-item.shown { opacity: 1; transform: scale(1); }
+.oc-dl-dock-item:hover {
+    width: 240px;                    /* 悬停展开显示完整进度 */
+    background: rgba(30, 34, 42, 0.82);
+}
+.oc-dl-dock-icon {
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    color: #fff;
+}
+.oc-dl-dock-detail {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+.oc-dl-dock-name {
+    font-size: 12px;
+    line-height: 1.2;
+    color: #fff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.oc-dl-dock-bar {
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.22);
+    overflow: hidden;
+}
+.oc-dl-dock-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    background: var(--accent, #4f8cff);
+    transition: width .2s ease;
+}
+.oc-dl-dock-item.done .oc-dl-dock-icon { color: #4ade80; }
+.oc-dl-dock-item.done .oc-dl-dock-fill { width: 100% !important; background: #4ade80; }
+.oc-dl-dock-item.error .oc-dl-dock-icon { color: #f87171; }
+.oc-dl-dock-item.error .oc-dl-dock-fill { width: 100% !important; background: #f87171; }
+
 /* ===== 重点分区（侧边栏置顶分组） ===== */
 .contact-section { display: block; }
 .contact-section-header {
@@ -3915,8 +4005,6 @@ body::-webkit-scrollbar {
 .contact-section { transition: max-height .3s ease; }
 .contact-section.collapsed { overflow: hidden; }
 .contact-section-header { cursor: pointer; display: flex; align-items: center; gap: 4px; }
-.section-chevron { display: inline-block; font-size: 9px; line-height: 1; transition: transform .2s ease; transform: rotate(0deg); }
-.contact-section.collapsed .section-chevron { transform: rotate(-90deg); }
 .contact-item.is-pinned { box-shadow: inset 3px 0 0 0 var(--accent); }
 
 /* 设置页开关（重点分区等） */

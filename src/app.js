@@ -827,11 +827,17 @@ function initArtPlayers(root) {
     });
 }
 
-// 显示下载进度弹窗（复用现有 .custom-modal 样式），返回 { update, setFallback, setError, close }
-function showDownloadModal(displayName, taskId, onCancel) {
+// 显示下载进度弹窗（复用现有 .custom-modal 样式）。
+// opts: { displayName, onCancel, onBackground }；onBackground 非空时显示「后台下载」按钮。
+// 返回 { el, overlay, update, setFallback, setError, close, isClosed }
+function showDownloadModal(opts) {
+    var displayName = opts.displayName || '文件';
     var overlay = document.createElement('div');
     overlay.className = 'custom-modal-overlay';
     overlay.style.zIndex = '21000'; // 略高于普通弹窗
+    var bgBtn = opts.onBackground
+        ? '<button class="btn oc-dl-bg-btn" type="button">后台下载</button>'
+        : '';
     overlay.innerHTML =
         '<div class="custom-modal" style="max-width:360px;">' +
             '<div class="custom-modal-title">' + escapeHtml(displayName) + ' 下载中…</div>' +
@@ -840,24 +846,33 @@ function showDownloadModal(displayName, taskId, onCancel) {
                 '<div class="dl-info">准备中…</div>' +
             '</div>' +
             '<div class="custom-modal-actions">' +
+                bgBtn +
                 '<button class="btn" type="button">取消</button>' +
             '</div>' +
         '</div>';
     document.body.appendChild(overlay);
 
+    var el = overlay.querySelector('.custom-modal');
     var progressEl = overlay.querySelector('.dl-progress');
     var fill = overlay.querySelector('.dl-progress-fill');
     var info = overlay.querySelector('.dl-info');
     var titleEl = overlay.querySelector('.custom-modal-title');
-    var cancelBtn = overlay.querySelector('.btn');
+    var cancelBtn = overlay.querySelector('.custom-modal-actions .btn:not(.oc-dl-bg-btn)');
+    var bgBtnEl = overlay.querySelector('.oc-dl-bg-btn');
     var closed = false;
 
     cancelBtn.addEventListener('click', function () {
         if (closed) return;
         cancelBtn.disabled = true;
         cancelBtn.textContent = '取消中…';
-        if (onCancel) onCancel();
+        if (opts.onCancel) opts.onCancel();
     });
+    if (bgBtnEl) {
+        bgBtnEl.addEventListener('click', function () {
+            if (closed) return;
+            if (opts.onBackground) opts.onBackground();
+        });
+    }
 
     function fmt(b) {
         if (b < 1024) return b + ' B';
@@ -865,12 +880,15 @@ function showDownloadModal(displayName, taskId, onCancel) {
         return (b / 1024 / 1024).toFixed(1) + ' MB';
     }
 
-    return {
+    var ctrl = {
+        el: el,
+        overlay: overlay,
+        isClosed: function () { return closed; },
         update: function (p) {
             if (closed) return;
-            if (p.error) { this.setError(p.error); return; }
+            if (p.error) { ctrl.setError(p.error); return; }
             if (p.done) {
-                info.textContent = '完成，请选择保存位置…';
+                info.textContent = '完成';
                 fill.style.width = '100%';
                 return;
             }
@@ -901,6 +919,7 @@ function showDownloadModal(displayName, taskId, onCancel) {
             if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
         }
     };
+    return ctrl;
 }
 
 // 旧二进制回退：不带 task_id/on_progress 直接调原命令（无进度，最后弹系统保存框）
@@ -912,43 +931,251 @@ function _fallbackDownload(opts) {
     return invoke(cmd, args);
 }
 
-// 统一发起 Tauri 下载（带进度弹窗 + 取消）；opts: { kind:'file'|'image', url, filename, headers, displayName }
+// ===== 后台下载管理（左下角悬浮窗，多任务并行）=====
+var _dlTasks = [];           // 进行中的 DownloadTask
+var _dlDock = null;          // 左下角停靠容器
+
+function _ensureDlDock() {
+    if (!_dlDock || !_dlDock.parentNode) {
+        _dlDock = document.getElementById('oc-dl-dock');
+        if (!_dlDock) {
+            _dlDock = document.createElement('div');
+            _dlDock.id = 'oc-dl-dock';
+            _dlDock.className = 'oc-dl-dock';
+            document.body.appendChild(_dlDock);
+        }
+    }
+    return _dlDock;
+}
+
+function _fmtBytes(b) {
+    if (b == null) return '';
+    if (b < 1024) return b + ' B';
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+    return (b / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+function _makeDockItem(task) {
+    var dock = _ensureDlDock();
+    dock.classList.add('visible');
+    var item = document.createElement('div');
+    item.className = 'oc-dl-dock-item';
+    item.innerHTML =
+        '<div class="oc-dl-dock-icon"><i class="fa-solid fa-arrow-down"></i></div>' +
+        '<div class="oc-dl-dock-detail">' +
+            '<div class="oc-dl-dock-name"></div>' +
+            '<div class="oc-dl-dock-bar"><div class="oc-dl-dock-fill"></div></div>' +
+        '</div>';
+    item.querySelector('.oc-dl-dock-name').textContent = task.name;
+    item.title = task.name;
+    item.addEventListener('click', function () { toForeground(task); });
+    dock.appendChild(item);
+    // 进入动画
+    requestAnimationFrame(function () { item.classList.add('shown'); });
+    _updateDockItem(task);
+    return item;
+}
+
+function _updateDockItem(task) {
+    if (!task.dock) return;
+    var fill = task.dock.querySelector('.oc-dl-dock-fill');
+    if (!fill) return;
+    var pct;
+    if (task.state.error) pct = 100;
+    else if (task.state.total > 0) pct = Math.min(100, Math.round((task.state.downloaded / task.state.total) * 100));
+    else if (task.state.indeterminate) pct = 50;
+    else pct = 0;
+    fill.style.width = pct + '%';
+}
+
+// 将居中弹窗平滑飞入左下角停靠位，随后由悬浮 chip 接管
+function _flyModalToDock(modal, dockTarget, onDone) {
+    var overlay = modal.overlay;
+    var el = modal.el;
+    if (!el) { if (onDone) onDone(); return; }
+    var rect = el.getBoundingClientRect();
+    var t = dockTarget.getBoundingClientRect();
+    // 把弹窗元素提出到 body，固定在原屏幕位置
+    el.style.position = 'fixed';
+    el.style.margin = '0';
+    el.style.left = rect.left + 'px';
+    el.style.top = rect.top + 'px';
+    el.style.width = rect.width + 'px';
+    el.style.zIndex = '20000';
+    document.body.appendChild(el);
+    if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    // 强制回流后再加过渡
+    void el.offsetWidth;
+    var dx = (t.left + t.width / 2) - (rect.left + rect.width / 2);
+    var dy = (t.top + t.height / 2) - (rect.top + rect.height / 2);
+    var scale = Math.min(t.width / rect.width, t.height / rect.height);
+    el.style.transition = 'transform .45s cubic-bezier(.4,0,.2,1), opacity .45s ease';
+    el.style.transformOrigin = 'center center';
+    el.style.transform = 'translate(' + dx + 'px,' + dy + 'px) scale(' + scale + ')';
+    el.style.opacity = '0.12';
+    var done = false;
+    function finish() {
+        if (done) return; done = true;
+        if (el && el.parentNode) el.parentNode.removeChild(el);
+        if (onDone) onDone();
+    }
+    el.addEventListener('transitionend', function (e) { if (e.propertyName === 'transform') finish(); }, { once: true });
+    setTimeout(finish, 600); // 兜底
+}
+
+function toBackground(task) {
+    if (task.backgrounded) return;
+    task.backgrounded = true;
+    task.dock = _makeDockItem(task);
+    if (task.modal && !task.modal.isClosed()) {
+        _flyModalToDock(task.modal, task.dock, function () { task.modal = null; });
+    } else {
+        task.modal = null;
+    }
+}
+
+function toForeground(task) {
+    if (!task.backgrounded) return;
+    task.backgrounded = false;
+    if (task.dock && task.dock.parentNode) { task.dock.parentNode.removeChild(task.dock); }
+    task.dock = null;
+    if (_dlDock && _dlDock.children.length === 0) _dlDock.classList.remove('visible');
+    task.modal = showDownloadModal({
+        displayName: task.name,
+        onCancel: function () { if (task.cancel) task.cancel(); _removeTask(task); },
+        onBackground: function () { toBackground(task); }
+    });
+    if (task.finished) {
+        if (task.state.error) task.modal.setError(task.state.error);
+        else task.modal.update({ done: true });
+    } else {
+        _syncModal(task);
+    }
+}
+
+function _syncModal(task) {
+    if (!task.modal || task.modal.isClosed()) return;
+    if (task.state.error) { task.modal.setError(task.state.error); return; }
+    task.modal.update(task.state);
+}
+
+function _applyState(task) {
+    if (!task.backgrounded && task.modal) _syncModal(task);
+    if (task.dock) _updateDockItem(task);
+}
+
+function _finishTask(task) {
+    if (task.finished) return;
+    task.finished = true;
+    task.state.done = true;
+    if (task.dock) {
+        task.dock.classList.add('done');
+        var ic = task.dock.querySelector('.oc-dl-dock-icon i');
+        if (ic) ic.className = 'fa-solid fa-check';
+        _updateDockItem(task);
+        setTimeout(function () { _removeTask(task); }, 1800);
+    }
+    if (task.modal && !task.backgrounded) {
+        task.modal.update({ done: true });
+        setTimeout(function () { if (task.modal && !task.modal.isClosed()) task.modal.close(); }, 700);
+    }
+    var idx = _dlTasks.indexOf(task);
+    if (idx >= 0) _dlTasks.splice(idx, 1);
+}
+
+function _errorTask(task, msg) {
+    task.state.error = msg;
+    if (task.dock) {
+        task.dock.classList.add('error');
+        var ic = task.dock.querySelector('.oc-dl-dock-icon i');
+        if (ic) ic.className = 'fa-solid fa-triangle-exclamation';
+        _updateDockItem(task);
+    }
+    if (task.modal && !task.backgrounded) task.modal.setError(msg);
+}
+
+function _removeTask(task) {
+    if (task.dock && task.dock.parentNode) task.dock.parentNode.removeChild(task.dock);
+    task.dock = null;
+    if (task.modal && !task.modal.isClosed()) task.modal.close();
+    task.modal = null;
+    if (_dlDock && _dlDock.children.length === 0) _dlDock.classList.remove('visible');
+    var idx = _dlTasks.indexOf(task);
+    if (idx >= 0) _dlTasks.splice(idx, 1);
+}
+
+// 统一发起 Tauri 下载（带进度弹窗 + 取消 + 后台下载）；opts: { kind:'file'|'image', url, filename, headers, displayName }
 function startTauriDownload(opts) {
     var invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
     var ChannelCls = window.__TAURI__?.core?.Channel;
     if (!invoke || !ChannelCls) {
-        // 兜底：无 Channel 支持时直接走旧命令（无进度反馈）
+        // 兜底：无 Channel 支持时直接走旧命令（无进度反馈，无后台）
         _fallbackDownload(opts).catch(function (e) { console.error('下载失败:', e); });
         return;
     }
-    var taskId = 'dl_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
-    var ch = new ChannelCls();
-    var modal = showDownloadModal(opts.displayName || '文件', taskId, function () {
-        invoke('cancel_download', { taskId: taskId }).catch(function () {});
+    var task = {
+        opts: opts,
+        name: opts.displayName || '文件',
+        taskId: 'dl_' + Date.now() + '_' + Math.floor(Math.random() * 1e6),
+        state: { downloaded: 0, total: 0, pct: 0, done: false, error: null, indeterminate: false },
+        modal: null,
+        dock: null,
+        backgrounded: false,
+        finished: false
+    };
+    _dlTasks.push(task);
+
+    function cancelFn() { invoke('cancel_download', { taskId: task.taskId }).catch(function () {}); }
+    task.cancel = cancelFn;
+
+    task.modal = showDownloadModal({
+        displayName: task.name,
+        onCancel: function () { cancelFn(); _removeTask(task); },
+        onBackground: function () { toBackground(task); }
     });
-    ch.onmessage = function (msg) { modal.update(msg); };
+
+    var ch = new ChannelCls();
+    ch.onmessage = function (msg) {
+        if (!msg) return;
+        if (msg.error) {
+            task.state.error = msg.error;
+        } else if (msg.done) {
+            task.state.done = true;
+            if (typeof msg.total === 'number') task.state.total = msg.total;
+            if (typeof msg.downloaded === 'number') task.state.downloaded = msg.downloaded;
+        } else {
+            if (typeof msg.downloaded === 'number') task.state.downloaded = msg.downloaded;
+            if (typeof msg.total === 'number') task.state.total = msg.total;
+            task.state.indeterminate = !(task.state.total > 0);
+            if (task.state.total > 0) {
+                task.state.pct = Math.min(100, Math.round((task.state.downloaded / task.state.total) * 100));
+            }
+        }
+        _applyState(task);
+    };
+
     var args = {
         url: opts.url,
         headers: opts.headers || null,
-        taskId: taskId,
+        taskId: task.taskId,
         onProgress: ch,
     };
     if (opts.kind === 'file') args.filename = opts.filename || null;
     var cmd = opts.kind === 'image' ? 'save_image' : 'save_download';
     invoke(cmd, args)
-        .then(function () { modal.close(); })
+        .then(function () { _finishTask(task); })
         .catch(function (e) {
             var m = (e && e.message) ? e.message : String(e);
             // 当前运行的是旧二进制（save_download 不认 task_id）：自动回退到无进度调用
             if (/invalid args|task_id|taskId|unknown command/i.test(m)) {
-                modal.setFallback();
+                if (task.modal && !task.backgrounded) task.modal.setFallback();
                 _fallbackDownload(opts)
-                    .then(function () { modal.close(); })
-                    .catch(function (e2) { modal.setError((e2 && e2.message) || e2); });
+                    .then(function () { _finishTask(task); })
+                    .catch(function (e2) { _errorTask(task, (e2 && e2.message) || e2); });
                 return;
             }
-            if (m === '已取消') modal.close();
-            else modal.setError(m);
+            if (m === '已取消') { _finishTask(task); return; }
+            _errorTask(task, m);
         });
 }
 
@@ -5717,11 +5944,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     function togglePinned(k) { if (_pinnedSet.has(k)) _pinnedSet.delete(k); else _pinnedSet.add(k); _saveJsonSet(PINNED_LS_KEY, _pinnedSet); applyPriority(true); }
     function toggleFolded(k) { if (_foldedSet.has(k)) _foldedSet.delete(k); else _foldedSet.add(k); _saveJsonSet(FOLDED_LS_KEY, _foldedSet); applyPriority(true); }
 
-    // 分区标题（带可折叠箭头）
+    // 分区标题（可点击折叠）
     function makeSectionHeader(title, extraClass) {
         const sep = document.createElement('div');
         sep.className = 'contact-section-header' + (extraClass ? ' ' + extraClass : '');
-        sep.innerHTML = '<span class="section-chevron">▾</span><span class="section-title">' + escapeHtml(title) + '</span>';
+        sep.textContent = title;
         return sep;
     }
 
@@ -8570,20 +8797,14 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 menuHtml = '<div class="context-menu-item" data-action="play">播放</div>' +
                     '<div class="context-menu-item" data-action="copy-link">复制链接</div>';
             } else if (panelName === 'contacts') {
-                const pinItem = isPinned(convKey) ? '<div class="context-menu-item" data-action="unpin">取消置顶</div>' : '<div class="context-menu-item" data-action="pin">置顶</div>';
-                const foldItem = isFolded(convKey) ? '<div class="context-menu-item" data-action="unfold">取消折叠</div>' : '<div class="context-menu-item" data-action="fold">折叠</div>';
                 if (convType === 'group') {
                     menuHtml = '<div class="context-menu-item" data-action="send-msg">发消息</div>' +
                         '<div class="context-menu-item" data-action="group-manage">群聊管理</div>' +
-                        '<div class="context-menu-divider"></div>' +
-                        pinItem + foldItem +
                         '<div class="context-menu-divider"></div>' +
                         '<div class="context-menu-item" data-action="copy-id">复制ID</div>';
                 } else {
                     menuHtml = '<div class="context-menu-item" data-action="send-msg">发消息</div>' +
                         '<div class="context-menu-item" data-action="profile">查看主页</div>' +
-                        '<div class="context-menu-divider"></div>' +
-                        pinItem + foldItem +
                         '<div class="context-menu-divider"></div>' +
                         '<div class="context-menu-item" data-action="copy-id">复制ID</div>';
                 }
