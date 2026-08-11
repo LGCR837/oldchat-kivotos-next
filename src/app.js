@@ -11226,12 +11226,18 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
         // 侧边栏竖线（总开关，默认开启）：关闭后全部竖条（含 hover 与选中常驻）都不显示
         const sbBarToggle = document.getElementById('sidebarBarToggle');
+        const sbActiveWrap = document.getElementById('settingsSidebarActiveBar');
+        const updateSbActiveVisibility = () => {
+            if (sbActiveWrap) sbActiveWrap.style.display = (sbBarToggle && sbBarToggle.checked) ? '' : 'none';
+        };
         if (sbBarToggle) {
             let sbOn = true;
             try { sbOn = localStorage.getItem('oc_sidebar_bar') !== '0'; } catch (e) {}
             sbBarToggle.checked = sbOn;
+            updateSbActiveVisibility();
             sbBarToggle.addEventListener('change', () => {
                 try { localStorage.setItem('oc_sidebar_bar', sbBarToggle.checked ? '1' : '0'); } catch (e) {}
+                updateSbActiveVisibility();
                 applySidebarBarSettings();
             });
         }
