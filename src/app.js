@@ -436,9 +436,16 @@ function debounce(fn, wait) {
 
     // 抓取单个 URL（tauriHttpFetch 优先，失败兜底 XHR）
     async function fetchOne(u) {
+        // 频道私有媒体（/v2/files/download）需 Bearer 鉴权，否则服务端返回 401，
+        // tauriHttpFetch 抛错后回落到浏览器 XHR → 跨域 CORS 报错。此处统一带上登录 token。
+        const headers = {};
+        try {
+            const tk = localStorage.getItem('oc_access_token');
+            if (tk) headers['Authorization'] = 'Bearer ' + tk;
+        } catch (e) {}
         let blob;
         try {
-            const resp = await tauriHttpFetch(u);
+            const resp = await tauriHttpFetch(u, { headers: headers });
             if (!resp || !resp.ok) throw new Error('fetch status ' + (resp && resp.status));
             blob = await resp.blob();
         } catch (e) {
@@ -446,6 +453,7 @@ function debounce(fn, wait) {
                 const xhr = new XMLHttpRequest();
                 xhr.open('GET', u, true);
                 xhr.responseType = 'blob';
+                if (headers['Authorization']) { try { xhr.setRequestHeader('Authorization', headers['Authorization']); } catch (e2) {} }
                 xhr.onload = () => {
                     if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.response);
                     else reject(new Error('xhr status ' + xhr.status));
@@ -6614,8 +6622,6 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
         // 恢复滚动位置（同步设置，不依赖 rAF，避免与 switchConversation 中的 scrollToBottom 冲突）
         messagesContainer.scrollTop = cached.scrollTop;
-        // 同步「是否跟随底部」状态：用户离开时若已上滑，新消息不应自动拉回
-        updateFollowState();
         // 恢复状态
         seenMsgIds[key] = cached.seenMsgIds;
         convOffset[key] = cached.offset;
@@ -6839,7 +6845,6 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
         messagesContainer._scrollHandler = async () => {
             updateScrollToBottomBtn();
-            updateFollowState();
             if (!convHasMore[convKey] || isLoadingMore) return;
             if (messagesContainer.scrollTop > 5) return;
 
@@ -7752,35 +7757,6 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
     // 是否在「跟随底部」：用户已接近底部（或强制模式）时新消息才自动滚动；
     // 用户主动上滑浏览历史时置 false，避免被强制拉回底部。
-    let _followBottom = true;
-    // 跟随重排定时器（图片/长消息异步撑高容器后持续对齐到底部）
-    let _followRepinTimers = [];
-
-    function updateFollowState() {
-        const dist = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight;
-        _followBottom = dist < Math.max(messagesContainer.clientHeight / 2, 80);
-    }
-
-    // 可靠地对齐到真实底部：直接设置 scrollTop = scrollHeight（读取执行时的高度，
-    // 避免平滑滚动在内容持续增长时落点偏短，导致「消息很多很长时自动滚动失效」）
-    function pinToBottomInstant() {
-        ensureScrollAnchor();
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-        if (chatScrollbar) chatScrollbar.update();
-        updateScrollToBottomBtn();
-    }
-
-    // 在随后一段时间内（图片/长消息加载完成会持续撑高容器）持续对齐底部
-    function scheduleFollowRepins() {
-        _followRepinTimers.forEach(t => clearTimeout(t));
-        _followRepinTimers = [];
-        const delays = [80, 250, 600, 1200, 2200, 3500];
-        delays.forEach(d => {
-            const t = setTimeout(() => { if (_followBottom) pinToBottomInstant(); }, d);
-            _followRepinTimers.push(t);
-        });
-    }
-
     // 新消息自动滚动：合并去抖，避免短时间大量消息时反复判断造成跳帧或"判断到一半已不在底部"
     let _autoScrollTimer = null;
     let _autoScrollForce = false;
@@ -7795,28 +7771,48 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }, 30);
     }
 
+    // 仅在「用户已近底部」或「强制（切换会话/发送消息）」时才自动滚动；
+    // 用户主动上滑浏览历史时不强制拉回（恢复为原始的近底部判定，避免上滑被打断）。
     function scrollToBottom(force = false, smooth = false) {
+        const behavior = smooth ? 'smooth' : 'auto';
         ensureScrollAnchor();
-        // 仅在用户已近底部（_followBottom）或强制模式下才自动滚动；
-        // 用户主动上滑时不动，避免打断浏览历史
-        if (!force && !_followBottom) {
-            updateScrollToBottomBtn();
-            return;
-        }
-        _followBottom = true; // 即将对齐到底部
-        if (smooth) {
-            // 先给一个平滑过渡，结束后再用瞬时对齐兜底（内容可能仍在增长）
+        if (force) {
             requestAnimationFrame(() => {
                 ensureScrollAnchor();
-                try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch (e) {}
+                if (smooth) { try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch(e) {} }
+                else { try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'auto' }); } catch(e) {} messagesContainer.scrollTop = messagesContainer.scrollHeight; }
+                if (chatScrollbar) requestAnimationFrame(() => chatScrollbar.update());
+                updateScrollToBottomBtn();
             });
-            setTimeout(pinToBottomInstant, 340);
-        } else {
-            pinToBottomInstant();
+            setTimeout(() => {
+                ensureScrollAnchor();
+                if (smooth) { try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch(e) {} }
+                else { try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'auto' }); } catch(e) {} messagesContainer.scrollTop = messagesContainer.scrollHeight; }
+                if (chatScrollbar) chatScrollbar.update();
+                updateScrollToBottomBtn();
+            }, 250);
+            return;
         }
-        // 长消息/图片异步加载会持续撑高容器；
-        // 在随后一段窗口内持续对齐底部，保证「消息很多很长」时自动滚动不失效
-        scheduleFollowRepins();
+        const threshold = messagesContainer.clientHeight / 2;
+        const atBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < threshold;
+        if (atBottom) {
+            requestAnimationFrame(() => {
+                ensureScrollAnchor();
+                try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch(e) {}
+                if (chatScrollbar) requestAnimationFrame(() => chatScrollbar.update());
+                updateScrollToBottomBtn();
+            });
+            setTimeout(() => {
+                const t2 = messagesContainer.clientHeight / 2;
+                const at2 = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < t2;
+                if (at2) {
+                    ensureScrollAnchor();
+                    try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch(e) {}
+                    if (chatScrollbar) chatScrollbar.update();
+                }
+                updateScrollToBottomBtn();
+            }, 250);
+        }
     }
 
     // 点击引用块跳转到被引用的消息
@@ -11039,6 +11035,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             description: ch.description || '',
             subscriber_count: (ch.subscriber_count != null) ? ch.subscriber_count : (ch.channel_subscribers != null ? ch.channel_subscribers : null),
             allowed_emojis: ch.allowed_emojis || null,
+            // 后端在发现列表里直接给出当前用户是否已订阅（含其它设备订阅的），用于跨设备同步「我的频道」
+            subscribed: !!(ch.channel_subscribed || ch.subscribed),
         };
     }
 
@@ -11252,6 +11250,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             if (!arr || !arr.length) { wrap.innerHTML = '<div class="channel-empty">没有找到频道</div>'; return; }
             arr.forEach(raw => {
                 const ch = channelMetaFromApi(raw);
+                // 跨设备订阅同步：发现列表里标记为已订阅的频道，并入本地「我的频道」缓存
+                if (ch.subscribed) addSubscribedChannel(ch);
                 const subscribed = isSubscribedChannel(ch.id);
                 wrap.appendChild(channelCard(ch, subscribed,
                     () => openChannelView(ch),

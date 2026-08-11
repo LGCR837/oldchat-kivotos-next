@@ -3522,29 +3522,32 @@ body::-webkit-scrollbar {
     align-items: stretch;
     justify-content: flex-start;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 20px;
     text-align: left;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 /* ===== 频道系统（发现页 + 聊天侧边栏）===== */
-.channel-browser { max-width: 960px; margin: 0 auto; }
+.channel-browser { max-width: 960px; width: 100%; box-sizing: border-box; margin: 0 auto; }
 .channel-browser-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
 .channel-browser-head h2 { margin: 0; font-size: 20px; }
 .channel-search { display: flex; gap: 8px; }
 .channel-search input { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--chat-bg); color: var(--text-color); min-width: 220px; }
-.channel-browser-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.channel-browser-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
 @media (max-width: 720px) { .channel-browser-body { grid-template-columns: 1fr; } }
 .channel-col-title { font-size: 13px; color: var(--secondary-text); margin-bottom: 8px; font-weight: 600; }
-.channel-list { display: flex; flex-direction: column; gap: 8px; }
-.channel-card { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--chat-bg); }
+.channel-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.channel-card { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--chat-bg); min-width: 0; }
 .channel-card-avatar { width: 42px; height: 42px; border-radius: 10px; object-fit: cover; flex: none; background: var(--hover); }
 .channel-card-info { flex: 1; min-width: 0; }
-.channel-card-info .name { font-weight: 600; font-size: 14px; }
-.channel-card-info .meta { font-size: 12px; color: var(--secondary-text); }
+.channel-card-info .name { font-weight: 600; font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-card-info .meta { font-size: 12px; color: var(--secondary-text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-card-info .desc { font-size: 12px; color: var(--secondary-text); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .channel-card-actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
 
-.channel-view { max-width: 760px; margin: 0 auto; }
+.channel-view { max-width: 760px; width: 100%; box-sizing: border-box; margin: 0 auto; }
 .channel-view-header { display: flex; align-items: center; gap: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--border-color); margin-bottom: 14px; }
 .channel-view-avatar { width: 56px; height: 56px; border-radius: 12px; object-fit: cover; background: var(--hover); flex: none; }
 .channel-view-meta { flex: 1; min-width: 0; }
