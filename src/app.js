@@ -312,13 +312,12 @@ document.addEventListener('error', function(e) {
 
 function resolveMediaUrl(url) {
     if (!url) return url;
-    // 频道私有媒体 scheme：channel-private:<assetId>[.ext] → 文件资产下载端点
-    // 官方文档：频道媒体前缀映射到 /v2/files/download/{id}（files 域名，仅 Bearer 鉴权）
+    // 频道媒体 scheme：channel-private:<签名文件名>[?sig=...] → 频道媒体签名下载端点
+    // 官方文档 14.10：GET /channel-media/{filename}（全局签名下载，签名在文件名里，无需 Bearer）。
+    // 注意：保留签名串原样（含可能的 ?query），不要剥扩展名、不要换 host。
     if (typeof url === 'string' && url.startsWith('channel-private:')) {
-        let asset = url.slice('channel-private:'.length);
-        // nanoid 资产 ID 本身无扩展名，去掉可能的 .jpg/.png 等提示后缀
-        asset = asset.replace(/\.[a-z0-9]+$/i, '');
-        return 'http://files.mcl0.dpdns.org/v2/files/download/' + encodeURIComponent(asset);
+        const rest = url.slice('channel-private:'.length);
+        return 'http://oc.mcl0.dpdns.org/channel-media/' + rest;
     }
     if (/^(https?:|data:|blob:)/.test(url)) return url;
     if (MEDIA_BASE && url.startsWith('/')) return MEDIA_BASE + url;
@@ -414,12 +413,18 @@ function debounce(fn, wait) {
     function shouldCache(url) {
         if (!url) return false;
         if (/^(data:|blob:|about:|chrome-extension:|tauri:|ipc\.localhost)/i.test(url)) return false;
+        // 频道媒体（/channel-media/ 与 channel-private: scheme）是「全局签名下载」：签名就在 URL 文件名里，
+        // 该端点不认 Authorization 头——带了反而拒签返回 401。必须交由浏览器原生 <img> 直接加载（无鉴权头），
+        // 与官方 Android 客户端一致。故 MediaCache 不接管，避免 Bearer 污染签名 URL 导致的 401 刷屏。
+        if (url.indexOf('/channel-media/') !== -1 || /^channel-private:/i.test(url)) return false;
         if (/^(https?:)?\/\//i.test(url)) return true;
         return false;
     }
 
     // 根据已解析的绝对媒体 URL，生成候选源列表（命中 MEDIA_CANDIDATES 中某一个后，按顺序拼出后续候选）
     function mediaCandidateUrls(url) {
+        // 频道媒体 /channel-media/ 是 oc 主机的全局签名端点，仅此一个源，不做 host 候选展开（否则会误打到 files/60.205 报 404）
+        if (url.indexOf('/channel-media/') !== -1) return [url];
         const list = [];
         for (const base of MEDIA_CANDIDATES) {
             if (url.indexOf(base) === 0) {
@@ -434,35 +439,73 @@ function debounce(fn, wait) {
         return Array.from(new Set(list));
     }
 
-    // 抓取单个 URL（tauriHttpFetch 优先，失败兜底 XHR）
+    // 用专用 Rust 命令 fetch_media（reqwest，与下载功能同款）拉媒体字节，绕开 plugin-http 的 scope/重定向限制与 Cloudflare 预检。
+    // headersObj：普通对象（如 {Authorization:'Bearer …', 'X-Session':…}），内部转成 Vec<(String,String)> 传给 Rust。
+    async function fetchMediaRust(u, headersObj) {
+        const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+        if (!invoke) return null;
+        const pairs = [];
+        if (headersObj && typeof headersObj === 'object') {
+            for (const k in headersObj) {
+                if (Object.prototype.hasOwnProperty.call(headersObj, k)) pairs.push([k, headersObj[k]]);
+            }
+        }
+        const res = await invoke('fetch_media', { url: u, headers: pairs });
+        if (!res || !res.data) return null;
+        let bytes;
+        if (res.data instanceof Uint8Array) bytes = res.data;
+        else if (Array.isArray(res.data)) bytes = new Uint8Array(res.data);
+        else return null;
+        return new Blob([bytes], { type: res.content_type || 'application/octet-stream' });
+    }
+
+    // 抓取单个 URL：主路径 tauriHttpFetch（plugin-http，无 CORS）；若失败（私有下载端点常见：scope 校验 / 重定向目标不在白名单 / 鉴权问题），
+    // 回落到专用 Rust 命令 fetch_media（reqwest，可带 Bearer 且跟随重定向）。
     async function fetchOne(u) {
-        // 频道私有媒体（/v2/files/download）需 Bearer 鉴权，否则服务端返回 401，
-        // tauriHttpFetch 抛错后回落到浏览器 XHR → 跨域 CORS 报错。此处统一带上登录 token。
-        const headers = {};
+        const isChannelMedia = u.indexOf('/channel-media/') !== -1;
+
+        // 通用 headers：登录 Bearer
+        const baseHeaders = {};
         try {
             const tk = localStorage.getItem('oc_access_token');
-            if (tk) headers['Authorization'] = 'Bearer ' + tk;
+            if (tk) baseHeaders['Authorization'] = 'Bearer ' + tk;
         } catch (e) {}
-        let blob;
-        try {
-            const resp = await tauriHttpFetch(u, { headers: headers });
-            if (!resp || !resp.ok) throw new Error('fetch status ' + (resp && resp.status));
-            blob = await resp.blob();
-        } catch (e) {
-            blob = await new Promise((resolve, reject) => {
-                const xhr = new XMLHttpRequest();
-                xhr.open('GET', u, true);
-                xhr.responseType = 'blob';
-                if (headers['Authorization']) { try { xhr.setRequestHeader('Authorization', headers['Authorization']); } catch (e2) {} }
-                xhr.onload = () => {
-                    if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.response);
-                    else reject(new Error('xhr status ' + xhr.status));
-                };
-                xhr.onerror = () => reject(new Error('xhr network'));
-                xhr.send();
-            });
+
+        // /channel-media/ 是「全局签名下载」端点：签名在 URL 里，但实测仅 v1 风格裸 Bearer 被 401。
+        // 依次尝试：① v2 会话签名（Bearer + 会话头，与其它 v2 接口一致）② 不带任何鉴权（依赖 URL 自身签名）
+        if (isChannelMedia) {
+            const attempts = [];
+            const h2 = Object.assign({}, baseHeaders);
+            try { Object.assign(h2, await signV2ForAnyPath(u, 'GET')); } catch (e) {}
+            attempts.push(h2);
+            attempts.push({});
+            let lastErr;
+            for (const h of attempts) {
+                try {
+                    const resp = await tauriHttpFetch(u, { headers: h });
+                    if (resp && resp.ok) return await resp.blob();
+                    const b2 = await fetchMediaRust(u, h);
+                    if (b2) return b2;
+                } catch (e) { lastErr = e; }
+            }
+            console.error('[MediaCache] channel-media 抓取失败:', u, '|', (lastErr && lastErr.message) || lastErr);
+            throw lastErr || new Error('channel-media fetch failed: ' + u);
         }
-        return blob;
+
+        try {
+            const resp = await tauriHttpFetch(u, { headers: baseHeaders });
+            if (!resp || !resp.ok) throw new Error('fetch status ' + (resp && resp.status));
+            return await resp.blob();
+        } catch (e1) {
+            try {
+                const blob = await fetchMediaRust(u, baseHeaders);
+                if (blob) return blob;
+                throw new Error('fetch_media 返回空');
+            } catch (e2) {
+                console.error('[MediaCache] fetchOne 两路均失败:', u, '| plugin-http:', (e1 && e1.message) || e1, '| rust:', (e2 && e2.message) || e2);
+                throw e2;
+            }
+        }
     }
 
     async function fetchAndStore(url) {
@@ -528,8 +571,13 @@ function debounce(fn, wait) {
                             // 命中缓存 / 抓取成功：用 blob URL，零网络
                             el.setAttribute(attr, newUrl);
                         } else {
-                            // 缓存未命中或抓取失败：恢复原始远程地址，降级为旧行为（全局 error 监听负责候选链）
-                            el.setAttribute(attr, val);
+                            // 抓取失败：普通公开图片（无需鉴权）降级为直接 <img> 加载（no-cors 显示不报错）；
+                            // 但需 Bearer 的 /v2/files/download 与 channel-private 资源直接加载必 401 且污染控制台，故保留占位、不回填。
+                            if (/\/v2\/files\/download\//.test(val) || /^channel-private:/.test(val)) {
+                                // 保留已设置的透明占位，避免跨域请求噪音
+                            } else {
+                                el.setAttribute(attr, val);
+                            }
                         }
                     } catch (e) {}
                     el.removeAttribute('data-mc-' + attr + '-loading');
@@ -557,7 +605,10 @@ function debounce(fn, wait) {
                     }));
                     newCssPromise.then(reps => {
                         let css = bgCss;
-                        reps.forEach(r => { css = css.replace(r.old, r.new); });
+                        reps.forEach(r => {
+                            // 仅当替换结果为 blob: 时才应用；失败（仍为跨域 http(s) 原始地址）不回填，避免 CORS 噪音
+                            if (r.new && r.new.indexOf('blob:') === 0) css = css.replace(r.old, r.new);
+                        });
                         el.style.cssText = css;
                     });
                 }
@@ -1759,12 +1810,36 @@ async function v2SignHeaders(path, method) {
         'X-Nonce': nonce,
         'X-Sign': sign
     };
-    const devId = localStorage.getItem('oldchat_device_id');
-    if (devId) hdrs['X-Device-Id'] = devId;
-    return hdrs;
-}
+        const devId = localStorage.getItem('oldchat_device_id');
+        if (devId) hdrs['X-Device-Id'] = devId;
+        return hdrs;
+    }
 
-// v2 请求体加密（08-ECDH 文档 §4：AES-256-CBC + HMAC-SHA256 信封）
+    // 对任意路径生成 v2 会话签名头（突破 v2SignHeaders 的 /v2/ 守卫，用于 /channel-media/ 等也需会话鉴权的端点）
+    async function signV2ForAnyPath(path, method) {
+        const cleanPath = String(path || '').split('?')[0];
+        const sess = window.__wsSession;
+        if (!sess) return {};
+        try { await sess.ensure(); } catch (e) { return {}; }
+        const macKey = sess.getMacKey();
+        if (!macKey || !macKey.length) return {};
+        const sessionId = sess.getSessionId();
+        if (!sessionId) return {};
+        const ts = String(Math.floor(Date.now() / 1000));
+        const nonceBytes = new Uint8Array(16);
+        try { crypto.getRandomValues(nonceBytes); } catch (e) {}
+        const nonce = Crypto.bytesToBase64(nonceBytes).replace(/=+$/, '');
+        const meth = (method || 'GET').toUpperCase();
+        const data = new TextEncoder().encode(meth + '\n' + cleanPath + '\n' + ts + '\n' + nonce);
+        const sig = await Crypto.hmacSha256(macKey, data);
+        const sign = Crypto.bytesToBase64(sig).replace(/=+$/, '');
+        const hdrs = { 'X-Session': sessionId, 'X-Ts': ts, 'X-Nonce': nonce, 'X-Sign': sign };
+        const devId = localStorage.getItem('oldchat_device_id');
+        if (devId) hdrs['X-Device-Id'] = devId;
+        return hdrs;
+    }
+
+    // v2 请求体加密（08-ECDH 文档 §4：AES-256-CBC + HMAC-SHA256 信封）
 // 信封 JSON：{iv, data, mac}，base64(NO_WRAP)；mac = HMAC-SHA256(macKey, iv字节 || data字节)
 // 返回加密后的信封 JSON 字符串；密钥/会话缺失或加密失败返回 null（调用方降级明文）
 async function v2EncryptBody(plainJson) {

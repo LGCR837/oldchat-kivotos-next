@@ -324,6 +324,48 @@ async fn save_image_data(app: tauri::AppHandle, data: Vec<u8>) -> Result<(), Str
     save_with_dialog(&app, &data, None, None)
 }
 
+// 拉取媒体字节并返回（频道私有媒体等需 Bearer 鉴权的场景）。
+// 不复用 plugin-http：该插件对跨域/重定向目标做 scope 校验，且对 files.mcl0 前置的 Cloudflare 预检无法通过；
+// 这里直接用 reqwest（与 save_download/save_image 同款客户端），跟随重定向、可带鉴权头，返回原始字节交由前端转 blob。
+#[derive(serde::Serialize)]
+struct FetchMediaResult {
+    data: Vec<u8>,
+    content_type: String,
+}
+
+#[tauri::command]
+async fn fetch_media(
+    url: String,
+    headers: Option<Vec<(String, String)>>,
+) -> Result<FetchMediaResult, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .build()
+        .map_err(|e| format!("创建客户端失败: {}", e))?;
+    let mut req = client.get(&url);
+    if let Some(hs) = headers {
+        for (k, v) in hs {
+            req = req.header(&k, &v);
+        }
+    }
+    let resp = req.send().await.map_err(|e| format!("请求失败: {}", e))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("媒体下载失败: HTTP {}", status));
+    }
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let data = resp.bytes().await.map_err(|e| format!("读取响应失败: {}", e))?;
+    Ok(FetchMediaResult {
+        data: data.to_vec(),
+        content_type,
+    })
+}
+
 // ===== 多主题系统（用户上传自定义 .css 主题）=====
 // 主题文件存入「系统用户文件夹」：各平台的 App 配置目录下的 themes/ 子目录
 //   Windows: %APPDATA%/<identifier>/themes
@@ -859,6 +901,7 @@ pub fn run() {
             save_download,
             cancel_download,
             save_image_data,
+            fetch_media,
             env_report,
             app_version,
             import_theme,
