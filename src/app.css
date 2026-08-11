@@ -4183,9 +4183,13 @@ body::-webkit-scrollbar {
     transform: scaleY(1);
     transition: transform .36s cubic-bezier(0.22, 1, 0.36, 1); /* 显示：弹性展开 */
 }
-/* 当前选中的会话：左侧竖条始终显示 */
-.contact-item.active::before {
+/* 当前选中的会话：左侧竖条常驻显示（受「侧边栏选中竖线常驻」开关控制，默认开启） */
+body.sidebar-active-bar .contact-item.active::before {
     transform: scaleY(1);
+}
+/* 「侧边栏竖线」总开关关闭时，隐藏全部竖条（hover 与选中常驻都不再显示） */
+body.sidebar-bar-off .contact-item::before {
+    display: none;
 }
 /* 置顶卡片：右上角小三角标记（直角在右上角、斜边朝内），hover 时平滑淡入 */
 .contact-item.is-pinned::after {

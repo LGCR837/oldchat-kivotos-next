@@ -10103,9 +10103,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     }
 
     // ===== 蔚蓝档案点击特效（ba-click-fx，本地 vendored）=====
-    // 存储键：oc_click_fx（总开关，缺省未设置 = 开启）；oc_click_fx_params（详细参数 JSON）
+    // 存储键：oc_click_fx（总开关，缺省未设置 = 关闭，需显式 '1' 才开启）；oc_click_fx_params（详细参数 JSON）
     function isBaClickFxEnabled() {
-        try { return localStorage.getItem('oc_click_fx') !== '0'; } catch (e) { return true; }
+        try { return localStorage.getItem('oc_click_fx') === '1'; } catch (e) { return false; }
     }
     // 读取详细效果参数，合并默认值（用户要求：opacity 0.85、bloom.clickEmissionScale 0.65，其余走库默认）
     function getClickFxParams() {
@@ -11141,6 +11141,24 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     '<span class="label">详细效果配置</span>' +
                     '<span class="value"><i class="fa-solid fa-chevron-right" style="color:var(--secondary-text);"></i></span>' +
                 '</div>' +
+                '<div class="settings-item" id="settingsSidebarBar">' +
+                    '<span class="label">侧边栏竖线</span>' +
+                    '<span class="value">' +
+                        '<label class="oc-switch">' +
+                            '<input type="checkbox" id="sidebarBarToggle">' +
+                            '<span class="oc-switch-slider"></span>' +
+                        '</label>' +
+                    '</span>' +
+                '</div>' +
+                '<div class="settings-item" id="settingsSidebarActiveBar">' +
+                    '<span class="label">侧边栏选中竖线常驻</span>' +
+                    '<span class="value">' +
+                        '<label class="oc-switch">' +
+                            '<input type="checkbox" id="sidebarActiveBarToggle">' +
+                            '<span class="oc-switch-slider"></span>' +
+                        '</label>' +
+                    '</span>' +
+                '</div>' +
             '</div>' +
             '<div class="settings-group" style="margin-bottom:14px;">' +
                 '<button id="themeUploadBtn" class="btn primary" style="width:100%;">上传主题（.css 文件）</button>' +
@@ -11190,7 +11208,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             });
         }
 
-        // 蔚蓝档案点击效果开关（设置 → 主题，与深色/连消息同块，默认开启）
+        // 蔚蓝档案点击效果开关（设置 → 主题，与深色/连消息同块，默认关闭）
         const baToggle = document.getElementById('baClickFxToggle');
         const baDetailEntry = document.getElementById('baClickFxDetailEntry');
         if (baToggle) {
@@ -11204,6 +11222,29 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (baDetailEntry) {
             baDetailEntry.style.display = isBaClickFxEnabled() ? '' : 'none';
             baDetailEntry.addEventListener('click', () => { openBaFxModal(); });
+        }
+
+        // 侧边栏竖线（总开关，默认开启）：关闭后全部竖条（含 hover 与选中常驻）都不显示
+        const sbBarToggle = document.getElementById('sidebarBarToggle');
+        if (sbBarToggle) {
+            let sbOn = true;
+            try { sbOn = localStorage.getItem('oc_sidebar_bar') !== '0'; } catch (e) {}
+            sbBarToggle.checked = sbOn;
+            sbBarToggle.addEventListener('change', () => {
+                try { localStorage.setItem('oc_sidebar_bar', sbBarToggle.checked ? '1' : '0'); } catch (e) {}
+                applySidebarBarSettings();
+            });
+        }
+        // 侧边栏选中竖线常驻（默认开启）：关闭后选中项鼠标移开即不再显示竖条（仅 hover 时显示）
+        const sbActiveToggle = document.getElementById('sidebarActiveBarToggle');
+        if (sbActiveToggle) {
+            let sbActiveOn = true;
+            try { sbActiveOn = localStorage.getItem('oc_sidebar_active_bar') !== '0'; } catch (e) {}
+            sbActiveToggle.checked = sbActiveOn;
+            sbActiveToggle.addEventListener('change', () => {
+                try { localStorage.setItem('oc_sidebar_active_bar', sbActiveToggle.checked ? '1' : '0'); } catch (e) {}
+                applySidebarBarSettings();
+            });
         }
 
         renderThemeList(all, savedId);
@@ -11477,7 +11518,17 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // 默认渲染
     renderSettingsPage('profile');
 
-    // 蔚蓝档案点击特效：按设置初始化（默认开启）
+    // 侧边栏竖线（总开关 / 选中常驻）按设置初始化，并供设置页开关调用
+    function applySidebarBarSettings() {
+        let barOn = true, activeBarOn = true;
+        try { barOn = localStorage.getItem('oc_sidebar_bar') !== '0'; } catch (e) {}
+        try { activeBarOn = localStorage.getItem('oc_sidebar_active_bar') !== '0'; } catch (e) {}
+        document.body.classList.toggle('sidebar-bar-off', !barOn);
+        document.body.classList.toggle('sidebar-active-bar', activeBarOn);
+    }
+    applySidebarBarSettings();
+
+    // 蔚蓝档案点击特效：按设置初始化（默认关闭）
     applyClickFx();
 
     // 聊天选中边界约束：昵称/文本各自独立，不允许拖选跨界
