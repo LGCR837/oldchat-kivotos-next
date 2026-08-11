@@ -5912,8 +5912,18 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             directSection.appendChild(makeSectionHeader('私聊', ''));
             contacts.friends.forEach(f => directSection.appendChild(createContactItem(f.uid, f.name, 'direct', f.avatar, f.displayUid, f.user_title)));
         }
+        // 频道分区（已订阅频道，位于私聊之下、折叠之上）
+        const channelSection = document.createElement('div');
+        channelSection.className = 'contact-section';
+        channelSection.dataset.section = 'channel';
+        const subscribedChannels = getSubscribedChannels();
+        if (subscribedChannels.length > 0) {
+            channelSection.appendChild(makeSectionHeader('频道', ''));
+            subscribedChannels.forEach(ch => channelSection.appendChild(createContactItem(ch.id, ch.name, 'channel', ch.avatar_url)));
+        }
         contactList.appendChild(groupSection);
         contactList.appendChild(directSection);
+        contactList.appendChild(channelSection);
         if (!contactList._collapseBound) {
             contactList._collapseBound = true;
             contactList.addEventListener('click', onSectionHeaderClick);
@@ -6034,7 +6044,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     }
     function _prioSection() { return contactList.querySelector('.contact-section[data-section="priority"]'); }
     function _sectionForType(type) {
-        return contactList.querySelector('.contact-section[data-section="' + (type === 'group' ? 'group' : 'direct') + '"]');
+        const t = type === 'group' ? 'group' : (type === 'channel' ? 'channel' : 'direct');
+        return contactList.querySelector('.contact-section[data-section="' + t + '"]') || contactList.querySelector('.contact-section[data-section="direct"]');
     }
     function sectionForItem(it) { return _sectionForType(it.dataset.type); }
     function _ensurePrioritySection() {
@@ -6049,7 +6060,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         return sec;
     }
     function _ensureSectionHeaders() {
-        ['priority', 'group', 'direct', 'fold'].forEach(t => {
+        ['priority', 'group', 'direct', 'channel', 'fold'].forEach(t => {
             const sec = contactList.querySelector('.contact-section[data-section="' + t + '"]');
             if (!sec) return;
             const has = sec.querySelector('.contact-item');
@@ -6534,7 +6545,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const titleText = userTitle || lookupTitle(id);
         const titleHtml = titleText ? `<span class="contact-title">${escapeHtml(titleText)}</span>` : '';
         div.innerHTML = `<img class="contact-avatar" src="${avatarUrl}" onerror="this.src='assets/default-avatar.png'"><div class="contact-info"><div class="name">${escapeHtml(name)}${titleHtml}</div>${idLine}</div><span class="unread-badge" style="display:none;"></span>`;
-        div.addEventListener('click', (e) => switchConversation(type, id, name, e));
+        div.addEventListener('click', (e) => {
+            if (type === 'channel') { openChannelFromSidebar(id, name); return; }
+            switchConversation(type, id, name, e);
+        });
         return div;
     }
 
@@ -6587,6 +6601,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
         // 恢复滚动位置（同步设置，不依赖 rAF，避免与 switchConversation 中的 scrollToBottom 冲突）
         messagesContainer.scrollTop = cached.scrollTop;
+        // 同步「是否跟随底部」状态：用户离开时若已上滑，新消息不应自动拉回
+        updateFollowState();
         // 恢复状态
         seenMsgIds[key] = cached.seenMsgIds;
         convOffset[key] = cached.offset;
@@ -6810,6 +6826,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
         messagesContainer._scrollHandler = async () => {
             updateScrollToBottomBtn();
+            updateFollowState();
             if (!convHasMore[convKey] || isLoadingMore) return;
             if (messagesContainer.scrollTop > 5) return;
 
@@ -7058,21 +7075,47 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const thumbUrl = msg.thumb_url || msg.media_url || '';
             const origUrl = msg.media_url || msg.original_url || '';
             const imgEl = document.createElement('img');
-            imgEl.src = cachedResolveMediaUrl(thumbUrl);
-            if (origUrl) imgEl.dataset.original = origUrl; // 右键「查看原图」使用
-            imgEl.style.cssText = 'max-width:200px;max-height:200px;border-radius:8px;cursor:pointer;';
             imgEl.className = 'chat-image';
-            imgEl.onclick = () => openImageViewer(imgEl);
-            imgEl.onerror = function() {
-                // 缩略图加载失败：尝试一次原图，再失败才隐藏（避免无限循环）
+            imgEl.style.cssText = 'max-width:200px;max-height:200px;border-radius:8px;cursor:pointer;';
+
+            // 加载占位：2s 内仍未加载出来则显示占位框 + 转圈，避免「空消息」
+            const imgWrap = document.createElement('div');
+            imgWrap.className = 'chat-image-wrap';
+            const imgSpin = document.createElement('div');
+            imgSpin.className = 'img-loading';
+            imgSpin.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+            imgWrap.appendChild(imgSpin);
+            imgWrap.appendChild(imgEl);
+
+            let _imgLoaded = false;
+            let _imgSpinTimer = setTimeout(() => {
+                if (!_imgLoaded) imgWrap.classList.add('show-spinner');
+            }, 2000);
+
+            imgEl.onload = function () {
+                _imgLoaded = true;
+                clearTimeout(_imgSpinTimer);
+                imgWrap.classList.remove('show-spinner');
+                imgWrap.classList.add('loaded');
+            };
+            imgEl.onerror = function () {
                 if (this.dataset.original) {
+                    // 缩略图失败：尝试一次原图，并重置 2s 转圈计时
                     const orig = this.dataset.original;
                     this.dataset.original = '';
                     this.src = cachedResolveMediaUrl(orig);
+                    clearTimeout(_imgSpinTimer);
+                    _imgSpinTimer = setTimeout(() => { if (!_imgLoaded) imgWrap.classList.add('show-spinner'); }, 2000);
                 } else {
-                    this.style.display = 'none';
+                    _imgLoaded = true;
+                    clearTimeout(_imgSpinTimer);
+                    imgWrap.classList.remove('show-spinner');
+                    imgWrap.classList.add('loaded', 'img-error');
                 }
             };
+            if (origUrl) imgEl.dataset.original = origUrl; // 右键「查看原图」使用
+            imgEl.onclick = () => openImageViewer(imgEl);
+            imgEl.src = cachedResolveMediaUrl(thumbUrl);
 
             const msgDiv = document.createElement('div');
             msgDiv.className = `message ${isSelf ? 'self' : 'other'} bare-image`;
@@ -7158,7 +7201,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 msgDiv.classList.add('has-quote');
             }
 
-            msgDiv.appendChild(imgEl);
+            msgDiv.appendChild(imgWrap);
 
             const timeDiv = document.createElement('div');
             timeDiv.className = 'message-time';
@@ -7694,6 +7737,37 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
     }
 
+    // 是否在「跟随底部」：用户已接近底部（或强制模式）时新消息才自动滚动；
+    // 用户主动上滑浏览历史时置 false，避免被强制拉回底部。
+    let _followBottom = true;
+    // 跟随重排定时器（图片/长消息异步撑高容器后持续对齐到底部）
+    let _followRepinTimers = [];
+
+    function updateFollowState() {
+        const dist = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight;
+        _followBottom = dist < Math.max(messagesContainer.clientHeight / 2, 80);
+    }
+
+    // 可靠地对齐到真实底部：直接设置 scrollTop = scrollHeight（读取执行时的高度，
+    // 避免平滑滚动在内容持续增长时落点偏短，导致「消息很多很长时自动滚动失效」）
+    function pinToBottomInstant() {
+        ensureScrollAnchor();
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        if (chatScrollbar) chatScrollbar.update();
+        updateScrollToBottomBtn();
+    }
+
+    // 在随后一段时间内（图片/长消息加载完成会持续撑高容器）持续对齐底部
+    function scheduleFollowRepins() {
+        _followRepinTimers.forEach(t => clearTimeout(t));
+        _followRepinTimers = [];
+        const delays = [80, 250, 600, 1200, 2200, 3500];
+        delays.forEach(d => {
+            const t = setTimeout(() => { if (_followBottom) pinToBottomInstant(); }, d);
+            _followRepinTimers.push(t);
+        });
+    }
+
     // 新消息自动滚动：合并去抖，避免短时间大量消息时反复判断造成跳帧或"判断到一半已不在底部"
     let _autoScrollTimer = null;
     let _autoScrollForce = false;
@@ -7709,58 +7783,27 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     }
 
     function scrollToBottom(force = false, smooth = false) {
-        const behavior = smooth ? 'smooth' : 'auto';
         ensureScrollAnchor();
-        if (force) {
-            // 强制滚动到底部（切换会话/发送消息后使用）
-            requestAnimationFrame(() => {
-                ensureScrollAnchor();
-                if (smooth) {
-                    try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch(e) {}
-                } else {
-                    try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'auto' }); } catch(e) {}
-                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                }
-                if (chatScrollbar) requestAnimationFrame(() => chatScrollbar.update());
-                updateScrollToBottomBtn();
-            });
-            // 长消息/图片加载可能延迟，再补一次兜底
-            setTimeout(() => {
-                ensureScrollAnchor();
-                if (smooth) {
-                    try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch(e) {}
-                } else {
-                    try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'auto' }); } catch(e) {}
-                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                }
-                if (chatScrollbar) chatScrollbar.update();
-                updateScrollToBottomBtn();
-            }, 250);
+        // 仅在用户已近底部（_followBottom）或强制模式下才自动滚动；
+        // 用户主动上滑时不动，避免打断浏览历史
+        if (!force && !_followBottom) {
+            updateScrollToBottomBtn();
             return;
         }
-        // 只在用户已近底部时才自动滚动，避免强制拉到最下方
-        const threshold = messagesContainer.clientHeight / 2;
-        const atBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < threshold;
-        if (atBottom) {
-            // 自动滚动使用平滑动画
+        _followBottom = true; // 即将对齐到底部
+        if (smooth) {
+            // 先给一个平滑过渡，结束后再用瞬时对齐兜底（内容可能仍在增长）
             requestAnimationFrame(() => {
                 ensureScrollAnchor();
-                try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch(e) {}
-                if (chatScrollbar) requestAnimationFrame(() => chatScrollbar.update());
-                updateScrollToBottomBtn();
+                try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch (e) {}
             });
-            setTimeout(() => {
-                // 再检查一次：图片/长消息加载后仍在底部附近则继续对齐
-                const t2 = messagesContainer.clientHeight / 2;
-                const at2 = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < t2;
-                if (at2) {
-                    ensureScrollAnchor();
-                    try { scrollAnchor.scrollIntoView({ block: 'end', behavior: 'smooth' }); } catch(e) {}
-                    if (chatScrollbar) chatScrollbar.update();
-                }
-                updateScrollToBottomBtn();
-            }, 250);
+            setTimeout(pinToBottomInstant, 340);
+        } else {
+            pinToBottomInstant();
         }
+        // 长消息/图片异步加载会持续撑高容器；
+        // 在随后一段窗口内持续对齐底部，保证「消息很多很长」时自动滚动不失效
+        scheduleFollowRepins();
     }
 
     // 点击引用块跳转到被引用的消息
@@ -8818,6 +8861,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         pinItem + foldItem +
                         '<div class="context-menu-divider"></div>' +
                         '<div class="context-menu-item" data-action="mark-read">全部已读</div>';
+                } else if (convType === 'channel') {
+                    const subItem = isSubscribedChannel(convId) ? '<div class="context-menu-item" data-action="unsubscribe">取消订阅</div>' : '<div class="context-menu-item" data-action="subscribe">订阅</div>';
+                    const pinItem = isPinned(convKey) ? '<div class="context-menu-item" data-action="unpin">取消置顶</div>' : '<div class="context-menu-item" data-action="pin">置顶</div>';
+                    const foldItem = isFolded(convKey) ? '<div class="context-menu-item" data-action="unfold">取消折叠</div>' : '<div class="context-menu-item" data-action="fold">折叠</div>';
+                    menuHtml = '<div class="context-menu-item" data-action="view-channel">查看频道</div>' +
+                        subItem + '<div class="context-menu-divider"></div>' + pinItem + foldItem;
                 } else {
                     menuHtml = '<div class="context-menu-item" data-action="mark-read">全部已读</div>';
                 }
@@ -8848,6 +8897,13 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     togglePinned(convKey);
                 } else if (action === 'fold' || action === 'unfold') {
                     toggleFolded(convKey);
+                } else if (action === 'view-channel') {
+                    openChannelFromSidebar(convId, convName);
+                } else if (action === 'subscribe') {
+                    const ch = getSubscribedChannels().find(c => c.id === convId) || { id: convId, name: convName };
+                    doSubscribe(ch);
+                } else if (action === 'unsubscribe') {
+                    doUnsubscribe({ id: convId, name: convName });
                 } else if (action === 'play') {
                     const m = musicData.find(m => (m.id || '') === contactItem.dataset.musicId);
                     if (m) playMusic(m);
@@ -10912,6 +10968,292 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // 默认渲染
     renderSettingsPage('profile');
 
+    // ===== 频道系统（发现页 + 聊天侧边栏）=====
+    // 说明：客户端不主动发帖（官方频道为只读内容流），只做 发现/查看/订阅/表情回应。
+    // 订阅状态为客户端本地缓存（后端无「列出我的频道」接口，与 Android 本地缓存策略一致）。
+    const SUBSCRIBED_LS_KEY = 'oc_subscribed_channels';
+    // 频道允许的表情回应（官方仅允许指定的几个，这里给出一组默认；频道自身带 allowed_emojis 时优先）
+    const CHANNEL_DEFAULT_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉'];
+
+    function getSubscribedChannels() { try { return JSON.parse(localStorage.getItem(SUBSCRIBED_LS_KEY)) || []; } catch (e) { return []; } }
+    function setSubscribedChannels(arr) { try { localStorage.setItem(SUBSCRIBED_LS_KEY, JSON.stringify(arr)); } catch (e) {} }
+    function isSubscribedChannel(id) { return getSubscribedChannels().some(c => c.id === id); }
+    function addSubscribedChannel(ch) { const a = getSubscribedChannels().filter(c => c.id !== ch.id); a.push(ch); setSubscribedChannels(a); }
+    function removeSubscribedChannel(id) { setSubscribedChannels(getSubscribedChannels().filter(c => c.id !== id)); }
+
+    async function apiJson(url, opts) {
+        const res = await apiFetch(url, opts);
+        return res.json().catch(() => ({}));
+    }
+    async function discoverChannels(q) {
+        const url = '/v2/channels/discover' + (q ? '?q=' + encodeURIComponent(q) : '');
+        const data = await apiJson(url);
+        if (Array.isArray(data)) return data;
+        return data.channels || (data.data && (data.data.channels || data.data)) || [];
+    }
+    async function subscribeChannel(id) {
+        return apiJson('/v2/channels/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channel_id: id }) });
+    }
+    async function unsubscribeChannel(id) {
+        return apiJson('/v2/channels/unsubscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channel_id: id }) });
+    }
+    async function getChannelPosts(channelId, seq) {
+        const data = await apiJson('/v2/channels/posts/after?channel_id=' + encodeURIComponent(channelId) + '&seq=' + (seq || 0));
+        if (Array.isArray(data)) return data;
+        return data.posts || (data.data && (data.data.posts || data.data)) || [];
+    }
+    async function toggleChannelReaction(channelId, postId, emoji) {
+        return apiJson('/v2/channels/reactions/toggle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channel_id: channelId, post_id: postId, emoji }) });
+    }
+
+    async function doSubscribe(ch) {
+        try { await subscribeChannel(ch.id); } catch (e) { showAlert('订阅失败：' + (e && e.message || e)); return; }
+        addSubscribedChannel(ch);
+        renderContacts();
+    }
+    async function doUnsubscribe(ch) {
+        try { await unsubscribeChannel(ch.id); } catch (e) {}
+        removeSubscribedChannel(ch.id);
+        renderContacts();
+    }
+
+    function channelMetaFromApi(ch) {
+        return {
+            id: ch.id || ch.channel_id || '',
+            name: ch.name || ch.channel_name || '',
+            handle: ch.handle || ch.channel_handle || '',
+            avatar_url: ch.avatar_url || ch.avatar || '',
+            description: ch.description || '',
+            subscriber_count: (ch.subscriber_count != null) ? ch.subscriber_count : (ch.channel_subscribers != null ? ch.channel_subscribers : null),
+            allowed_emojis: ch.allowed_emojis || null,
+        };
+    }
+
+    function fmtChannelTime(ts) {
+        if (!ts) return '';
+        try {
+            const d = new Date(ts * 1000);
+            const p = n => (n < 10 ? '0' + n : '' + n);
+            return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+        } catch (e) { return ''; }
+    }
+
+    function normalizeReactions(obj) {
+        const out = {};
+        if (!obj || typeof obj !== 'object') return out;
+        for (const k of Object.keys(obj)) {
+            const v = obj[k];
+            if (v == null) continue;
+            if (typeof v === 'object') out[k] = { count: v.count || 0, mine: !!v.mine };
+            else out[k] = { count: Number(v) || 0, mine: false };
+        }
+        return out;
+    }
+
+    function parsePostBody(body) {
+        if (body == null) return { text: '', media: null, mediaType: null };
+        let obj = body;
+        if (typeof body === 'string') {
+            const s = body.trim();
+            if (s.startsWith('{')) {
+                try { obj = JSON.parse(s); }
+                catch (e) { return { text: body, media: null, mediaType: null }; }
+            } else return { text: body, media: null, mediaType: null };
+        }
+        if (obj && typeof obj === 'object') {
+            if (obj.v === 2) return { text: obj.text || '', media: obj.media_url || obj.media || null, mediaType: obj.msg_type || null };
+            return { text: obj.text || obj.body || '', media: obj.media_url || obj.media || null, mediaType: obj.msg_type || null };
+        }
+        return { text: String(body), media: null, mediaType: null };
+    }
+
+    function renderReactionsInto(wrap, post, allowed, channelId, postId) {
+        wrap.innerHTML = '';
+        const reactions = normalizeReactions(post.reactions);
+        allowed.forEach(emoji => {
+            const r = reactions[emoji];
+            const count = r ? r.count : 0;
+            const mine = r ? r.mine : false;
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'channel-reaction-chip' + (mine ? ' reacted' : '');
+            chip.innerHTML = '<span class="emoji">' + emoji + '</span>' + (count > 0 ? '<span class="cnt">' + count + '</span>' : '');
+            chip.addEventListener('click', async () => {
+                chip.disabled = true;
+                try {
+                    const res = await toggleChannelReaction(channelId, postId, emoji);
+                    if (res && res.reactions) post.reactions = res.reactions;
+                } catch (e) {}
+                chip.disabled = false;
+                renderReactionsInto(wrap, post, allowed, channelId, postId);
+            });
+            wrap.appendChild(chip);
+        });
+    }
+
+    function renderChannelPost(post, allowed, channelId) {
+        const postId = post.id || post.post_id || '';
+        const div = document.createElement('div');
+        div.className = 'channel-post';
+        const authorName = post.from_name || (post.author && post.author.name) || post.name || '频道';
+        const authorAvatar = post.from_avatar || (post.author && post.author.avatar) || '';
+        const time = fmtChannelTime(post.created_at || post.created_at_ts);
+        const pb = parsePostBody(post.body);
+        let contentHtml = '';
+        if (pb.media) {
+            const src = cachedResolveMediaUrl(pb.media);
+            contentHtml = '<div class="channel-post-media"><img class="chat-image" src="' + src + '" ' +
+                'onerror="if(this.dataset.fb!==\'1\'){this.dataset.fb=\'1\';this.src=\'' + src + '\';}else{this.style.display=\'none\';}" ' +
+                'style="max-width:240px;max-height:240px;border-radius:8px;cursor:pointer;" onclick="if(window.openImageViewer)window.openImageViewer(this)"></div>';
+        } else if (pb.text) {
+            contentHtml = '<div class="channel-post-text">' + escapeHtml(pb.text) + '</div>';
+        } else {
+            contentHtml = '<div class="channel-post-text" style="color:var(--secondary-text);">[不支持的内容]</div>';
+        }
+        div.innerHTML =
+            '<img class="channel-post-avatar" src="' + cachedResolveMediaUrl(authorAvatar || '') + '" onerror="this.src=\'assets/default-avatar.png\'">' +
+            '<div class="channel-post-body">' +
+                '<div class="channel-post-head"><span class="name">' + escapeHtml(authorName) + '</span>' + (time ? '<span class="time">' + time + '</span>' : '') + '</div>' +
+                '<div class="channel-post-content">' + contentHtml + '</div>' +
+                '<div class="channel-reactions"></div>' +
+            '</div>';
+        renderReactionsInto(div.querySelector('.channel-reactions'), post, allowed, channelId, postId);
+        return div;
+    }
+
+    async function loadChannelPosts(container, meta) {
+        container.innerHTML = '<div class="channel-loading">加载中…</div>';
+        try {
+            const posts = await getChannelPosts(meta.id, 0);
+            container.innerHTML = '';
+            if (!posts || !posts.length) { container.innerHTML = '<div class="channel-empty">暂无帖子</div>'; return; }
+            const allowed = (meta.allowed_emojis && meta.allowed_emojis.length) ? meta.allowed_emojis : CHANNEL_DEFAULT_EMOJIS;
+            // 服务端帖子一般按 seq 升序返回，这里反转成最新在底部（类聊天流）
+            posts.slice().reverse().forEach(p => container.appendChild(renderChannelPost(p, allowed, meta.id)));
+        } catch (e) {
+            container.innerHTML = '<div class="channel-empty">加载失败：' + escapeHtml(String(e && e.message || e)) + '</div>';
+        }
+    }
+
+    function openChannelFromSidebar(id, name) {
+        const ch = getSubscribedChannels().find(c => c.id === id) || { id: id, name: name };
+        openChannelView(ch);
+    }
+
+    async function openChannelView(meta) {
+        switchTab('discover');
+        const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
+        if (!main) return;
+        main.classList.add('discover-has-content');
+        const sub = isSubscribedChannel(meta.id);
+        main.innerHTML =
+            '<div class="channel-view">' +
+                '<div class="channel-view-header">' +
+                    '<img class="channel-view-avatar" src="' + cachedResolveMediaUrl(meta.avatar_url || '') + '" onerror="this.src=\'assets/default-avatar.png\'">' +
+                    '<div class="channel-view-meta">' +
+                        '<div class="name">' + escapeHtml(meta.name || '') + '</div>' +
+                        '<div class="meta">' + (meta.handle ? ('@' + escapeHtml(meta.handle) + ' · ') : '') + (meta.subscriber_count != null ? escapeHtml(String(meta.subscriber_count)) + ' 订阅' : '') + '</div>' +
+                        (meta.description ? '<div class="desc">' + escapeHtml(meta.description) + '</div>' : '') +
+                    '</div>' +
+                    '<button class="btn ' + (sub ? '' : 'primary') + '" id="channelSubBtn">' + (sub ? '取消订阅' : '订阅') + '</button>' +
+                '</div>' +
+                '<div class="channel-view-posts" id="channelPosts"></div>' +
+            '</div>';
+        const subBtn = main.querySelector('#channelSubBtn');
+        subBtn.addEventListener('click', async () => {
+            if (isSubscribedChannel(meta.id)) { await doUnsubscribe(meta); subBtn.textContent = '订阅'; subBtn.classList.add('primary'); }
+            else { await doSubscribe(meta); subBtn.textContent = '取消订阅'; subBtn.classList.remove('primary'); }
+        });
+        loadChannelPosts(main.querySelector('#channelPosts'), meta);
+    }
+
+    function channelCard(ch, subscribed, onView, onToggle) {
+        const div = document.createElement('div');
+        div.className = 'channel-card';
+        div.innerHTML =
+            '<img class="channel-card-avatar" src="' + cachedResolveMediaUrl(ch.avatar_url || '') + '" onerror="this.src=\'assets/default-avatar.png\'">' +
+            '<div class="channel-card-info">' +
+                '<div class="name">' + escapeHtml(ch.name || '') + '</div>' +
+                '<div class="meta">' + (ch.handle ? ('@' + escapeHtml(ch.handle) + ' · ') : '') + (ch.subscriber_count != null ? escapeHtml(String(ch.subscriber_count)) + ' 订阅' : '') + '</div>' +
+                (ch.description ? '<div class="desc">' + escapeHtml(ch.description) + '</div>' : '') +
+            '</div>' +
+            '<div class="channel-card-actions">' +
+                '<button class="btn small view-btn">查看</button>' +
+                '<button class="btn small ' + (subscribed ? '' : 'primary') + ' sub-btn">' + (subscribed ? '取消订阅' : '订阅') + '</button>' +
+            '</div>';
+        div.querySelector('.view-btn').addEventListener('click', () => onView && onView());
+        div.querySelector('.sub-btn').addEventListener('click', () => onToggle && onToggle());
+        return div;
+    }
+
+    function renderDiscoverChannels(main) {
+        main.classList.add('discover-has-content');
+        main.innerHTML =
+            '<div class="channel-browser">' +
+                '<div class="channel-browser-head">' +
+                    '<h2>频道</h2>' +
+                    '<div class="channel-search">' +
+                        '<input type="text" id="channelSearchInput" placeholder="搜索频道…">' +
+                        '<button id="channelSearchBtn" class="btn primary">搜索</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="channel-browser-body">' +
+                    '<div class="channel-col">' +
+                        '<div class="channel-col-title">我的频道</div>' +
+                        '<div id="channelSubscribedList" class="channel-list"></div>' +
+                    '</div>' +
+                    '<div class="channel-col">' +
+                        '<div class="channel-col-title">发现</div>' +
+                        '<div id="channelDiscoverList" class="channel-list"></div>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+        renderSubscribedList();
+        loadChannelDiscover('');
+        const input = main.querySelector('#channelSearchInput');
+        main.querySelector('#channelSearchBtn').addEventListener('click', () => loadChannelDiscover(input.value.trim()));
+        input.addEventListener('keydown', e => { if (e.key === 'Enter') loadChannelDiscover(input.value.trim()); });
+    }
+
+    function renderSubscribedList() {
+        const wrap = document.getElementById('channelSubscribedList');
+        if (!wrap) return;
+        wrap.innerHTML = '';
+        const list = getSubscribedChannels();
+        if (!list.length) { wrap.innerHTML = '<div class="channel-empty">还没有订阅任何频道</div>'; return; }
+        list.forEach(ch => {
+            wrap.appendChild(channelCard(ch, true,
+                () => openChannelView(ch),
+                async () => { await doUnsubscribe(ch); renderSubscribedList(); loadChannelDiscover(document.getElementById('channelSearchInput') ? document.getElementById('channelSearchInput').value.trim() : ''); }
+            ));
+        });
+    }
+
+    async function loadChannelDiscover(q) {
+        const wrap = document.getElementById('channelDiscoverList');
+        if (!wrap) return;
+        wrap.innerHTML = '<div class="channel-loading">加载中…</div>';
+        try {
+            const arr = await discoverChannels(q);
+            wrap.innerHTML = '';
+            if (!arr || !arr.length) { wrap.innerHTML = '<div class="channel-empty">没有找到频道</div>'; return; }
+            arr.forEach(raw => {
+                const ch = channelMetaFromApi(raw);
+                const subscribed = isSubscribedChannel(ch.id);
+                wrap.appendChild(channelCard(ch, subscribed,
+                    () => openChannelView(ch),
+                    async () => {
+                        if (subscribed) await doUnsubscribe(ch); else await doSubscribe(ch);
+                        renderSubscribedList();
+                        loadChannelDiscover(q);
+                    }
+                ));
+            });
+        } catch (e) {
+            wrap.innerHTML = '<div class="channel-empty">加载失败：' + escapeHtml(String(e && e.message || e)) + '</div>';
+        }
+    }
+
     // 发现页侧边栏（启动器）：点击板块项进入对应区域
     // - 音乐广场：跳转到隐藏的音乐面板（从右进入）
     // - 签到墙：在发现页右侧直接渲染，不新开页面
@@ -10932,6 +11274,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             if (main) {
                 main.classList.add('discover-has-content');
                 renderSystemNotice(main);
+            }
+        } else if (target === 'channels') {
+            const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
+            if (main) {
+                main.classList.add('discover-has-content');
+                renderDiscoverChannels(main);
             }
         } else if (target) {
             switchTab(target);

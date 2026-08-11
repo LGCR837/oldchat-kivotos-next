@@ -742,6 +742,47 @@ body::-webkit-scrollbar {
 	z-index: 1;
 }
 
+/* 图片加载占位：2s 未加载出则显示占位框 + 转圈，避免「空消息」 */
+.message.bare-image .chat-image-wrap {
+	grid-row: 2;
+	grid-column: 2;
+	position: relative;
+	min-width: 200px;
+	min-height: 150px;
+	background: var(--hover);
+	border-radius: 8px;
+	overflow: hidden;
+}
+.message.other.bare-image .chat-image-wrap { grid-column: 2; grid-row: 2; }
+.message.other.bare-image.has-quote .chat-image-wrap { grid-row: 3; }
+.message.bare-image .chat-image-wrap .chat-image {
+	display: block;
+	opacity: 0;
+	transition: opacity .2s ease;
+}
+.message.bare-image .chat-image-wrap.loaded { min-width: 0; min-height: 0; background: transparent; }
+.message.bare-image .chat-image-wrap.loaded .chat-image { opacity: 1; }
+.message.bare-image .chat-image-wrap .img-loading {
+	position: absolute;
+	inset: 0;
+	display: none;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-secondary, #8a8f99);
+	font-size: 22px;
+}
+.message.bare-image .chat-image-wrap.show-spinner .img-loading { display: flex; }
+.message.bare-image .chat-image-wrap.img-error::after {
+	content: '图片加载失败';
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--text-secondary, #8a8f99);
+	font-size: 12px;
+}
+
 .message.self.bare-image {
 	align-items: flex-end;
 }
@@ -3484,6 +3525,50 @@ body::-webkit-scrollbar {
     padding: 20px;
     text-align: left;
 }
+
+/* ===== 频道系统（发现页 + 聊天侧边栏）===== */
+.channel-browser { max-width: 960px; margin: 0 auto; }
+.channel-browser-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+.channel-browser-head h2 { margin: 0; font-size: 20px; }
+.channel-search { display: flex; gap: 8px; }
+.channel-search input { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--chat-bg); color: var(--text-color); min-width: 220px; }
+.channel-browser-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 720px) { .channel-browser-body { grid-template-columns: 1fr; } }
+.channel-col-title { font-size: 13px; color: var(--secondary-text); margin-bottom: 8px; font-weight: 600; }
+.channel-list { display: flex; flex-direction: column; gap: 8px; }
+.channel-card { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--chat-bg); }
+.channel-card-avatar { width: 42px; height: 42px; border-radius: 10px; object-fit: cover; flex: none; background: var(--hover); }
+.channel-card-info { flex: 1; min-width: 0; }
+.channel-card-info .name { font-weight: 600; font-size: 14px; }
+.channel-card-info .meta { font-size: 12px; color: var(--secondary-text); }
+.channel-card-info .desc { font-size: 12px; color: var(--secondary-text); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-card-actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
+
+.channel-view { max-width: 760px; margin: 0 auto; }
+.channel-view-header { display: flex; align-items: center; gap: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--border-color); margin-bottom: 14px; }
+.channel-view-avatar { width: 56px; height: 56px; border-radius: 12px; object-fit: cover; background: var(--hover); flex: none; }
+.channel-view-meta { flex: 1; min-width: 0; }
+.channel-view-meta .name { font-size: 18px; font-weight: 700; }
+.channel-view-meta .meta { font-size: 13px; color: var(--secondary-text); margin-top: 2px; }
+.channel-view-meta .desc { font-size: 13px; color: var(--secondary-text); margin-top: 4px; }
+.channel-view-posts { display: flex; flex-direction: column; gap: 12px; }
+
+.channel-post { display: flex; gap: 10px; align-items: flex-start; }
+.channel-post-avatar { width: 38px; height: 38px; border-radius: 10px; object-fit: cover; flex: none; background: var(--hover); }
+.channel-post-body { flex: 1; min-width: 0; background: var(--chat-bg); border: 1px solid var(--border-color); border-radius: 10px; padding: 10px 12px; }
+.channel-post-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+.channel-post-head .name { font-weight: 600; font-size: 14px; }
+.channel-post-head .time { font-size: 11px; color: var(--secondary-text); }
+.channel-post-text { font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.channel-post-media { margin-top: 4px; }
+.channel-loading, .channel-empty { padding: 24px; text-align: center; color: var(--secondary-text); font-size: 13px; }
+
+.channel-reactions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.channel-reaction-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 14px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); font-size: 13px; cursor: pointer; transition: background .15s, border-color .15s; }
+.channel-reaction-chip:hover { background: var(--hover); }
+.channel-reaction-chip.reacted { background: var(--accent); border-color: var(--accent); color: #fff; }
+.channel-reaction-chip .cnt { font-size: 12px; opacity: .85; }
+.channel-reaction-chip:disabled { opacity: .6; cursor: default; }
 
 /* ===== 公开法庭页面 ===== */
 .court-detail {
