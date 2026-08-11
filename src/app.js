@@ -6033,9 +6033,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (!contactList._collapseBound) {
             contactList._collapseBound = true;
             contactList.addEventListener('click', onSectionHeaderClick);
+            contactList.addEventListener('pointerdown', onSectionHeaderPointerDown);
         }
         applyPriority(false);
         renderContactsPage();
+        _applySavedSectionOrder();
     }
 
     // ===== 重点分区（侧边栏置顶分组）=====
@@ -6070,6 +6072,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
     // 点击分区标题平滑收起/展开，状态持久化
     function onSectionHeaderClick(e) {
+        if (_suppressSectionClick) { _suppressSectionClick = false; return; } // 拖拽结束的附带 click，忽略
         const hdr = e.target.closest('.contact-section-header');
         if (!hdr || !contactList.contains(hdr)) return;
         const sec = hdr.closest('.contact-section');
@@ -6117,6 +6120,156 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const onEnd = () => { sec.style.maxHeight = ''; sec.removeEventListener('transitionend', onEnd); };
             sec.addEventListener('transitionend', onEnd);
         }
+    }
+
+    // ===== 分区拖拽排序 =====
+    const SECTION_ORDER_LS_KEY = 'oc_section_order';
+    let _sectionDrag = null;       // { sec, hdr, startY, moved }
+    let _suppressSectionClick = false;
+    function _loadSectionOrder() {
+        try { const a = JSON.parse(localStorage.getItem(SECTION_ORDER_LS_KEY)); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+    }
+    function _saveSectionOrder() {
+        const order = Array.from(contactList.querySelectorAll('.contact-section')).map(s => s.dataset.section).filter(Boolean);
+        try { localStorage.setItem(SECTION_ORDER_LS_KEY, JSON.stringify(order)); } catch (e) {}
+    }
+    // 按已保存顺序重排存在的分区（新分区保持原相对位置）
+    function _applySavedSectionOrder() {
+        const order = _loadSectionOrder();
+        if (!order.length) return;
+        const byName = {};
+        contactList.querySelectorAll('.contact-section').forEach(s => { if (s.dataset.section) byName[s.dataset.section] = s; });
+        order.forEach(name => {
+            const s = byName[name];
+            if (s && s.parentNode === contactList) contactList.appendChild(s);
+        });
+    }
+    function onSectionHeaderPointerDown(e) {
+        if (e.button !== 0) return;                 // 仅左键拖拽
+        _suppressSectionClick = false;              // 清除上一轮可能残留的抑制标记
+        const hdr = e.target.closest('.contact-section-header');
+        if (!hdr || !contactList.contains(hdr)) return;
+        const sec = hdr.closest('.contact-section');
+        if (!sec) return;
+        _sectionDrag = { sec, hdr, startY: e.clientY, moved: false };
+        window.addEventListener('pointermove', onSectionPointerMove);
+        window.addEventListener('pointerup', onSectionPointerUp, { once: true });
+    }
+    function _beginSectionDrag() {
+        const drag = _sectionDrag;
+        drag.moved = true;
+        const sections = Array.from(contactList.querySelectorAll('.contact-section'));
+        drag.sections = sections;
+        drag.dragIndex = sections.indexOf(drag.sec);
+        drag.dragH = drag.sec.querySelector('.contact-section-header').offsetHeight;
+        // 记录拖拽前各分区收起态
+        drag.preCollapsed = {};
+        contactList.classList.add('reordering-sections');
+        contactList.style.userSelect = 'none';
+        // 平滑收起所有分区：复用 setSectionCollapsed 的原本 max-height 过渡
+        // （先 scrollHeight 再 headerH 并强制回流，才能从可插值的长度起步，否则 none→px 不动画）
+        sections.forEach(s => {
+            drag.preCollapsed[s.dataset.section] = s.classList.contains('collapsed');
+            setSectionCollapsed(s, true, true);
+        });
+        // 被拖拽分区：抬升 + 连续跟随鼠标（transform 不加过渡，1:1 跟手；max-height 仍走原过渡）
+        drag.sec.classList.add('drag-lifted');
+        drag.sec.style.transition = 'max-height .3s ease';
+        drag.sec.style.pointerEvents = 'none';
+    }
+    // 依据当前指针位移计算最终分区顺序（与 move 同一套算法，供 drop 提交复用）
+    function _computeSectionFinalOrder(drag, dy) {
+        const sections = drag.sections, n = sections.length, dragIndex = drag.dragIndex, dragH = drag.dragH;
+        const draggedCenter = dragIndex * dragH + dragH / 2 + dy; // 相对坐标（baseTop 常量抵消）
+        let newIndex = 0;
+        for (let i = 0; i < n; i++) {
+            if (i === dragIndex) continue;
+            if (i * dragH + dragH / 2 < draggedCenter) newIndex++;
+        }
+        const without = [];
+        for (let i = 0; i < n; i++) if (i !== dragIndex) without.push(i);
+        let pos = newIndex;
+        if (newIndex > dragIndex) pos = newIndex - 1;
+        const finalOrder = without.slice();
+        finalOrder.splice(pos, 0, dragIndex);
+        return finalOrder;
+    }
+    function onSectionPointerMove(e) {
+        if (!_sectionDrag) return;
+        const dy = e.clientY - _sectionDrag.startY;
+        if (!_sectionDrag.moved) {
+            if (Math.abs(dy) < 6) return;           // 阈值内视为点击（折叠），不进入拖拽
+            _beginSectionDrag();
+        }
+        e.preventDefault();
+        const drag = _sectionDrag;
+        const sections = drag.sections, n = sections.length, dragH = drag.dragH;
+        // 被拖拽分区连续跟随鼠标
+        drag.sec.style.transform = 'translateY(' + dy + 'px)';
+        drag.lastDy = dy;
+        // 其余分区按目标位置平滑平移出空位
+        const finalOrder = _computeSectionFinalOrder(drag, dy);
+        drag.finalOrder = finalOrder;
+        for (let i = 0; i < n; i++) {
+            if (i === drag.dragIndex) continue;
+            const s = sections[i];
+            const ti = finalOrder.indexOf(i);
+            s.style.transform = 'translateY(' + ((ti - i) * dragH) + 'px)';
+        }
+    }
+    function onSectionPointerUp() {
+        window.removeEventListener('pointermove', onSectionPointerMove);
+        if (!_sectionDrag) return;
+        const drag = _sectionDrag;
+        _sectionDrag = null;
+        if (!drag.moved) return;                    // 纯点击：交给 click 切换折叠
+        _suppressSectionClick = true;               // 抑制随后触发的 click，避免误折叠
+        const sections = drag.sections, n = sections.length;
+        const finalOrder = drag.finalOrder || _computeSectionFinalOrder(drag, drag.lastDy || 0);
+        // 提交最终 DOM 顺序
+        finalOrder.forEach(idx => contactList.appendChild(sections[idx]));
+        // 其他分区：自然位置已与视觉位置重合，直接清样式（无跳动）
+        const dragged = drag.sec;
+        const draggedFinalIndex = finalOrder.indexOf(drag.dragIndex);
+        sections.forEach(s => {
+            if (s === dragged) return;
+            s.style.transition = '';
+            s.style.transform = '';
+            s.style.maxHeight = '';
+        });
+        contactList.classList.remove('reordering-sections');
+        contactList.style.userSelect = '';
+        // 被拖拽分区：从鼠标当前位置平滑落入目标槽位
+        const landDy = (drag.dragIndex - draggedFinalIndex) * drag.dragH + (drag.lastDy || 0);
+        dragged.style.transition = 'max-height .3s ease, transform .25s cubic-bezier(.22,1,.36,1)';
+        dragged.style.transform = 'translateY(' + landDy + 'px)';
+        requestAnimationFrame(() => { dragged.style.transform = ''; });
+        const onLand = () => {
+            dragged.style.transition = '';
+            dragged.style.transform = '';
+            dragged.style.maxHeight = '';
+            dragged.style.zIndex = '';
+            dragged.style.pointerEvents = '';
+            dragged.classList.remove('drag-lifted');
+            dragged.removeEventListener('transitionend', onLand);
+        };
+        dragged.addEventListener('transitionend', onLand);
+        setTimeout(onLand, 320);
+        // 恢复各分区原本的收起/展开态（复用原本 max-height 过渡）
+        sections.forEach(s => {
+            if (s === dragged) return; // 被拖拽者已在落位动画里清理
+            if (drag.preCollapsed[s.dataset.section]) {
+                s.classList.add('collapsed');
+                s.style.maxHeight = s.querySelector('.contact-section-header').offsetHeight + 'px';
+            } else {
+                s.classList.remove('collapsed');
+                s.style.maxHeight = s.scrollHeight + 'px';
+                const onEnd = () => { s.style.maxHeight = ''; s.removeEventListener('transitionend', onEnd); };
+                s.addEventListener('transitionend', onEnd);
+            }
+        });
+        _saveSectionOrder();
+        schedulePriorityApply();
     }
 
     // 折叠板块：被折叠的会话移入其下（位于私聊之后）
@@ -6177,27 +6330,27 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     const prioLastActivity = {};      // key -> 最近活动时间戳(ms)
     const prioFresh = {};             // key -> 刚标记活跃（本次进入保证至少包含一次，消费即删）
     const prioOpenTimers = {};         // key -> 群聊进入延迟后移入重点的定时器
-    // 时长设置（设置 → 通用 → 侧边栏，localStorage 秒数，滑块 0~30，默认 3s）
+    // 时长设置：进入延迟滑块 0~31（0=立即，31=不自动进入，默认 5s）；闲置移除滑块 0~31（0=立即，31=永不移除，默认 30s）
     const PRIO_ENTER_LS_KEY = 'oc_priority_enter_s';
     const PRIO_ACTIVE_LS_KEY = 'oc_priority_active_s';
     const PRIO_MAX_SEC = 30;
     function getPrioEnterDelay() {
-        // 0 = 立即进入；1~30 = 秒；31 = 不自动进入（Infinity，永不触发）；未设置/非法 = 默认 31
+        // 0 = 立即进入；1~30 = 秒；31 = 不自动进入（Infinity）；未设置/非法 = 默认 5 秒
         try {
             const v = parseInt(localStorage.getItem(PRIO_ENTER_LS_KEY), 10);
             if (v === 31) return Infinity;
-            if (v >= 0) return Math.min(PRIO_MAX_SEC, v) * 1000;
-            return Infinity;
-        } catch (e) { return Infinity; }
+            if (v >= 0 && v <= PRIO_MAX_SEC) return v * 1000;
+        } catch (e) {}
+        return 5 * 1000;
     }
     function getPrioActiveMs() {
-        // 0 = 立即移除（0ms，活动型会话下一次归位即移出）；1~30 = 秒；31 = 永不移除（Infinity）；未设置/非法 = 默认 0
+        // 0 = 立即移除（0ms，活动型会话下一次归位即移出）；1~30 = 秒；31 = 永不移除（Infinity）；未设置/非法 = 默认 30 秒
         try {
             const v = parseInt(localStorage.getItem(PRIO_ACTIVE_LS_KEY), 10);
             if (v === 31) return Infinity;
             if (v >= 0) return Math.min(PRIO_MAX_SEC, v) * 1000;
-            return 0;
-        } catch (e) { return 0; }
+        } catch (e) {}
+        return 30 * 1000;
     }
 
     function markPrioActivity(key) {
@@ -6243,6 +6396,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     }
     function applyPriority(animate) {
         try {
+            // 分区拖拽中：跳过（避免重置收起/展开态、打断拖拽），结束后由 onSectionPointerUp 重新同步
+            if (contactList && contactList.classList.contains('reordering-sections')) return;
             // 动画进行中又来新请求：不中途打断（否则正在滑动的项会被瞬移归位），只标脏待补跑。
             // 含 animate=false（renderContacts 重建列表）：否则 _resetPrioAnim 会清掉正在垂直 FLIP 的项的 transform → 上下瞬移
             if (_prioAnimating) { _prioDirty = true; return; }
@@ -7057,8 +7212,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         // 离开旧会话：取消其待定的延迟移入定时器（避免快速预览也被拉入重点）
         if (prevConvKey && prioOpenTimers[prevConvKey]) clearPrioOpenTimer(prevConvKey);
         currentConv = { type, id, name, key: convKey, _sendToUid: displayUid || id };
-        // 群聊：进入延迟（0=立即，1~30=秒，31=不自动进入，可在设置调整）后才移入重点区域（私聊仅通过未读进入，读后即自然移出）
-        if (type === 'group') {
+        // 进入重点区域：群聊与私聊打开后按「进入延迟」移入重点（默认 5s）；私聊此前仅走未读进入，现已与群聊一致自动进入
+        if (type === 'group' || type === 'direct') {
             clearPrioOpenTimer(convKey);
             const delay = getPrioEnterDelay();
             if (delay !== Infinity) {
@@ -10195,7 +10350,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             <h3 style="margin-top:20px;">侧边栏</h3>
             <div class="settings-group">
                 <div class="settings-item" id="settingsPrioritySection">
-                    <span class="label">重点分区</span>
+                    <span class="label">自动重点分区</span>
                     <span class="value">
                         <label class="oc-switch">
                             <input type="checkbox" id="prioritySectionToggle">
@@ -10207,18 +10362,18 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     <span class="label">进入延迟</span>
                     <span class="value">
                         <input type="range" id="prioEnterInput" min="0" max="31" step="1" style="width:140px;accent-color:var(--accent);">
-                        <span id="prioEnterVal" style="min-width:72px;text-align:right;">31</span>
+                        <span id="prioEnterVal" style="min-width:72px;text-align:right;">5 秒</span>
                     </span>
                 </div>
                 <div class="settings-item" id="settingsPrioActive" style="cursor:default;">
                     <span class="label">闲置移除</span>
                     <span class="value">
                         <input type="range" id="prioActiveInput" min="0" max="31" step="1" style="width:140px;accent-color:var(--accent);">
-                        <span id="prioActiveVal" style="min-width:72px;text-align:right;">0</span>
+                        <span id="prioActiveVal" style="min-width:72px;text-align:right;">30 秒</span>
                     </span>
                 </div>
                 <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
-                    有未读的会话、以及最近打开过的群聊会进入「重点」分组（默认关闭）：进入延迟 0~31 秒（0=立即，31=不自动进入，默认 31），闲置移除 0~31 秒（0=立即，31=永不移除，默认 0）；未读会话不受滑块影响、始终立即进入；移动时带滑动动画。
+                    开启后，有未读的会话会立即进入「重点」分组；最近打开过的群聊与私聊在「进入延迟」后进入（0=立即，31=不自动进入，默认 5 秒）；「闲置移除」控制进入后保留多久（0=立即，31=永不移除，默认 30 秒）；未读会话始终立即进入；移动时带滑动动画。
                 </div>
             </div>
             <h3 style="margin-top:20px;">服务器配置</h3>
@@ -10287,7 +10442,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 applyPriority(true);
             });
         }
-        // 重点分区时长设置（滑块：进入 0~31s（0=立即，31=不自动进入）；移除 0~31s（0=立即，31=永不移除））
+        // 重点分区时长设置（滑块：进入延迟 0~31s（0=立即，31=不自动进入）；闲置移除 0~31s（0=立即，31=永不移除））
         function bindPrioTimeSlider(id, valId, lsKey, getter, fmt, maxSec) {
             const inp = document.getElementById(id);
             const valEl = document.getElementById(valId);

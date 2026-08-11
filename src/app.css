@@ -4154,11 +4154,19 @@ body::-webkit-scrollbar {
 .contact-section { transition: max-height .3s ease; }
 .contact-section.collapsed { overflow: hidden; }
 .contact-section-header { cursor: pointer; display: flex; align-items: center; gap: 4px; }
+/* 分区拖拽排序：拖动中全部用原本 max-height 过渡收起；标题保持原样式。
+   被拖拽分区抬升(z-index)并连续跟随鼠标(transform 不加过渡)；
+   其他分区用 transform 平滑上/下移出空位。 */
+.contact-section.drag-lifted { position: relative; z-index: 30; }
+.reordering-sections { cursor: grabbing; }
+.reordering-sections .contact-section { transition: max-height .3s ease, transform .25s cubic-bezier(.22, 1, .36, 1); }
+.reordering-sections .contact-section.drag-lifted { transition: max-height .3s ease; }
 /* 置顶会话：左侧高亮条，仅鼠标悬停在该卡片时显示。
    高度从 0 到满用 transform:scaleY（GPU 友好，等价视觉为高度生长），
    非线性缓动：展开弹性、收起略快，避免土味渐变。 */
-.contact-item.is-pinned { position: relative; }
-.contact-item.is-pinned::before {
+/* 卡片左侧高亮条：所有卡片 hover 时从中间向上下展开（非线性缓动）。
+   原仅置顶卡片有，现应用到全部卡片。 */
+.contact-item::before {
     content: '';
     position: absolute;
     left: 0; top: 0; bottom: 0;
@@ -4171,9 +4179,29 @@ body::-webkit-scrollbar {
     pointer-events: none;
     transition: transform .24s cubic-bezier(0.4, 0, 0.2, 1); /* 隐藏：平滑收起 */
 }
-.contact-item.is-pinned:hover::before {
+.contact-item:hover::before {
     transform: scaleY(1);
     transition: transform .36s cubic-bezier(0.22, 1, 0.36, 1); /* 显示：弹性展开 */
+}
+/* 当前选中的会话：左侧竖条始终显示 */
+.contact-item.active::before {
+    transform: scaleY(1);
+}
+/* 置顶卡片：右上角小三角标记（直角在右上角、斜边朝内），hover 时平滑淡入 */
+.contact-item.is-pinned::after {
+    content: '';
+    position: absolute;
+    top: 0; right: 0;
+    width: 0; height: 0;
+    border-style: solid;
+    border-width: 0 8px 8px 0;
+    border-color: transparent var(--accent) transparent transparent;
+    opacity: 0;
+    transition: opacity .22s ease;
+    pointer-events: none;
+}
+.contact-item.is-pinned:hover::after {
+    opacity: 1;
 }
 
 /* 设置页开关（重点分区等） */
