@@ -78,8 +78,8 @@
 	--muted: #888;
 	--surface-2: #2a2a4a;
 	--overlay: rgba(0,0,0,0.6);
-	--discover-icon-bg: rgba(250,148,166,0.18);
-	--discover-icon-fg: #fa94a6;
+	--discover-icon-bg: rgba(255,255,255,0.10);
+	--discover-icon-fg: #b8c2d0;
 }
 
 body, .sidebar, .chat-area, .messages, .input-area, .contact-list, .chat-header, .sidebar-header, .message-bubble, .message-time, .contact-item, .more-menu, .custom-context-menu, .emoticon-picker {
@@ -348,6 +348,16 @@ body::-webkit-scrollbar {
     min-height: 0;
     overflow: hidden;
     position: relative;
+}
+
+/* 浅色模式：聊天界面右侧（会话区 + 输入区）背景纯白；左侧侧边栏(--sidebar-bg)保持不变；深色模式不受影响 */
+:root:not([data-theme-mode="dark"]) .chat-area,
+[data-theme-mode="light"] .chat-area {
+    background: #ffffff;
+}
+:root:not([data-theme-mode="dark"]) .input-area,
+[data-theme-mode="light"] .input-area {
+    background: #ffffff;
 }
 
 /* 侧边栏顶部图标选项卡 */
@@ -1891,6 +1901,22 @@ body::-webkit-scrollbar {
 /* 用户空间滚动容器：隐藏原生滚动条，由 dumogu-scrollbar 接管 */
 #sp-scroll::-webkit-scrollbar{display:none}
 #sp-scroll{-ms-overflow-style:none;scrollbar-width:none}
+
+/* 发现页子页面（除音乐）自绘滚动条：隐藏原生滚动条，缩略条跟随主题色 */
+.discover-main.discover-has-content,
+.court-detail,
+.plaza-files,
+.cip-run-area { scrollbar-width: none; }
+.discover-main.discover-has-content::-webkit-scrollbar,
+.court-detail::-webkit-scrollbar,
+.plaza-files::-webkit-scrollbar,
+.cip-run-area::-webkit-scrollbar { display: none; }
+.dumogu-scrollbar-rail_thumb { background-color: var(--scrollbar-thumb) !important; }
+.dumogu-scrollbar-rail_thumb:hover { background-color: var(--scrollbar-thumb-hover) !important; }
+
+/* 简易颜色淡入动画（发现页子页面切换内容时使用） */
+@keyframes ocFadeIn { from { opacity: 0; } to { opacity: 1; } }
+.oc-fade-in { animation: ocFadeIn 0.35s ease both; }
 
 .emoticon-grid {
 	display: flex;

@@ -120,21 +120,25 @@ const IS_TAURI = _detectIsTauri();
     const winMaxBtn = document.getElementById('winMaxBtn');
     const winCloseBtn = document.getElementById('winCloseBtn');
 
-    // 根据最大化状态切换图标与圆角
+    // 根据最大化状态切换图标与圆角（更新所有界面的最大化/还原按钮）
     function syncMaximizeState() {
         invoke('is_window_maximized').then(function(isMax) {
-            if (!winMaxBtn) return;
-            const icon = winMaxBtn.querySelector('i');
-            if (!icon) return;
-            if (isMax) {
-                icon.className = 'fa-regular fa-clone';
-                winMaxBtn.title = '还原';
-                document.body.classList.add('is-maximized');
-            } else {
-                icon.className = 'fa-regular fa-square';
-                winMaxBtn.title = '最大化';
-                document.body.classList.remove('is-maximized');
-            }
+            if (isMax) document.body.classList.add('is-maximized');
+            else document.body.classList.remove('is-maximized');
+            // 聊天(winMaxBtn) + 联系人/设置/音乐/发现/法庭/广场/小程序/用户空间：统一更新图标与提示。
+            // 注意：聊天按钮 id 是「winMaxBtn」(小写 w 开头)，必须以 "MaxBtn" 结尾匹配，不能用 "WinMaxBtn"。
+            const maxBtns = document.querySelectorAll('[id$="MaxBtn"]');
+            maxBtns.forEach(function(btn) {
+                const icon = btn.querySelector('i');
+                if (!icon) return;
+                if (isMax) {
+                    icon.className = 'fa-regular fa-clone';
+                    btn.title = '还原';
+                } else {
+                    icon.className = 'fa-regular fa-square';
+                    btn.title = '最大化';
+                }
+            });
         }).catch(function(err) { console.error('[Tauri] is_window_maximized:', err); });
     }
 
@@ -2101,6 +2105,26 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (chatPanel) chatScrollbar.mount(chatPanel);
     }
 
+    // 发现页子页面（除音乐）自绘滚动条：与聊天区一致，隐藏原生滚动条、用 dumogu 接管
+    function initSubScrollbar(panelName, scrollSel) {
+        const panel = document.querySelector('.main-panel[data-panel="' + panelName + '"]');
+        const scroll = panel && panel.querySelector(scrollSel);
+        if (!panel || !scroll) return;
+        if (!(window['dumogu-scrollbar'] && window['dumogu-scrollbar'].DumoguScrollbar)) return;
+        const sb = new window['dumogu-scrollbar'].DumoguScrollbar({ keepShow: true });
+        sb.bind(scroll);
+        sb.mount(panel);
+        // 内容动态变化时刷新滚动条位置/尺寸，避免错位
+        const mo = new MutationObserver(function () {
+            try { sb.update(); } catch (e) {}
+        });
+        mo.observe(scroll, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style'] });
+    }
+    initSubScrollbar('discover', '.discover-main');
+    initSubScrollbar('court', '.court-detail');
+    initSubScrollbar('plaza', '.plaza-files');
+    initSubScrollbar('cip', '.cip-run-area');
+
     const quotePreview = document.getElementById('quotePreview');
     const quotePreviewText = quotePreview.querySelector('.quote-preview-text');
     const cancelQuoteBtn = document.getElementById('cancelQuoteBtn');
@@ -2157,6 +2181,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // 右侧主面板淡入淡出
         mainPanels.forEach(p => p.classList.toggle('active', p.dataset.panel === tabName));
+
+        // 发现页子页面（除音乐）切换时内容简易颜色淡入
+        if (tabName === 'discover' || tabName === 'court' || tabName === 'plaza' || tabName === 'cip') {
+            const p = document.querySelector('.main-panel[data-panel="' + tabName + '"]');
+            const content = p && p.querySelector('.discover-main, .court-detail, .plaza-files, .cip-run-area');
+            if (content) {
+                content.classList.remove('oc-fade-in');
+                void content.offsetWidth; // 强制重排以重触发动画
+                content.classList.add('oc-fade-in');
+            }
+        }
 
         // 选项卡高亮：音乐/公开法庭/小程序是从「发现」进入的子页，保持「发现」高亮
         let highlightTab = tabName;
@@ -2799,10 +2834,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;background:var(--bg);display:flex;flex-direction:column;font-family:inherit;opacity:0;transition:opacity 0.2s;';
         const btnBase = 'padding:6px 20px;border-radius:20px;border:none;font-size:14px;font-family:inherit;cursor:pointer;font-weight:500;';
         overlay.innerHTML = `
-            <div style="background:var(--header-bg);color:#fff;padding:13px 12px;display:flex;align-items:center;font-size:15px;font-weight:500;flex-shrink:0;position:relative;">
-                <button id="sp-close-btn" style="position:absolute;left:12px;background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:4px 8px;border-radius:8px;"><i class="fa-solid fa-chevron-left"></i></button>
-                <span style="width:100%;text-align:center;">用户空间</span>
-            </div>
+                <div style="background:var(--header-bg);color:#fff;padding:13px 12px;display:flex;align-items:center;font-size:15px;font-weight:500;flex-shrink:0;position:relative;">
+                    <button id="sp-close-btn" style="position:absolute;left:12px;background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:4px 8px;border-radius:8px;"><i class="fa-solid fa-chevron-left"></i></button>
+                    <span style="width:100%;text-align:center;">用户空间</span>
+                    <div class="window-controls" style="position:absolute;right:12px;display:flex;gap:2px;">
+                        <button class="win-ctrl-btn" id="spWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
+                        <button class="win-ctrl-btn" id="spWinMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
+                        <button class="win-ctrl-btn" id="spWinCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                </div>
             <div id="sp-scroll" style="flex:1;overflow-y:auto;position:relative;"></div>
         `;
         document.body.appendChild(overlay);
@@ -2879,6 +2919,29 @@ document.addEventListener('DOMContentLoaded', async () => {
             overlay.remove();
         }
         overlay.querySelector('#sp-close-btn').addEventListener('click', closePanel);
+
+        // 用户空间三大金刚键：控制主窗口（与聊天/发现等界面一致）。
+        // 注意：本函数位于 DOMContentLoaded 作用域，访问不到 initTauri IIFE 内的 invoke / syncMaximizeState，
+        // 必须在此自行解析 tauriInvoke（同音乐面板做法），否则点击会抛 ReferenceError 而「按不动」。
+        const spInvoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+        const spMinBtn = overlay.querySelector('#spWinMinBtn');
+        const spMaxBtn = overlay.querySelector('#spWinMaxBtn');
+        const spCloseBtn = overlay.querySelector('#spWinCloseBtn');
+        function spSyncMaxIcon() {
+            if (!spInvoke || !spMaxBtn) return;
+            spInvoke('is_window_maximized').then(function(isMax) {
+                const i = spMaxBtn.querySelector('i');
+                if (!i) return;
+                i.className = isMax ? 'fa-regular fa-clone' : 'fa-regular fa-square';
+                spMaxBtn.title = isMax ? '还原' : '最大化';
+            }).catch(function(){});
+        }
+        if (spInvoke) {
+            if (spMinBtn) spMinBtn.addEventListener('click', function() { spInvoke('minimize_window').catch(function(){}); });
+            if (spMaxBtn) spMaxBtn.addEventListener('click', function() { spInvoke('toggle_maximize_window').then(spSyncMaxIcon).catch(function(){}); });
+            if (spCloseBtn) spCloseBtn.addEventListener('click', function() { spInvoke('close_window').catch(function(){}); });
+            spSyncMaxIcon(); // 打开时同步一次图标
+        }
 
         // 尝试获取用户资料：优先用 ncuid，失败则用 uid
         async function fetchProfileForPanel() {
@@ -6190,8 +6253,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         convOffset[key] = cached.offset;
         convHasMore[key] = cached.hasMore;
         lastRenderedTs = cached.lastTs;
-        // 重建 lastRenderedMsg（用于连续消息检测）
-        const lastMsgEl = messagesContainer.querySelector('.message:last-child');
+        // 重建 lastRenderedMsg（用于连续消息检测）。注意容器末尾通常是滚动锚点(scrollAnchor)，
+        // 用 .message:last-child 会因此返回 null，故取「所有 .message 中的最后一个」以保证游标正确建立。
+        const allMsgs = messagesContainer.querySelectorAll('.message');
+        const lastMsgEl = allMsgs.length ? allMsgs[allMsgs.length - 1] : null;
         lastRenderedMsg = lastMsgEl ? {
             convKey: key,
             from_uid: lastMsgEl.dataset.fromUid || '',
@@ -6650,13 +6715,25 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         let content = '';
 
         if (msgType === 'image') {
-            const mediaUrl = msg.media_url || '';
+            // 新格式：优先拉取缩略图(thumb_url → media_url)，原图留作「查看原图」
+            const thumbUrl = msg.thumb_url || msg.media_url || '';
+            const origUrl = msg.media_url || msg.original_url || '';
             const imgEl = document.createElement('img');
-            imgEl.src = cachedResolveMediaUrl(mediaUrl);
+            imgEl.src = cachedResolveMediaUrl(thumbUrl);
+            if (origUrl) imgEl.dataset.original = origUrl; // 右键「查看原图」使用
             imgEl.style.cssText = 'max-width:200px;max-height:200px;border-radius:8px;cursor:pointer;';
             imgEl.className = 'chat-image';
             imgEl.onclick = () => openImageViewer(imgEl);
-            imgEl.onerror = function() { this.style.display='none'; };
+            imgEl.onerror = function() {
+                // 缩略图加载失败：尝试一次原图，再失败才隐藏（避免无限循环）
+                if (this.dataset.original) {
+                    const orig = this.dataset.original;
+                    this.dataset.original = '';
+                    this.src = cachedResolveMediaUrl(orig);
+                } else {
+                    this.style.display = 'none';
+                }
+            };
 
             const msgDiv = document.createElement('div');
             msgDiv.className = `message ${isSelf ? 'self' : 'other'} bare-image`;
@@ -7262,11 +7339,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             lastRenderedTs = 0;
             return;
         }
-        // 临时消息（temp_开头）不更新 lastRenderedMsg，避免影响连消息判断
-        if (!String(msg.id).startsWith('temp_')) {
-            lastRenderedMsg = { convKey, from_uid: fromUid, element: msgDiv };
-            lastRenderedTs = msgTs;
-        }
+        // 临时消息（temp_开头）同样推进连消息游标：用户自己的发送会打断对方的连续消息链。
+        // 若不推进，下一条对方消息会错误地与上一条（用户发言之前的那条）连成一组，
+        // 造成「中间隔一个消息也被当连消息」的误连。（temp 消息带有真实 created_at，可安全参与判定）
+        lastRenderedMsg = { convKey, from_uid: fromUid, element: msgDiv };
+        lastRenderedTs = msgTs;
     }
 
     // 确保底部锚点始终在容器末尾（innerHTML='' 或缓存移除后需重新挂载）
@@ -7766,8 +7843,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         if (tempEl.classList.contains('consecutive-first')) newEl.classList.add('consecutive-first');
                         if (tempEl.classList.contains('consecutive-last')) newEl.classList.add('consecutive-last');
                         tempEl.replaceWith(newEl);
-                        lastRenderedMsg = { convKey: currentConv.key, from_uid: getFromUid(msg) || msg.from_uid || '', element: newEl };
-                        lastRenderedTs = msg.created_at || 0;
+                        // 仅当被替换的临时消息「仍是最后一条」时才接管游标。若期间已有其它消息（如 WS 推送）到达，
+                        // 临时消息已非末尾，游标已由那些消息正确接管，此处若强行覆盖会把后续同发送者消息误判为不连（「该连没连」）。
+                        if (lastRenderedMsg && lastRenderedMsg.element === tempEl) {
+                            lastRenderedMsg = { convKey: currentConv.key, from_uid: getFromUid(msg) || msg.from_uid || '', element: newEl };
+                            lastRenderedTs = msg.created_at || 0;
+                        }
                     }
                     seenMsgIds[currentConv.key]?.delete(tempId);
                     seenMsgIds[currentConv.key]?.add(msg.id);
@@ -7779,7 +7860,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         } else {
             // 发送失败，移除临时消息，将文本退回输入框
             console.error('[SEND] 发送失败', lastError, 'payload:', JSON.stringify(payload));
-            if (tempEl) tempEl.remove();
+            if (tempEl) { if (lastRenderedMsg && lastRenderedMsg.element === tempEl) { lastRenderedMsg = null; lastRenderedTs = 0; } tempEl.remove(); }
             seenMsgIds[currentConv.key]?.delete(tempId);
             // 将原始文本退回输入框
             if (msgType === 'text') {
@@ -8269,7 +8350,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const upRes = await apiFetch('/v1/media', { method: 'POST', body: formData });
             const upData = await upRes.json();
             if (upData.error || !upData.url) {
-                if (tempEl) tempEl.remove();
+                if (tempEl) { if (lastRenderedMsg && lastRenderedMsg.element === tempEl) { lastRenderedMsg = null; lastRenderedTs = 0; } tempEl.remove(); }
                 seenMsgIds[currentConv.key]?.delete(tempId);
                 showAlert('上传失败: ' + (upData.error || '未知错误'));
                 return;
@@ -8296,7 +8377,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             });
             const data = await res.json();
             if (data.error || !data.id) {
-                if (tempEl) tempEl.remove();
+                if (tempEl) { if (lastRenderedMsg && lastRenderedMsg.element === tempEl) { lastRenderedMsg = null; lastRenderedTs = 0; } tempEl.remove(); }
                 seenMsgIds[currentConv.key]?.delete(tempId);
                 showAlert('发送失败: ' + (data.error || '未知错误'));
                 return;
@@ -8311,8 +8392,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     if (tempEl.classList.contains('consecutive-first')) newEl.classList.add('consecutive-first');
                     if (tempEl.classList.contains('consecutive-last')) newEl.classList.add('consecutive-last');
                     tempEl.replaceWith(newEl);
-                    lastRenderedMsg = { convKey: currentConv.key, from_uid: getFromUid(msg) || msg.from_uid || '', element: newEl };
-                    lastRenderedTs = msg.created_at || 0;
+                    // 仅当被替换的临时消息「仍是最后一条」时才接管游标；若期间已有其它消息（如 WS 推送）到达，
+                    // 临时消息已非末尾，游标已由那些消息正确接管，此处若强行覆盖会把后续同发送者消息误判为不连（「该连没连」）。
+                    if (lastRenderedMsg && lastRenderedMsg.element === tempEl) {
+                        lastRenderedMsg = { convKey: currentConv.key, from_uid: getFromUid(msg) || msg.from_uid || '', element: newEl };
+                        lastRenderedTs = msg.created_at || 0;
+                    }
                 }
             }
             // 发送成功后清除引用
@@ -8323,7 +8408,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             scrollToBottom(true, true);
         } catch (error) {
             console.error(error);
-            if (tempEl) tempEl.remove();
+            if (tempEl) { if (lastRenderedMsg && lastRenderedMsg.element === tempEl) { lastRenderedMsg = null; lastRenderedTs = 0; } tempEl.remove(); }
             seenMsgIds[currentConv.key]?.delete(tempId);
             showAlert('网络错误，发送失败');
         }
@@ -8551,9 +8636,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 <div class="context-menu-divider"></div>
                 <div class="context-menu-item" data-action="quote">引用</div>
             `;
-            // 图片消息额外增加"另存为"和"收藏为表情"
+            // 图片消息额外增加"查看原图 / 另存为 / 收藏为表情"
             const msgType = msgDiv.dataset.msgType;
             if (msgType === 'image') {
+                menuHtml += `<div class="context-menu-item" data-action="view-original">查看原图</div>`;
                 menuHtml += `<div class="context-menu-item" data-action="save-image">另存为</div>`;
                 menuHtml += `<div class="context-menu-item" data-action="collect-emoji">收藏为表情</div>`;
             }
@@ -8665,11 +8751,25 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                                 showAlert(d.error || '撤回失败');
                             }
                         }).catch(() => showAlert('网络错误'));
-                } else if (action === 'save-image') {
+                } else if (action === 'view-original') {
+                    // 查看原图：优先用 dataset.original（原图直链），回退到 rawBody 的 media_url/original_url，
+                    // 最后回退当前缩略图，确保总能打开一张图。
                     const chatImg = msgDiv.querySelector('.chat-image');
-                    if (chatImg && chatImg.src) {
-                        downloadImage(chatImg.src);
+                    let origUrl = (chatImg && chatImg.dataset.original) || '';
+                    if (!origUrl) {
+                        try {
+                            const rawMsg = JSON.parse(msgDiv.dataset.rawBody || '{}');
+                            origUrl = rawMsg.media_url || rawMsg.original_url || '';
+                        } catch (e) {}
                     }
+                    if (!origUrl && chatImg) origUrl = chatImg.src;
+                    if (origUrl) openImageViewer(cachedResolveMediaUrl(origUrl));
+                } else if (action === 'save-image') {
+                    // 另存为：优先原图，回退当前缩略图
+                    const chatImg = msgDiv.querySelector('.chat-image');
+                    let dlUrl = (chatImg && chatImg.dataset.original) ? cachedResolveMediaUrl(chatImg.dataset.original) : '';
+                    if (!dlUrl && chatImg && chatImg.src) dlUrl = chatImg.src;
+                    if (dlUrl) downloadImage(dlUrl);
                 } else if (action === 'collect-emoji') {
                     // 收藏为表情：保存相对路径（如 /v1/uploads/media/xxx.jpg）
                     const rawMsg = JSON.parse(msgDiv.dataset.rawBody || '{}');
@@ -10775,7 +10875,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 '<div class="plaza-file-name">' + escapeHtml(name) + '</div>' +
                 '<div class="plaza-file-meta">' + size + (uploader ? ' · ' + uploader : '') + (time ? ' · ' + time : '') + '</div>' +
             '</div>' +
-            '<button class="btn plaza-file-dl file-download-btn" data-dl-url="' + escapeHtml(it.url || '') + '" data-dl-name="' + escapeHtml(name) + '"><i class="fa-solid fa-download"></i> 下载</button>';
+            '<button class="btn plaza-file-dl file-download-btn" title="下载" data-dl-url="' + escapeHtml(it.url || '') + '" data-dl-name="' + escapeHtml(name) + '"><i class="fa-solid fa-download"></i></button>';
         return div;
     }
 
