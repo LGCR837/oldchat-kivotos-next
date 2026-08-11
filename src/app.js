@@ -9932,6 +9932,199 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         });
     }
 
+    // ===== 蔚蓝档案点击特效（ba-click-fx，本地 vendored）=====
+    // 存储键：oc_click_fx（总开关，缺省未设置 = 开启）；oc_click_fx_params（详细参数 JSON）
+    function isBaClickFxEnabled() {
+        try { return localStorage.getItem('oc_click_fx') !== '0'; } catch (e) { return true; }
+    }
+    // 读取详细效果参数，合并默认值（用户要求：opacity 0.85、bloom.clickEmissionScale 0.65，其余走库默认）
+    function getClickFxParams() {
+        let p = {};
+        try { p = JSON.parse(localStorage.getItem('oc_click_fx_params') || '{}'); } catch (e) { p = {}; }
+        if (typeof p !== 'object' || !p) p = {};
+        if (typeof p.opacity !== 'number') p.opacity = 0.85;
+        if (!p.bloom || typeof p.bloom !== 'object') p.bloom = {};
+        if (typeof p.bloom.clickEmissionScale !== 'number') p.bloom.clickEmissionScale = 0.65;
+        // 左键/右键触发开关，默认都启动
+        if (typeof p.leftClick !== 'boolean') p.leftClick = true;
+        if (typeof p.rightClick !== 'boolean') p.rightClick = true;
+        return p;
+    }
+    // 接管库的指针接受逻辑，按「左键触发/右键触发」开关过滤鼠标按键
+    // 库默认 _acceptPointerDown 会拒绝所有非左键(e.button>0)，这里改为受开关控制
+    function installClickFxButtonGate() {
+        const fx = window.__baFx;
+        if (!fx || typeof fx._acceptPointerDown !== 'function') return;
+        fx._acceptPointerDown = function (e) {
+            if (e.pointerType === 'mouse') {
+                const p = getClickFxParams(); // 每次读取最新开关，无需重建
+                if (e.button === 0 && p.leftClick === false) return false;
+                if (e.button === 2 && p.rightClick === false) return false;
+            }
+            if (typeof this.inputFilter === 'function') return this.inputFilter(e);
+            return true;
+        };
+    }
+    // 根据开关实时创建/销毁特效；关闭即 destroy，打开即 new，避免重复实例
+    function applyClickFx() {
+        const enabled = isBaClickFxEnabled();
+        if (enabled) {
+            if (window.__baFx) return; // 已存在则跳过，避免叠加多个覆盖层
+            if (window.BAClickFX && window.BAClickFX.BAClickFX) {
+                try {
+                    window.__baFx = new window.BAClickFX.BAClickFX(getClickFxParams());
+                    installClickFxButtonGate();
+                }
+                catch (e) { console.error('[ba-click-fx] 初始化失败:', e); }
+            }
+        } else if (window.__baFx) {
+            try { if (typeof window.__baFx.destroy === 'function') window.__baFx.destroy(); } catch (e) {}
+            window.__baFx = null;
+        }
+    }
+    // 参数变更后重建实例，使新参数立即生效
+    function rebuildClickFx() {
+        if (window.__baFx) { try { window.__baFx.destroy(); } catch (e) {} window.__baFx = null; }
+        applyClickFx();
+    }
+    // 详细效果配置弹窗（带进入/退出动画）
+    function openBaFxModal() {
+        if (document.getElementById('baFxModalOverlay')) return;
+        const params = getClickFxParams();
+        function getPath(obj, path) { return path.split('.').reduce((o, k) => (o == null ? o : o[k]), obj); }
+        function setPath(obj, path, val) {
+            const keys = path.split('.'); let o = obj;
+            for (let i = 0; i < keys.length - 1; i++) { if (typeof o[keys[i]] !== 'object' || o[keys[i]] == null) o[keys[i]] = {}; o = o[keys[i]]; }
+            o[keys[keys.length - 1]] = val;
+        }
+        function persistAndApply() {
+            try { localStorage.setItem('oc_click_fx_params', JSON.stringify(params)); } catch (e) {}
+            rebuildClickFx();
+        }
+        const SLIDERS = [
+            { path: 'opacity', label: '整体透明度', min: 0.1, max: 1, step: 0.05 },
+            { path: 'scale', label: '特效尺寸', min: 0.3, max: 2, step: 0.05 },
+            { path: 'bloom.clickEmissionScale', label: '点击辉光强度', min: 0, max: 2, step: 0.05 },
+            { path: 'bloom.trailCoverageScale', label: '拖尾辉光强度', min: 0, max: 2, step: 0.05 },
+            { path: 'shards.clickCount', label: '飞溅碎片数', min: 0, max: 12, step: 1 },
+            { path: 'shards.maxCount', label: '拖尾碎片上限', min: 0, max: 100, step: 1 },
+            { path: 'shards.trailSpacing', label: '拖尾间距', min: 20, max: 300, step: 1 },
+            { path: 'rings.lifetimeMs', label: '圆环寿命(ms)', min: 100, max: 2000, step: 50 },
+            { path: 'trail.lifetimeMs', label: '拖尾寿命(ms)', min: 50, max: 1500, step: 10 },
+            { path: 'trail.width', label: '拖尾宽度', min: 0.5, max: 10, step: 0.1 },
+            { path: 'maxDpr', label: '渲染精度DPR', min: 1, max: 3, step: 0.5 }
+        ];
+        const TOGGLES = [
+            { key: 'clickEnabled', label: '点击波纹' },
+            { key: 'trailEnabled', label: '鼠标拖尾' },
+            { key: 'leftClick', label: '左键触发' },
+            { key: 'rightClick', label: '右键触发' }
+        ];
+        let html = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">' +
+            '<div style="font-size:16px;font-weight:600;color:var(--text);">详细效果配置</div>' +
+            '<button id="baFxModalClose" style="background:transparent;border:none;color:var(--secondary-text);font-size:18px;cursor:pointer;">✕</button>' +
+            '</div>';
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-color);">' +
+            '<span style="font-size:13px;color:var(--text);">主题色</span>' +
+            '<input type="color" id="fxThemeColor" value="' + (params.themeColor || '#4ca7ff') + '" style="width:48px;height:28px;border:none;background:none;cursor:pointer;">' +
+            '</div>';
+        SLIDERS.forEach(s => {
+            const cur = getPath(params, s.path);
+            const shown = (cur != null) ? cur : '默认';
+            const val = (cur != null) ? cur : ((s.min + s.max) / 2);
+            html += '<div style="padding:9px 0;border-bottom:1px solid var(--border-color);">' +
+                '<div style="display:flex;justify-content:space-between;font-size:13px;color:var(--text);margin-bottom:4px;">' +
+                '<span>' + s.label + '</span><span id="fxv_' + s.path.replace(/\./g, '_') + '">' + shown + '</span></div>' +
+                '<input type="range" id="fxs_' + s.path.replace(/\./g, '_') + '" min="' + s.min + '" max="' + s.max + '" step="' + s.step + '" value="' + val + '" style="width:100%;accent-color:var(--accent);">' +
+                '</div>';
+        });
+        TOGGLES.forEach(t => {
+            const cur = params[t.key];
+            html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border-color);">' +
+                '<span style="font-size:13px;color:var(--text);">' + t.label + '</span>' +
+                '<label class="oc-switch"><input type="checkbox" id="fxt_' + t.key + '" ' + (cur === false ? '' : 'checked') + '><span class="oc-switch-slider"></span></label>' +
+                '</div>';
+        });
+        html += '<div style="display:flex;gap:10px;margin-top:16px;">' +
+            '<button id="baFxRestoreBtn" style="flex:1;padding:9px 0;border:1px solid var(--border-color);background:var(--panel-bg);color:var(--text);border-radius:8px;cursor:pointer;font-family:inherit;font-size:13px;">恢复默认</button>' +
+            '<button id="baFxConfirmBtn" style="flex:1;padding:9px 0;border:none;background:var(--accent);color:#fff;border-radius:8px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;">确认</button>' +
+            '</div>';
+
+        const overlay = document.createElement('div');
+        overlay.className = 'custom-modal-overlay';
+        overlay.id = 'baFxModalOverlay';
+        overlay.style.zIndex = '30000';
+        const card = document.createElement('div');
+        card.className = 'custom-modal ba-fx-modal';
+        card.id = 'baFxModalCard';
+        card.style.maxWidth = '420px';
+        card.style.maxHeight = '82vh';
+        card.style.overflowY = 'auto';
+        card.style.padding = '20px 22px';
+        card.innerHTML = html;
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+
+        card.querySelector('#fxThemeColor').addEventListener('input', (e) => {
+            params.themeColor = e.target.value; persistAndApply();
+        });
+        SLIDERS.forEach(s => {
+            const id = 'fxs_' + s.path.replace(/\./g, '_');
+            const valId = 'fxv_' + s.path.replace(/\./g, '_');
+            const el = card.querySelector('#' + id);
+            const valEl = card.querySelector('#' + valId);
+            el.addEventListener('input', () => {
+                const v = (s.step >= 1) ? parseInt(el.value, 10) : parseFloat(el.value);
+                setPath(params, s.path, v);
+                valEl.textContent = v;
+                persistAndApply();
+            });
+        });
+        TOGGLES.forEach(t => {
+            const el = card.querySelector('#fxt_' + t.key);
+            el.addEventListener('change', () => { params[t.key] = el.checked; persistAndApply(); });
+        });
+
+        function closeModal() {
+            overlay.classList.add('closing');
+            card.classList.add('closing');
+            let done = false;
+            const finish = () => { if (done) return; done = true; if (overlay.parentNode) overlay.parentNode.removeChild(overlay); };
+            overlay.addEventListener('animationend', finish, { once: true });
+            card.addEventListener('animationend', finish, { once: true });
+            setTimeout(finish, 400);
+        }
+        // 恢复默认：清空本地覆盖，回到库原生默认 + 我们指定的默认，并同步 UI 控件
+        function resetParamsToDefault() {
+            try { localStorage.removeItem('oc_click_fx_params'); } catch (e) {}
+            for (const k of Object.keys(params)) delete params[k];
+            Object.assign(params, getClickFxParams()); // 纯默认（不含任何用户覆盖）
+            persistAndApply();
+            SLIDERS.forEach(s => {
+                const id = 'fxs_' + s.path.replace(/\./g, '_');
+                const valId = 'fxv_' + s.path.replace(/\./g, '_');
+                const el = card.querySelector('#' + id);
+                const valEl = card.querySelector('#' + valId);
+                if (!el) return;
+                const cur = getPath(params, s.path);
+                const shown = (cur != null) ? cur : '默认';
+                const v = (cur != null) ? cur : ((s.min + s.max) / 2);
+                el.value = v;
+                if (valEl) valEl.textContent = shown;
+            });
+            TOGGLES.forEach(t => {
+                const el = card.querySelector('#fxt_' + t.key);
+                if (el) el.checked = params[t.key] !== false;
+            });
+            const tc = card.querySelector('#fxThemeColor');
+            if (tc) tc.value = params.themeColor || '#4ca7ff';
+        }
+        card.querySelector('#baFxModalClose').addEventListener('click', closeModal);
+        card.querySelector('#baFxConfirmBtn').addEventListener('click', closeModal);
+        card.querySelector('#baFxRestoreBtn').addEventListener('click', resetParamsToDefault);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+    }
+
     function renderSettingsAppearance() {
         settingsContent.innerHTML = `
             <h3>通用</h3>
@@ -10716,12 +10909,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         settingsContent.innerHTML =
             '<h3>主题</h3>' +
             '<div class="settings-group" style="margin-bottom:14px;">' +
-                '<div class="settings-item" id="settingsThemeModeToggle">' +
+                '<div class="settings-item" id="settingsThemeModeToggle" style="cursor:pointer;">' +
                     '<span class="label">深色模式</span>' +
                     '<span class="value" id="themeModeValue"></span>' +
                 '</div>' +
-            '</div>' +
-            '<div class="settings-group" style="margin-bottom:14px;">' +
                 '<div class="settings-item" id="settingsConsecutiveMessages">' +
                     '<span class="label">连消息</span>' +
                     '<span class="value">' +
@@ -10731,7 +10922,19 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         '</label>' +
                     '</span>' +
                 '</div>' +
-                '<div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">同一发送者、间隔 5 分钟内的连续消息合并为一组，隐藏重复头像与昵称。</div>' +
+                '<div class="settings-item" id="settingsBaClickFx">' +
+                    '<span class="label">蔚蓝档案点击效果</span>' +
+                    '<span class="value">' +
+                        '<label class="oc-switch">' +
+                            '<input type="checkbox" id="baClickFxToggle">' +
+                            '<span class="oc-switch-slider"></span>' +
+                        '</label>' +
+                    '</span>' +
+                '</div>' +
+                '<div class="settings-item" id="baClickFxDetailEntry" style="display:none;cursor:pointer;">' +
+                    '<span class="label">详细效果配置</span>' +
+                    '<span class="value"><i class="fa-solid fa-chevron-right" style="color:var(--secondary-text);"></i></span>' +
+                '</div>' +
             '</div>' +
             '<div class="settings-group" style="margin-bottom:14px;">' +
                 '<button id="themeUploadBtn" class="btn primary" style="width:100%;">上传主题（.css 文件）</button>' +
@@ -10779,6 +10982,22 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 convHasMore[ck] = true;
                 fetchLatestMessages(currentConv.type, currentConv.id, ck);
             });
+        }
+
+        // 蔚蓝档案点击效果开关（设置 → 主题，与深色/连消息同块，默认开启）
+        const baToggle = document.getElementById('baClickFxToggle');
+        const baDetailEntry = document.getElementById('baClickFxDetailEntry');
+        if (baToggle) {
+            baToggle.checked = isBaClickFxEnabled();
+            baToggle.addEventListener('change', () => {
+                try { localStorage.setItem('oc_click_fx', baToggle.checked ? '1' : '0'); } catch (e) {}
+                applyClickFx();
+                if (baDetailEntry) baDetailEntry.style.display = baToggle.checked ? '' : 'none';
+            });
+        }
+        if (baDetailEntry) {
+            baDetailEntry.style.display = isBaClickFxEnabled() ? '' : 'none';
+            baDetailEntry.addEventListener('click', () => { openBaFxModal(); });
         }
 
         renderThemeList(all, savedId);
@@ -11051,6 +11270,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     });
     // 默认渲染
     renderSettingsPage('profile');
+
+    // 蔚蓝档案点击特效：按设置初始化（默认开启）
+    applyClickFx();
 
     // ===== 频道系统（发现页 + 聊天侧边栏）=====
     // 说明：客户端不主动发帖（官方频道为只读内容流），只做 发现/查看/订阅/表情回应。

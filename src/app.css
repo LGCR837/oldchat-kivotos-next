@@ -2107,6 +2107,12 @@ body::-webkit-scrollbar {
 	to { transform: translateY(0); opacity: 1; }
 }
 
+/* 弹窗退出动画（点空白处 / ✕ 关闭时） */
+.custom-modal-overlay.closing { animation: modalFadeOut 0.18s ease forwards; }
+.custom-modal.closing { animation: modalSlideOut 0.18s ease forwards; }
+@keyframes modalFadeOut { from { opacity: 1; } to { opacity: 0; } }
+@keyframes modalSlideOut { from { transform: translateY(0); opacity: 1; } to { transform: translateY(-20px); opacity: 0; } }
+
 .custom-modal-title {
 	font-size: 16px;
 	font-weight: 500;
@@ -3003,6 +3009,18 @@ body::-webkit-scrollbar {
     user-select: none;
 }
 
+/* 聊天区域：非文本区域禁止选中（消息文本与输入框仍可选择/复制） */
+.chat-area {
+    -webkit-user-select: none;
+    user-select: none;
+}
+.chat-area .message-bubble,
+.chat-area .input-area textarea,
+.chat-area .input-area input {
+    -webkit-user-select: text;
+    user-select: text;
+}
+
 /* ===== 联系人页面样式 ===== */
 .sidebar-panel[data-panel="contacts"] {
     overflow-y: auto;
@@ -3104,6 +3122,21 @@ body::-webkit-scrollbar {
     flex: 1;
     overflow-y: auto;
     padding: 20px 24px;
+    /* 配置页面隐藏滚动条（仍可用滚轮/触控板滚动） */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+.settings-content::-webkit-scrollbar {
+    display: none;
+}
+
+/* 详细效果配置弹窗：隐藏滚动条（仍可用滚轮滚动） */
+.ba-fx-modal {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+.ba-fx-modal::-webkit-scrollbar {
+    display: none;
 }
 .settings-content h3 {
     font-size: 16px;
