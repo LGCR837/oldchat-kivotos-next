@@ -9965,6 +9965,42 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             return true;
         };
     }
+    // 选中边界约束：昵称(.message-sender)与文本气泡(.message-bubble)各自为独立选中单元，
+    // 不允许拖选跨界到相邻消息、也不允许昵称↔文本互穿。
+    // 做法：监听 selectionchange，从实时选区的「起点」推断所属单元，若「终点」落在不同单元，
+    // 则把终点夹回起点单元的边界（靠近终点一侧）。全部引擎通用（不依赖 user-select:contain）。
+    // 容器 .chat-area 已 user-select:none，故头像/时间/工具栏不会误选，且本逻辑仅作用于聊天区。
+    function setupSelectionBoundary() {
+        function closestUnit(node) {
+            if (!node) return null;
+            const el = node.nodeType === 3 ? node.parentElement : node;
+            if (!el || !el.closest) return null;
+            return el.closest('.message-bubble, .message-sender');
+        }
+        document.addEventListener('selectionchange', function () {
+            const sel = window.getSelection && window.getSelection();
+            if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+            const range = sel.getRangeAt(0);
+            const chat = document.querySelector('.chat-area');
+            if (!chat || !chat.contains(range.commonAncestorContainer)) return;
+            const startUnit = closestUnit(range.startContainer);
+            if (!startUnit) return; // 起点不在任何单元（如从空白区起选），不干预
+            const endUnit = closestUnit(range.endContainer);
+            if (endUnit === startUnit) return; // 未跨界，放行
+            try {
+                const unitRange = document.createRange();
+                unitRange.selectNodeContents(startUnit);
+                const rel = unitRange.comparePoint(range.endContainer, range.endOffset);
+                const bNode = rel <= 0 ? unitRange.startContainer : unitRange.endContainer;
+                const bOff = rel <= 0 ? unitRange.startOffset : unitRange.endOffset;
+                const newRange = document.createRange();
+                newRange.setStart(range.startContainer, range.startOffset);
+                newRange.setEnd(bNode, bOff);
+                sel.removeAllRanges();
+                sel.addRange(newRange);
+            } catch (e) { /* 忽略异常，避免影响正常选中 */ }
+        });
+    }
     // 根据开关实时创建/销毁特效；关闭即 destroy，打开即 new，避免重复实例
     function applyClickFx() {
         const enabled = isBaClickFxEnabled();
@@ -11273,6 +11309,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
     // 蔚蓝档案点击特效：按设置初始化（默认开启）
     applyClickFx();
+
+    // 聊天选中边界约束：昵称/文本各自独立，不允许拖选跨界
+    setupSelectionBoundary();
 
     // ===== 频道系统（发现页 + 聊天侧边栏）=====
     // 说明：客户端不主动发帖（官方频道为只读内容流），只做 发现/查看/订阅/表情回应。

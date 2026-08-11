@@ -3014,6 +3014,11 @@ body::-webkit-scrollbar {
     -webkit-user-select: none;
     user-select: none;
 }
+/* 昵称与文本允许选中（text 在全部引擎通用，保证一定可选中）。
+   选中「不跨界」由 app.js 的 setupSelectionBoundary() 通过 selectionchange 兜底：
+   把选区钳制在起点所在的单条消息气泡或单个昵称内，不允许拖到相邻消息或昵称↔文本互穿。
+   容器 .chat-area 仍为 user-select:none，故头像/时间/工具栏/按钮不会误选。 */
+.chat-area .message-sender,
 .chat-area .message-bubble,
 .chat-area .input-area textarea,
 .chat-area .input-area input {
