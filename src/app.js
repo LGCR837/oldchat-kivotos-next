@@ -312,6 +312,14 @@ document.addEventListener('error', function(e) {
 
 function resolveMediaUrl(url) {
     if (!url) return url;
+    // 频道私有媒体 scheme：channel-private:<assetId>[.ext] → 文件资产下载端点
+    // 官方文档：频道媒体前缀映射到 /v2/files/download/{id}（files 域名，仅 Bearer 鉴权）
+    if (typeof url === 'string' && url.startsWith('channel-private:')) {
+        let asset = url.slice('channel-private:'.length);
+        // nanoid 资产 ID 本身无扩展名，去掉可能的 .jpg/.png 等提示后缀
+        asset = asset.replace(/\.[a-z0-9]+$/i, '');
+        return 'http://files.mcl0.dpdns.org/v2/files/download/' + encodeURIComponent(asset);
+    }
     if (/^(https?:|data:|blob:)/.test(url)) return url;
     if (MEDIA_BASE && url.startsWith('/')) return MEDIA_BASE + url;
     return url;
@@ -1590,7 +1598,7 @@ const V1_TO_V2 = {
     '/v1/direct/send': '/v2/direct/send',
     '/v1/direct/read': '/v2/direct/read',
     '/v1/direct/burn/open': '/v2/direct/burn/open',
-    '/v1/direct/messages/v2': '/v2/direct/messages',
+    '/v1/direct/messages/v2': '/v2/direct/messages/v2',
     // 群组
     '/v1/groups/messages/v2': '/v2/groups/messages/v2',
     '/v1/groups/read': '/v2/groups/read',
@@ -1658,7 +1666,10 @@ const V1_TO_V2 = {
     '/v1/channels/unsubscribe': '/v2/channels/unsubscribe',
     '/v1/channels/notifications': '/v2/channels/notifications',
     '/v1/channels/discover': '/v2/channels/discover',
+    '/v1/channels/posts/after': '/v2/channels/posts/after',
     '/v1/channels/posts/send': '/v2/channels/posts/send',
+    '/v1/channels/reactions/toggle': '/v2/channels/reactions/toggle',
+    '/v1/channels/read': '/v2/channels/read',
     '/v1/files/check': '/v2/files/check',
     '/v1/files/upload': '/v2/files/upload',
     '/v1/resources/upload': '/v2/resources/upload'
@@ -1823,7 +1834,9 @@ async function apiFetch(url, options = {}) {
     // 接口版本模式（设置 → 通用 → 接口版本）。决定 v1/v2 尝试顺序与回退策略：
     //  v2优先(默认): [v2, v1]   v1优先: [v1, v2]   仅v1: [v1]   仅v2: [v2]
     const mode = getApiVersionMode();
-    const hasV2 = mapToV2(url) !== url;
+    // 直连 /v2/ 路径（频道等直接以 /v2/ 调用的端点）也视为 v2，必须走签名；
+    // 否则 hasV2 为 false → 当作 v1 发送（不带 X-Session）→ 服务端 401 missing session 死循环
+    const hasV2 = url.startsWith('/v2/') || mapToV2(url) !== url;
     const method = (options.method || 'GET').toUpperCase();
 
     // 仅v2 但该接口无 v2 版本 → 直接报错（"如果没有这个接口直接报错"）
