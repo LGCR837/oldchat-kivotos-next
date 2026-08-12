@@ -1768,6 +1768,25 @@ function getApiVersionMode() {
     return m;
 }
 
+// 请求模式（设置 → 通用 → 请求模式）：'WebSocket优先'(默认) / '仅WebSocket' / '仅轮询'
+//  - WebSocket优先(默认)：默认走 WS；WS 连续失败达阈值后自动降级为轮询，并每 60s 重试一次 WS，
+//    重试成功即自动切回 WS 并停止轮询
+//  - 仅WebSocket：只用 WS（指数退避无限重连），永不启用轮询
+//  - 仅轮询：完全不建 WS 连接，只用定时轮询
+function getRequestMode() {
+    let m = 'WebSocket优先';
+    try { m = localStorage.getItem('oc_request_mode') || 'WebSocket优先'; } catch (e) {}
+    if (!['WebSocket优先', '仅WebSocket', '仅轮询'].includes(m)) m = 'WebSocket优先';
+    return m;
+}
+
+// 当前是否处于「轮询工作态」（仅轮询模式，或 WebSocket优先 降级后）。由下方 WS/轮询引擎维护。
+// 仅影响请求 UA：轮询态用独立 UA 便于服务端区分与统计，其他模式 UA 保持不变。
+let ocPollingActive = false;
+function ocUserAgent() {
+    return ocPollingActive ? 'OldChatForKivotosNextPollingMode' : 'OldChatForKivotosNext';
+}
+
 // v2 请求签名头（HMAC-SHA256，密钥 = ECDH 握手派生的 wsMacKey）
 // 官方文档 §4.4：sign = base64url(HMAC-SHA256(macKey, signingString))
 // signingString = METHOD + "\n" + PATH + "\n" + TS + "\n" + NONCE
@@ -1936,7 +1955,7 @@ async function apiFetch(url, options = {}) {
         // 每次尝试用独立 headers 副本，避免 v2 专属头泄漏到 v1 尝试
         const attemptOptions = Object.assign({}, options);
         attemptOptions.headers = Object.assign({}, options.headers || {});
-        attemptOptions.headers['User-Agent'] = 'OldChatForKivotosNext';
+        attemptOptions.headers['User-Agent'] = ocUserAgent();
         const token = localStorage.getItem('oc_access_token');
         if (token) attemptOptions.headers['Authorization'] = 'Bearer ' + token;
 
@@ -2090,7 +2109,7 @@ async function _fetchWithCandidates(url, options, strictV2) {
                 try {
                     const refreshRes = await tauriHttpFetch(BACKEND_CANDIDATES[0] + '/v1/auth/refresh', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'User-Agent': 'OldChatForKivotosNext' },
+                        headers: { 'Content-Type': 'application/json', 'User-Agent': ocUserAgent() },
                         body: JSON.stringify({ refresh_token: refreshToken })
                     });
                     if (refreshRes.ok) {
@@ -5022,17 +5041,35 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     loadBuiltinThemeMeta();   // 读取 app.css 头部的 @theme 名称/简介，供设置页显示
     refreshUserPlugins();     // 启动加载已启用的用户插件
 
+    // 超时保护：promise 超过 ms 毫秒仍未 settle 则 reject，避免单条请求卡死导致整段逻辑挂起
+    function withTimeout(promise, ms, label) {
+        return new Promise((resolve, reject) => {
+            const t = setTimeout(() => reject(new Error(label + ' 加载超时（' + ms + 'ms）')), ms);
+            Promise.resolve(promise).then(
+                v => { clearTimeout(t); resolve(v); },
+                e => { clearTimeout(t); reject(e); }
+            );
+        });
+    }
+
     async function loadContacts() {
         try {
-            const [frRes, grRes] = await Promise.all([
-                apiFetch('/v1/friends'),
-                apiFetch('/v1/groups/list')
-            ]);
-            const frData = await frRes.json();
-            const grData = await grRes.json();
-            if (frData.error) { showAlert(frData.error); return; }
+            let frData = null, grData = null;
+            // 好友 / 群聊各自独立加载并加超时保护：此前用 Promise.all，任一侧接口在途时被重载打断
+            // （回调被 orphan）会永不 resolve，导致 renderContacts 永不执行、整个联系人列表空白。
+            // 现在两侧互不阻塞——一侧卡死/失败不影响另一侧渲染，最多缺一侧数据而不是全空。
+            try {
+                const frRes = await withTimeout(apiFetch('/v1/friends'), 15000, '好友列表');
+                frData = await frRes.json().catch(() => null);
+            } catch (e) { console.error('[contacts] 好友列表加载失败:', e); }
+            try {
+                const grRes = await withTimeout(apiFetch('/v1/groups/list'), 15000, '群聊列表');
+                grData = await grRes.json().catch(() => null);
+            } catch (e) { console.error('[contacts] 群聊列表加载失败:', e); }
+            if (!frData && !grData) { console.error('[contacts] 好友与群聊列表均加载失败'); return; }
+            if (frData && frData.error) { showAlert(frData.error); return; }
             contacts = {
-                friends: (frData.friends || []).map(f => ({
+                friends: (frData && frData.friends || []).map(f => ({
                     uid: getUid(f),
                     displayUid: getDisplayUid(f),
                     name: f.display_name || f.username || getUid(f),
@@ -5042,7 +5079,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     remark_name: f.remark_name || '',
                     user_title: f.user_title || ''
                 })),
-                groups: (grData.groups || []).map(g => ({
+                groups: (grData && grData.groups || []).map(g => ({
                     id: g.group_id,
                     name: g.name,
                     avatar: g.avatar_url || '',
@@ -5098,27 +5135,34 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const dData = await dRes.json();
             const gData = await gRes.json();
             if (dData.error || gData.error) return;
-            // 统计私聊未读（按 from_ncuid 分组）
+            // 统计私聊未读（按 from_ncuid 分组），并缓存每个会话最新一条未读消息用于通知预览
             const directCount = {};
+            const directLast = {};
             (dData.messages || []).forEach(m => {
                 const uid = m.from_ncuid || m.from_uid;
                 directCount[uid] = (directCount[uid] || 0) + 1;
+                // 取 created_at 最大者作为预览（最新到达的消息）
+                if (!directLast[uid] || (m.created_at || 0) > (directLast[uid].created_at || 0)) directLast[uid] = m;
             });
             for (const [uid, count] of Object.entries(directCount)) {
                 const convKey = `direct:${uid}`;
                 unreadCounts[convKey] = count;
                 updateUnreadBadge(convKey, count);
+                if (directLast[uid]) unreadLastMsg[convKey] = directLast[uid];
             }
-            // 统计群聊未读（按 group_id 分组）
+            // 统计群聊未读（按 group_id 分组），同样缓存最新一条
             const groupCount = {};
+            const groupLast = {};
             (gData.messages || []).forEach(m => {
                 const gid = m.group_id;
                 groupCount[gid] = (groupCount[gid] || 0) + 1;
+                if (!groupLast[gid] || (m.created_at || 0) > (groupLast[gid].created_at || 0)) groupLast[gid] = m;
             });
             for (const [groupId, count] of Object.entries(groupCount)) {
                 const convKey = `group:${groupId}`;
                 unreadCounts[convKey] = count;
                 updateUnreadBadge(convKey, count);
+                if (groupLast[groupId]) unreadLastMsg[convKey] = groupLast[groupId];
             }
         } catch (e) { console.error(e); }
     }
@@ -5143,34 +5187,146 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         wsReconnectTimer = setTimeout(initWebSocket, delay);
     }
 
-    // 群消息增量同步：WS 断线重连后，用最后渲染消息的时间戳补齐漏掉的群消息
-    // 端点：GET /v1/groups/messages/after?group_id=<GID>&after=<秒级时间戳>（v1.4.x diff §2.2）
-    async function syncGroupAfterReconnect() {
-        if (!currentConv || currentConv.type !== 'group') return;
-        const after = lastRenderedTs || 0;
-        if (!after) return; // 当前会话还没有渲染过消息，无从增量
-        const groupId = currentConv.id;
-        const convKey = currentConv.key;
+    // ===== 请求模式引擎（WebSocket / 轮询）=====
+    // 见顶层 getRequestMode()。WebSocket优先 下 WS 连续失败达阈值 → 降级轮询 + 每 60s 重试 WS。
+    const WS_FAIL_THRESHOLD = 3;         // 连续失败次数阈值（达到即降级）
+    const WS_RETRY_WHEN_POLLING = 60000; // 降级后 WS 重试间隔（60s）
+    const POLL_INTERVAL = 5000;          // 轮询间隔
+    let wsConsecutiveFails = 0;
+    let pollTimer = null;
+    let wsRetryTimer = null;
+    let pollInFlight = false;
+    let wsManualClose = false; // 主动关闭（切模式/登出）时不触发失败计数与重连
+    // 轮询新消息通知：缓存每个会话「最新的未读消息」用于构造预览，并比对上轮未读增量
+    let unreadLastMsg = {};     // convKey -> 该会话最近一条未读消息对象
+    let prevPollUnread = {};    // convKey -> 上一轮 poll 时的未读数（用于增量检测）
+    let pollNotifPrimed = false;// 首轮 poll 只建立基线、不弹通知（避免进入轮询模式时把存量未读全弹一遍）
+
+    // 轮询一次：补齐当前会话消息（私聊/群聊同路，fetchLatestMessages 自带去重增量追加）+ 刷新未读红点
+    async function pollOnce() {
+        if (pollInFlight) return;
+        if (!localStorage.getItem('oc_access_token')) return;
+        pollInFlight = true;
         try {
-            const res = await apiFetch(`/v1/groups/messages/after?group_id=${encodeURIComponent(groupId)}&after=${after}`);
-            const data = await res.json();
-            if (data.error || !Array.isArray(data.messages)) return;
-            // 只保留时间在 after 之后、且未渲染过的消息，避免与实时推送重复
-            const existing = new Set();
-            messagesContainer.querySelectorAll('.message[data-msg-id]').forEach(el => {
-                if (el.dataset.msgId) existing.add(el.dataset.msgId);
-            });
-            const newMsgs = (data.messages || []).filter(m => m.id && (m.created_at || 0) > after && !existing.has(m.id));
-            if (!newMsgs.length) return;
-            const seen = seenMsgIds[convKey] || new Set();
-            newMsgs.forEach(m => appendMessage(m, convKey, seen));
-            scrollToBottom(true, true);
-            // 更新会话最后时间戳
-            const maxTs = newMsgs.reduce((mx, m) => Math.max(mx, m.created_at || 0), 0);
-            if (maxTs > lastRenderedTs) lastRenderedTs = maxTs;
-            console.log('[WS] 群增量同步补回 ' + newMsgs.length + ' 条消息');
+            if (currentConv) {
+                await fetchLatestMessages(currentConv.type, currentConv.id, currentConv.key, true);
+            }
+            await loadUnreadCounts();
+            notifyPollNewMessages();
         } catch (e) {
-            console.warn('[WS] 群增量同步失败:', e);
+            console.warn('[Poll] 轮询失败:', e);
+        } finally {
+            pollInFlight = false;
+        }
+    }
+
+    // 轮询模式新消息通知：比对上轮未读增量，对真正新增的消息弹桌面通知（标题/预览格式与 WS 一致）
+    function notifyPollNewMessages() {
+        if (!pollNotifPrimed) {
+            // 首轮只建立基线，避免进入轮询模式时把存量未读全部弹一遍
+            prevPollUnread = Object.assign({}, unreadCounts);
+            pollNotifPrimed = true;
+            return;
+        }
+        for (const convKey of Object.keys(unreadCounts)) {
+            const now = unreadCounts[convKey] || 0;
+            const prev = prevPollUnread[convKey] || 0;
+            if (now <= prev) continue; // 未增加即无新消息（减少=已读，也不弹）
+            if (currentConv && currentConv.key === convKey) continue; // 正在看的会话不弹（消息已在界面里）
+            const m = unreadLastMsg[convKey];
+            if (!m) continue;
+            const fromUid = getFromUid(m);
+            if (isSelfUid(fromUid)) continue;
+            if (convKey.indexOf('group:') === 0) {
+                const gid = convKey.slice('group:'.length);
+                const grp = contacts.groups.find(g => g.id === gid);
+                notifyNewMessage(((grp && grp.name) || gid) + ' · ' + lookupName(fromUid), messagePreview(m));
+            } else {
+                notifyNewMessage(lookupName(fromUid), messagePreview(m));
+            }
+        }
+        prevPollUnread = Object.assign({}, unreadCounts);
+    }
+
+    function startPolling() {
+        ocPollingActive = true; // 切换请求 UA → OldChatForKivotosNextPollingMode
+        pollNotifPrimed = false; // 重置基线，下一轮 poll 重新建立（避免进入轮询时把存量未读全弹）
+        prevPollUnread = {};
+        if (pollTimer) return;
+        console.log('[Poll] 轮询模式启动，间隔 ' + POLL_INTERVAL + 'ms，UA=OldChatForKivotosNextPollingMode');
+        pollTimer = setInterval(pollOnce, POLL_INTERVAL);
+        pollOnce();
+    }
+
+    function stopPolling() {
+        ocPollingActive = false; // UA 恢复 OldChatForKivotosNext
+        if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            console.log('[Poll] 轮询模式停止');
+        }
+    }
+
+    function stopWsRetry() {
+        if (wsRetryTimer) { clearInterval(wsRetryTimer); wsRetryTimer = null; }
+    }
+
+    // 降级为轮询，并每 60s 重试一次 WS（成功后由 onopen 自动切回并停止轮询）
+    function degradeToPolling() {
+        startPolling();
+        if (wsRetryTimer) return;
+        wsRetryTimer = setInterval(() => {
+            if (getRequestMode() !== 'WebSocket优先') return;
+            console.log('[WS] 轮询降级中，60s 定时重试 WS...');
+            initWebSocket();
+        }, WS_RETRY_WHEN_POLLING);
+    }
+
+    // WS 断开/建连失败的统一入口：按当前请求模式决定「指数退避重连」还是「降级轮询」
+    function onWsFailure() {
+        if (wsManualClose) { wsManualClose = false; return; }
+        const mode = getRequestMode();
+        if (mode === '仅轮询') return; // 该模式本就不用 WS
+        wsConsecutiveFails++;
+        if (mode === 'WebSocket优先' && wsConsecutiveFails >= WS_FAIL_THRESHOLD) {
+            console.warn('[WS] 连续失败 ' + wsConsecutiveFails + ' 次 → 降级为轮询模式，每 60s 重试 WS');
+            degradeToPolling();
+            return; // 后续重试交给 60s 定时器，不再叠加指数退避
+        }
+        scheduleWsReconnect();
+    }
+
+    // 应用请求模式（启动时 & 设置里切换时调用），即时生效
+    function applyRequestMode() {
+        const mode = getRequestMode();
+        wsConsecutiveFails = 0;
+        stopWsRetry();
+        if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+        wsReconnectAttempts = 0;
+        if (mode === '仅轮询') {
+            if (ws) { wsManualClose = true; try { ws.close(); } catch (e) {} ws = null; }
+            startPolling();
+        } else {
+            stopPolling();
+            if (!ws) initWebSocket();
+        }
+        console.log('[请求模式] 当前为「' + mode + '」');
+    }
+    window.__ocApplyRequestMode = applyRequestMode;
+
+    // WS 断线重连后补齐漏掉的消息：群聊 + 私聊都补（此前仅补群聊，私聊断线期间的消息会丢）。
+    // 统一走 fetchLatestMessages（最新一页 offset=0 + 按 msg-id 去重增量追加），不用
+    // /v1/groups/messages/after —— 该 after 端点有 Bug，已在历史迭代中回退（见 fetchLatestMessages 注释）。
+    // 同时刷新未读红点，保证非当前会话在断线期间累积的未读也能显示出来。
+    async function syncAfterReconnect() {
+        try {
+            if (currentConv) {
+                await fetchLatestMessages(currentConv.type, currentConv.id, currentConv.key);
+            }
+            await loadUnreadCounts();
+            console.log('[WS] 重连后已补拉当前会话消息与未读计数');
+        } catch (e) {
+            console.warn('[WS] 重连补拉失败:', e);
         }
     }
 
@@ -5354,6 +5510,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     }
 
     async function initWebSocket() {
+        // 仅轮询模式：完全不建立 WS 连接
+        if (getRequestMode() === '仅轮询') return;
         try {
             await ensureWsSession();
             const token = localStorage.getItem('oc_access_token');
@@ -5364,7 +5522,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             ws.onopen = () => {
                 console.log('[WS] connected');
                 wsReconnectAttempts = 0; // 连接成功，重置重连计数
-                syncGroupAfterReconnect(); // 断线重连后补齐漏掉的群消息
+                wsConsecutiveFails = 0;  // 重置失败计数（降级判定用）
+                stopWsRetry();           // 若处于降级重试中：WS 已恢复，停掉 60s 重试
+                stopPolling();           // WS 恢复 → 退出轮询态，UA 切回 OldChatForKivotosNext
+                syncAfterReconnect();    // 断线重连后补齐漏掉的群聊 + 私聊消息与未读
             };
             ws.onmessage = async (event) => {
                 try {
@@ -5393,14 +5554,14 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     typingIndicator.style.display = 'none';
                     typingIndicator.innerHTML = '';
                 }
-                scheduleWsReconnect();
+                onWsFailure(); // 按请求模式决定：指数退避重连 / 降级轮询
             };
             ws.onerror = (e) => {
                 console.error('[WS] error:', e);
             };
         } catch (e) {
             console.error('[WS] init failed:', e);
-            scheduleWsReconnect();
+            onWsFailure();
         }
     }
 
@@ -6893,11 +7054,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // 后台拉取最新消息（带请求 ID 防竞态）
     // 同步完成后丢弃旧缓存，用最新消息重建 DOM，只缓存最新一页
     let fetchLatestReqId = 0;
-    async function fetchLatestMessages(type, id, convKey) {
+    // quiet=true：不显示「同步中」指示器（轮询模式每 5s 调用一次，否则指示器会持续闪烁）
+    async function fetchLatestMessages(type, id, convKey, quiet) {
         const PAGE_SIZE = 30;
         const reqId = ++fetchLatestReqId;
         // 显示同步中指示器
-        if (syncIndicator) syncIndicator.style.display = '';
+        if (!quiet && syncIndicator) syncIndicator.style.display = '';
         try {
             // 群 / 私聊统一：拉最新一页（offset=0）。群消息同步不做 seq 增量续拉
             // （/v2/groups/messages/after 接口有 Bug，已回退为统一的最新一页拉取）。
@@ -10021,8 +10183,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             }
         }
     });
-    // 连接 WebSocket
-    initWebSocket();
+    // 按「请求模式」建立实时链路（WS 或轮询）
+    try { applyRequestMode(); } catch (e) { console.error('[请求模式] 初始化失败:', e); }
 
     // ===== 设置页面 =====
     let currentSettingsTab = 'profile';
@@ -10356,6 +10518,19 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         </select>
                     </span>
                 </div>
+                <div class="settings-item" id="settingsRequestMode">
+                    <span class="label">请求模式</span>
+                    <span class="value">
+                        <select id="requestModeSelect" style="max-width:170px;padding:4px 8px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;cursor:pointer;">
+                            <option value="WebSocket优先">WebSocket优先（默认）</option>
+                            <option value="仅WebSocket">仅WebSocket</option>
+                            <option value="仅轮询">仅轮询</option>
+                        </select>
+                    </span>
+                </div>
+                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
+                    WebSocket优先：默认走 WebSocket，连续失败 3 次后自动降级为轮询，并每 60 秒重试 WebSocket，恢复后自动切回。仅WebSocket：只用 WebSocket（断线指数退避重连）。仅轮询：不建立 WebSocket，每 5 秒轮询一次。轮询期间请求 UA 为 <span style="color:var(--text);">OldChatForKivotosNextPollingMode</span>，其他模式保持 OldChatForKivotosNext。
+                </div>
             </div>
             <h3 style="margin-top:20px;">侧边栏</h3>
             <div class="settings-group">
@@ -10434,6 +10609,16 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 localStorage.setItem('oc_api_version', apiSel.value);
                 try { v2FailedPaths.clear(); } catch (e) {} // 切换后重置 v2 端点熔断，允许重新尝试
                 if (typeof showAlert === 'function') showAlert('接口版本已切换为「' + apiSel.value + '」，后续请求即时生效');
+            });
+        }
+        // 请求模式开关（设置 → 通用 → 请求模式）：切换后立即重建实时链路
+        const reqSel = document.getElementById('requestModeSelect');
+        if (reqSel) {
+            reqSel.value = getRequestMode();
+            reqSel.addEventListener('change', () => {
+                localStorage.setItem('oc_request_mode', reqSel.value);
+                if (typeof window.__ocApplyRequestMode === 'function') window.__ocApplyRequestMode();
+                if (typeof showAlert === 'function') showAlert('请求模式已切换为「' + reqSel.value + '」，已即时生效');
             });
         }
         // 重点分区开关（设置 → 通用 → 侧边栏 → 重点分区，默认关闭）
