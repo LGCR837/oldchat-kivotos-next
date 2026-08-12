@@ -152,33 +152,24 @@ const IS_TAURI = _detectIsTauri();
         invoke('close_window').catch(function(err) { console.error('[Tauri] close_window:', err); });
     });
 
-    // 其他面板的窗口控制（联系人、设置）
-    function bindWinControls(prefix) {
-        var minBtn = document.getElementById(prefix + 'WinMinBtn');
-        var maxBtn = document.getElementById(prefix + 'WinMaxBtn');
-        var closeBtn = document.getElementById(prefix + 'WinCloseBtn');
-        if (minBtn) minBtn.addEventListener('click', function() { invoke('minimize_window').catch(function(){}); });
-        if (maxBtn) maxBtn.addEventListener('click', function() { invoke('toggle_maximize_window').then(syncMaximizeState).catch(function(){}); });
-        if (closeBtn) closeBtn.addEventListener('click', function() { invoke('close_window').catch(function(){}); });
-    }
-    bindWinControls('contacts');
-    bindWinControls('settings');
-    bindWinControls('musicWin');
-    bindWinControls('discover');
-    bindWinControls('courtWin');
-    bindWinControls('plaza');
-
-    // CIP 调试器 overlay：最小化/最大化同普通窗口，关闭键只关 overlay
-    (function bindCipWinControls() {
-        var minBtn = document.getElementById('cipWinMinBtn');
-        var maxBtn = document.getElementById('cipWinMaxBtn');
-        var closeBtn = document.getElementById('cipWinCloseBtn');
-        if (minBtn) minBtn.addEventListener('click', function() { invoke('minimize_window').catch(function(){}); });
-        if (maxBtn) maxBtn.addEventListener('click', function() { invoke('toggle_maximize_window').then(syncMaximizeState).catch(function(){}); });
-        if (closeBtn) closeBtn.addEventListener('click', function() {
-            if (window.CipController && typeof window.CipController.close === 'function') window.CipController.close();
-        });
-    })();
+    // 其他面板的窗口控制（联系人/设置/音乐/发现/法庭/广场/小程序）
+    // 用「事件委托」统一处理：在 document 上挂一个监听，按被点按钮的 id 派发对应 Rust 命令。
+    // 不依赖各面板按钮在绑定时的存在时机——法庭/音乐等面板按钮即使晚于初始化出现也能正常响应。
+    document.addEventListener('click', function (e) {
+        var btn = e.target && e.target.closest ? e.target.closest('.win-ctrl-btn') : null;
+        if (!btn) return;
+        var id = btn.id || '';
+        // CIP 小程序：最小化/最大化同普通窗口，关闭键只关 overlay
+        if (id.indexOf('cipWin') === 0) {
+            if (id === 'cipWinMinBtn') invoke('minimize_window').catch(function (err) { console.error('[Tauri] minimize_window:', err); });
+            else if (id === 'cipWinMaxBtn') invoke('toggle_maximize_window').then(syncMaximizeState).catch(function (err) { console.error('[Tauri] toggle_maximize_window:', err); });
+            else if (id === 'cipWinCloseBtn' && window.CipController && typeof window.CipController.close === 'function') window.CipController.close();
+            return;
+        }
+        if (id.endsWith('WinMinBtn')) invoke('minimize_window').catch(function (err) { console.error('[Tauri] minimize_window:', err); });
+        else if (id.endsWith('WinMaxBtn')) invoke('toggle_maximize_window').then(syncMaximizeState).catch(function (err) { console.error('[Tauri] toggle_maximize_window:', err); });
+        else if (id.endsWith('WinCloseBtn')) invoke('close_window').catch(function (err) { console.error('[Tauri] close_window:', err); });
+    });
 
     // 监听窗口尺寸变化（拖动边缘最大化 / 系统快捷键还原等场景）
     window.addEventListener('resize', syncMaximizeState);
@@ -2429,6 +2420,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // 发现页子页面（除音乐）自绘滚动条：与聊天区一致，隐藏原生滚动条、用 dumogu 接管
+    const subScrollbars = [];
     function initSubScrollbar(panelName, scrollSel) {
         const panel = document.querySelector('.main-panel[data-panel="' + panelName + '"]');
         const scroll = panel && panel.querySelector(scrollSel);
@@ -2437,6 +2429,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const sb = new window['dumogu-scrollbar'].DumoguScrollbar({ keepShow: true });
         sb.bind(scroll);
         sb.mount(panel);
+        subScrollbars.push(sb);
         // 内容动态变化时刷新滚动条位置/尺寸，避免错位
         const mo = new MutationObserver(function () {
             try { sb.update(); } catch (e) {}
@@ -2447,6 +2440,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     initSubScrollbar('court', '.court-detail');
     initSubScrollbar('plaza', '.plaza-files');
     initSubScrollbar('cip', '.cip-run-area');
+    // 窗口尺寸变化（最大化/还原/拖拽边缘）时刷新自绘滚动条几何，避免轨道错位
+    let subSbResizeRaf = 0;
+    window.addEventListener('resize', function () {
+        if (subSbResizeRaf) cancelAnimationFrame(subSbResizeRaf);
+        subSbResizeRaf = requestAnimationFrame(function () {
+            subScrollbars.forEach(function (sb) { try { sb.update(); } catch (e) {} });
+        });
+    });
 
     const quotePreview = document.getElementById('quotePreview');
     const quotePreviewText = quotePreview.querySelector('.quote-preview-text');
@@ -2504,6 +2505,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // 右侧主面板淡入淡出
         mainPanels.forEach(p => p.classList.toggle('active', p.dataset.panel === tabName));
+
+        // 子页面自绘滚动条在面板「变为可见」时重算几何：法庭/广场/小程序等非默认面板在
+        // DOMContentLoaded 挂载滚动条时自身处于隐藏态，dumogu 拿到的滚动容器矩形是错的，
+        // 轨道位置/长度会算歪。面板激活（布局就绪）后刷新一次即可归位。
+        if (subScrollbars.length) {
+            requestAnimationFrame(function () {
+                subScrollbars.forEach(function (sb) { try { sb.update(); } catch (e) {} });
+            });
+        }
 
         // 发现页子页面（除音乐）切换时内容简易颜色淡入
         if (tabName === 'discover' || tabName === 'court' || tabName === 'plaza' || tabName === 'cip') {
@@ -11902,21 +11912,74 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         return [];
     }
 
+    // 状态/判决中文标签
+    function courtStatusLabel(s) {
+        if (!s) return '';
+        const m = { pending_review: '审理中', reviewing: '审理中', open: '进行中', closed: '已结案', locked: '已锁定', resolved: '已处理' };
+        return m[s] || s;
+    }
+    function courtVerdictLabel(v) {
+        if (!v) return '';
+        if (v === 'ban') return '建议封禁';
+        if (v === 'keep') return '建议保留';
+        return v;
+    }
+    // unix 秒 → 本地日期时间字符串
+    function courtFmtTime(ts) {
+        if (!ts) return '';
+        const n = Number(ts);
+        if (!isFinite(n) || n <= 0) return '';
+        try { return new Date(n * 1000).toLocaleString('zh-CN', { hour12: false }); } catch (e) { return String(ts); }
+    }
+    // 人物行：头像 + 名称 + 角色徽章 + 内容 + 时间
+    function courtPersonHTML(p, opts) {
+        opts = opts || {};
+        const av = p.avatar
+            ? '<img class="court-avatar" src="' + resolveMediaUrl(p.avatar) + '" alt="">'
+            : '<div class="court-avatar court-avatar-empty"></div>';
+        const role = opts.roleLabel ? '<span class="court-role-badge">' + escapeHtml(opts.roleLabel) + '</span>' : '';
+        const time = opts.time ? '<span class="court-person-time">' + escapeHtml(opts.time) + '</span>' : '';
+        const body = opts.body ? '<div class="court-person-body">' + escapeHtml(opts.body).replace(/\n/g, '<br>') + '</div>' : '';
+        return '<div class="court-person-row">' + av +
+            '<div class="court-person-main">' +
+                '<div class="court-person-head"><span class="court-person-name">' + escapeHtml(p.name || '') + '</span>' + role + time + '</div>' +
+                body +
+            '</div></div>';
+    }
+
     function courtCaseId(c) {
         return String(courtPick(c, ['id', 'case_id', 'caseId', 'cid', 'caseID', '案件id']) || '');
     }
 
     function createCourtCaseItem(c) {
         const id = courtCaseId(c);
-        const title = courtPick(c, ['title', 'name', 'case_title', 'subject', 'topic', '标题', '案件标题']) || '未命名案件';
-        const sub = courtPick(c, ['description', 'summary', 'brief', 'content', 'intro', '简介', '摘要']) ||
-            [courtPick(c, ['plaintiff', 'accuser', 'prosecutor', '原告', '公诉人']),
-             courtPick(c, ['defendant', 'accused', 'respondent', '被告'])]
-                .filter(Boolean).join(' 诉 ');
+        const reporter = courtPick(c, ['reporter_name', 'reporter', '举报人', '原告']);
+        const defendant = courtPick(c, ['defendant_name', 'defendant', '被告']);
+        const reporterAvatar = courtPick(c, ['reporter_avatar', '举报人头像']);
+        const defendantAvatar = courtPick(c, ['defendant_avatar', 'avatar', '头像']);
+        const status = courtPick(c, ['status', '状态']);
+        const banV = Number(courtPick(c, ['ban_vote_count'])) || 0;
+        const keepV = Number(courtPick(c, ['keep_vote_count'])) || 0;
         const div = document.createElement('div');
         div.className = 'contact-item court-case-item';
         div.dataset.courtId = id;
-        div.innerHTML = `<div class="contact-info"><div class="name">${escapeHtml(title)}</div>${sub ? `<div class="uid">${escapeHtml(String(sub).slice(0, 60))}</div>` : ''}</div>`;
+        const repAv = reporterAvatar
+            ? '<img class="court-mini-avatar" src="' + resolveMediaUrl(reporterAvatar) + '" alt="">'
+            : '<div class="court-mini-avatar court-avatar-empty"></div>';
+        const defAv = defendantAvatar
+            ? '<img class="court-mini-avatar" src="' + resolveMediaUrl(defendantAvatar) + '" alt="">'
+            : '<div class="court-mini-avatar court-avatar-empty"></div>';
+        const sub = [reporter ? ('举报人 ' + reporter) : '', defendant ? ('被告 ' + defendant) : ''].filter(Boolean).join('　·　');
+        const badge = status ? '<span class="court-status-badge">' + escapeHtml(courtStatusLabel(status)) + '</span>' : '';
+        const voteInfo = '<span class="court-vote-mini">封 ' + banV + ' / 留 ' + keepV + '</span>';
+        div.innerHTML = '<div class="contact-info">' +
+                '<div class="court-avatars">' + repAv + defAv + '</div>' +
+                '<div class="contact-text">' +
+                    '<div class="name">案件 #' + escapeHtml(id) + '</div>' +
+                    (sub ? '<div class="uid">' + escapeHtml(sub) + '</div>' : '') +
+                    '<div class="court-case-tags">' + badge + voteInfo + '</div>' +
+                '</div>' +
+            '</div>';
         div.addEventListener('click', () => {
             if (courtCaseList) courtCaseList.querySelectorAll('.court-case-item').forEach(i => i.classList.remove('active'));
             div.classList.add('active');
@@ -11929,16 +11992,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (!courtCaseList) return;
         courtCaseList.innerHTML = '<div class="court-loading">加载中...</div>';
         try {
-            const res = await apiFetch('/v1/public-court/cases');
+            const res = await apiFetch('/v1/public-court/cases?status=all');
             const data = await res.json();
             const items = courtExtractList(data);
             courtCaseList.innerHTML = '';
             if (items.length === 0) {
-                // 服务端可能返回了包裹结构但无案件，或确实为空；把原始响应留底便于核对字段
-                const dump = (data && typeof data === 'object')
-                    ? '<details class="court-raw"><summary>原始响应（无案件）</summary><pre>' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre></details>'
-                    : '';
-                courtCaseList.innerHTML = '<div class="court-loading">暂无案件</div>' + dump;
+                courtCaseList.innerHTML = '<div class="court-loading">暂无案件</div>';
             } else {
                 items.forEach(c => courtCaseList.appendChild(createCourtCaseItem(c)));
             }
@@ -11955,73 +12014,125 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         courtDetail.innerHTML = '<div class="court-loading">加载中...</div>';
         try {
             const res = await apiFetch('/v1/public-court/cases/' + encodeURIComponent(id));
-            let c = await res.json();
-            // 兼容 {code:0, data:{...}} / [{...}] 包裹
+            const rawDetail = await res.json();
+            // 兼容 {code:0, data:{...}} / {case:{...}} / [{...}] 包裹
+            let c = rawDetail;
             if (c && c.data && typeof c.data === 'object' && !Array.isArray(c.data)) c = c.data;
+            if (c && c.case && typeof c.case === 'object') c = c.case;
             if (Array.isArray(c)) c = c[0] || {};
-            const title = courtPick(c, ['title', 'name', 'case_title', 'subject', 'topic', '标题', '案件标题']) || '未命名案件';
-            const content = courtPick(c, ['content', 'description', 'body', 'detail', 'text', 'intro', '简介', '摘要', '事实', '案情']) || '';
-            const status = courtPick(c, ['status', 'state', '状态', '进展']) || '';
-            const createdAt = courtPick(c, ['created_at', 'createdAt', 'time', 'publish_time', 'created_time', '添加时间']);
-            const plaintiff = courtPick(c, ['plaintiff', 'accuser', 'prosecutor', '原告', '公诉人']);
-            const defendant = courtPick(c, ['defendant', 'accused', 'respondent', '被告']);
-            const votes = courtExtractList(c.votes || c.vote_list || c.voteList || []);
-            const statements = courtExtractList(c.statements || c.statement_list || []);
-            const discussions = courtExtractList(c.discussions || c.discussion_list || c.comments || []);
 
-            let html = `<div class="court-case-title">${escapeHtml(title)}</div>`;
-            const meta = [];
-            if (status) meta.push(`<span class="meta-item">状态：<b>${escapeHtml(status)}</b></span>`);
-            if (plaintiff) meta.push(`<span class="meta-item">原告：<b>${escapeHtml(plaintiff)}</b></span>`);
-            if (defendant) meta.push(`<span class="meta-item">被告：<b>${escapeHtml(defendant)}</b></span>`);
-            if (createdAt) meta.push(`<span class="meta-item">时间：<b>${escapeHtml(String(createdAt))}</b></span>`);
-            if (meta.length) html += `<div class="court-case-meta">${meta.join('')}</div>`;
-            if (content) html += `<div class="court-case-content">${escapeHtml(content)}</div>`;
+            // 顶层字段（与 case 同级）：合并举报 / 陈词 / 讨论
+            const mergedReports = Array.isArray(rawDetail.merged_reports) ? rawDetail.merged_reports : [];
+            const mergedTotal = Number(rawDetail.merged_report_total) || mergedReports.length;
+            const statements = Array.isArray(rawDetail.statements) ? rawDetail.statements : [];
+            // 投票与讨论是独立 GET 端点
+            const [votesRes, discRes] = await Promise.all([
+                apiFetch('/v1/public-court/cases/' + encodeURIComponent(id) + '/votes').then(r => r.json()).catch(() => null),
+                apiFetch('/v1/public-court/cases/' + encodeURIComponent(id) + '/discussions').then(r => r.json()).catch(() => null)
+            ]);
+            const votes = courtExtractList((votesRes && (votesRes.data || votesRes)) || []);
+            const discussions = courtExtractList((discRes && (discRes.data || discRes)) || rawDetail.discussions || []);
 
-            // 投票
-            html += `<div class="court-vote-bar"><span class="vote-count">现有 ${votes.length} 票</span></div>`;
-            html += `<div class="court-actions">
-                <button class="btn primary" id="courtVoteBtn">投票</button>
-                <button class="btn" id="courtStatementBtn">发表陈词</button>
-                <button class="btn" id="courtDiscussionBtn">参与讨论</button>
-            </div>`;
+            const status = c.status || '';
+            const verdict = c.verdict || '';
+            const banHours = Number(c.ban_hours) || 0;
+            const banVote = Number(c.ban_vote_count) || 0;
+            const keepVote = Number(c.keep_vote_count) || 0;
+            const totalVote = Number(c.total_vote_count) || 0;
+            const myVote = c.my_vote || '';
 
+            let html = '';
+            // 头部
+            html += '<div class="court-detail-head">' +
+                '<div class="court-detail-id">案件 #' + escapeHtml(c.id || id) + '</div>' +
+                '<div class="court-detail-badges">' +
+                    (status ? '<span class="badge">' + escapeHtml(courtStatusLabel(status)) + '</span>' : '') +
+                    (verdict ? '<span class="badge verdict">' + escapeHtml(courtVerdictLabel(verdict)) + '</span>' : '') +
+                    (banHours ? '<span class="badge">封禁 ' + banHours + 'h</span>' : '') +
+                '</div>' +
+            '</div>';
+
+            // 当事人
+            html += '<div class="court-parties">';
+            html += courtPersonHTML({ name: c.reporter_name, avatar: c.reporter_avatar }, { roleLabel: '举报人', body: c.report_reason, time: courtFmtTime(c.created_at) });
+            html += courtPersonHTML({ name: c.defendant_name, avatar: c.defendant_avatar }, { roleLabel: '被告', body: (c.defense_reason || '（未辩护）') });
+            html += '</div>';
+
+            // 举报证据
+            if (c.report_evidence) {
+                html += '<div class="court-block"><div class="court-block-title">举报证据</div><pre class="court-pre">' + escapeHtml(c.report_evidence) + '</pre></div>';
+            }
+
+            // 合并举报
+            if (mergedReports.length) {
+                html += '<div class="court-block"><div class="court-block-title">合并举报（' + mergedTotal + ' 条）</div>';
+                mergedReports.forEach(r => {
+                    html += courtPersonHTML({ name: r.reporter_name, avatar: r.reporter_avatar }, { body: r.reason, time: courtFmtTime(r.created_at) });
+                });
+                html += '</div>';
+            }
+
+            // 投票情况
+            html += '<div class="court-block"><div class="court-block-title">投票情况</div>' +
+                '<div class="court-vote-summary">赞成封禁 <b>' + banVote + '</b> · 赞成保留 <b>' + keepVote + '</b> · 总计 <b>' + totalVote + '</b>' +
+                (myVote ? ' · 我的投票：<b>' + (myVote === 'ban' ? '封禁' : '保留') + '</b>' : '') + '</div>';
+            if (votes.length) {
+                votes.forEach(v => {
+                    const vl = v.vote === 'keep' ? '保留' : '封禁';
+                    const body = [v.reason, v.evidence].filter(Boolean).join('：');
+                    html += courtPersonHTML({ name: v.voter_name, avatar: v.voter_avatar }, { roleLabel: vl, body: body, time: courtFmtTime(v.created_at) });
+                });
+            }
+            html += '</div>';
+
+            // 陈词 / 陈述
             if (statements.length) {
-                html += `<div class="court-section-title">陈词</div>`;
+                html += '<div class="court-block"><div class="court-block-title">陈词 / 陈述</div>';
                 statements.forEach(s => {
-                    const who = courtPick(s, ['user_name', 'username', 'name', 'author', 'uid', 'ncuid', '用户', '作者']);
-                    const text = courtPick(s, ['content', 'text', 'statement', 'body', '内容', '陈词']);
-                    html += `<div class="court-statement">${who ? `<span class="who">${escapeHtml(who)}：</span>` : ''}${escapeHtml(text)}</div>`;
+                    const rl = s.role === 'reporter' ? '举报人' : (s.role === 'jury' ? '陪审员' : '');
+                    const body = [s.reason, s.evidence].filter(Boolean).join('：');
+                    html += courtPersonHTML({ name: s.user_name, avatar: s.user_avatar }, { roleLabel: rl, body: body, time: courtFmtTime(s.created_at) });
                 });
-            }
-            if (discussions.length) {
-                html += `<div class="court-section-title">讨论</div>`;
-                discussions.forEach(d => {
-                    const who = courtPick(d, ['user_name', 'username', 'name', 'author', 'uid', 'ncuid', '用户', '作者']);
-                    const text = courtPick(d, ['content', 'text', 'message', 'body', '内容', '讨论']);
-                    html += `<div class="court-discussion">${who ? `<span class="who">${escapeHtml(who)}：</span>` : ''}${escapeHtml(text)}</div>`;
-                });
+                html += '</div>';
             }
 
-            // 兜底：若标题/内容/原告/被告/投票/陈词/讨论 全部为空（字段名没对上），原样显示 JSON 便于核对
-            const hasAny = title !== '未命名案件' || content || plaintiff || defendant || votes.length || statements.length || discussions.length;
-            if (!hasAny) {
-                html += `<details class="court-raw"><summary>未能识别案件字段，显示原始响应</summary><pre>${escapeHtml(JSON.stringify(c, null, 2))}</pre></details>`;
+            // 讨论
+            if (discussions.length) {
+                html += '<div class="court-block"><div class="court-block-title">讨论</div>';
+                discussions.forEach(d => {
+                    html += courtPersonHTML({ name: d.user_name, avatar: d.user_avatar }, { body: d.body, time: courtFmtTime(d.created_at) });
+                });
+                html += '</div>';
             }
+
+            // 操作区
+            html += '<div class="court-actions">' +
+                '<button class="btn primary" id="courtVoteBan">赞成封禁</button>' +
+                '<button class="btn" id="courtVoteKeep">赞成保留</button>' +
+                '<button class="btn" id="courtStatementBtn">发表陈词</button>' +
+                '<button class="btn" id="courtDiscussionBtn">参与讨论</button>' +
+                '<button class="btn danger" id="courtWithdrawBtn">撤销</button>' +
+            '</div>';
 
             courtDetail.innerHTML = html;
 
             // 投票
-            const voteBtn = courtDetail.querySelector('#courtVoteBtn');
-            if (voteBtn) voteBtn.addEventListener('click', async () => {
+            const doVote = async (voteType) => {
+                const reason = window.prompt('投票理由（可选）：', '') || '';
+                const evidence = window.prompt('投票证据（可选）：', '') || '';
                 try {
                     const r = await apiFetch('/v1/public-court/cases/' + encodeURIComponent(id) + '/vote', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vote: voteType, reason, evidence })
                     });
+                    const vr = await r.json().catch(() => null);
                     if (r.ok) { showAlert('投票成功', '提示'); renderCourtCase(id); }
-                    else showAlert('投票失败', '提示');
+                    else showAlert('投票失败：' + (vr && (vr.error || vr.message) || r.status), '提示');
                 } catch (e) { showAlert('投票失败：' + e.message, '提示'); }
-            });
+            };
+            const vb = courtDetail.querySelector('#courtVoteBan');
+            if (vb) vb.addEventListener('click', () => doVote('ban'));
+            const vk = courtDetail.querySelector('#courtVoteKeep');
+            if (vk) vk.addEventListener('click', () => doVote('keep'));
             // 发表陈词
             const stmtBtn = courtDetail.querySelector('#courtStatementBtn');
             if (stmtBtn) stmtBtn.addEventListener('click', async () => {
@@ -12029,10 +12140,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 if (!text) return;
                 try {
                     const r = await apiFetch('/v1/public-court/cases/' + encodeURIComponent(id) + '/statement', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: text })
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: text, evidence: '' })
                     });
+                    const sr = await r.json().catch(() => null);
                     if (r.ok) { showAlert('陈词已提交', '提示'); renderCourtCase(id); }
-                    else showAlert('提交失败', '提示');
+                    else showAlert('提交失败：' + (sr && (sr.error || sr.message) || r.status), '提示');
                 } catch (e) { showAlert('提交失败：' + e.message, '提示'); }
             });
             // 参与讨论
@@ -12042,11 +12154,25 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 if (!text) return;
                 try {
                     const r = await apiFetch('/v1/public-court/cases/' + encodeURIComponent(id) + '/discussion', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: text })
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: text })
                     });
+                    const dr = await r.json().catch(() => null);
                     if (r.ok) { showAlert('讨论已发布', '提示'); renderCourtCase(id); }
-                    else showAlert('发布失败', '提示');
+                    else showAlert('发布失败：' + (dr && (dr.error || dr.message) || r.status), '提示');
                 } catch (e) { showAlert('发布失败：' + e.message, '提示'); }
+            });
+            // 撤销
+            const wdBtn = courtDetail.querySelector('#courtWithdrawBtn');
+            if (wdBtn) wdBtn.addEventListener('click', async () => {
+                if (!window.confirm('确定撤销你的投票 / 陈词？')) return;
+                try {
+                    const r = await apiFetch('/v1/public-court/cases/' + encodeURIComponent(id) + '/withdraw', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
+                    });
+                    const wr = await r.json().catch(() => null);
+                    if (r.ok) { showAlert('已撤销', '提示'); renderCourtCase(id); }
+                    else showAlert('撤销失败：' + (wr && (wr.error || wr.message) || r.status), '提示');
+                } catch (e) { showAlert('撤销失败：' + e.message, '提示'); }
             });
         } catch (e) {
             console.error('[court] load case detail failed:', e);

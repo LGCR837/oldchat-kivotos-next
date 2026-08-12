@@ -462,6 +462,8 @@ body::-webkit-scrollbar {
 }
 
 .chat-header {
+	position: relative;
+	z-index: 1001;
 	height: var(--header-height);
 	padding: 0 16px;
 	font-size: 15px;
@@ -3792,6 +3794,213 @@ body::-webkit-scrollbar {
 }
 .history-loading i {
     font-size: 14px;
+}
+
+/* ===== 公开法庭：新版渲染样式 ===== */
+.court-detail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+.court-detail-id {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1.35;
+}
+.court-detail-badges {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.court-detail-badges .badge {
+    font-size: 12px;
+    padding: 2px 10px;
+    border-radius: 12px;
+    background: var(--chat-bg);
+    border: 1px solid var(--border);
+    color: var(--secondary-text);
+}
+.court-detail-badges .badge.verdict {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+.court-parties {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+.court-person-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+}
+.court-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex: none;
+    background: var(--chat-bg);
+    border: 1px solid var(--border);
+}
+.court-avatar-empty {
+    background: var(--chat-bg);
+    border: 1px dashed var(--border);
+}
+.court-person-main {
+    flex: 1;
+    min-width: 0;
+}
+.court-person-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.court-person-name {
+    font-weight: 600;
+    color: var(--text);
+    font-size: 14px;
+}
+.court-role-badge {
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    background: var(--blue-600);
+    color: #fff;
+}
+.court-person-time {
+    font-size: 11px;
+    color: var(--secondary-text);
+    margin-left: auto;
+}
+.court-person-body {
+    font-size: 13px;
+    line-height: 1.65;
+    color: var(--text);
+    word-break: break-word;
+    margin-top: 4px;
+}
+.court-block {
+    margin: 18px 0;
+}
+.court-block-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+}
+.court-pre {
+    margin: 0;
+    padding: 12px 14px;
+    max-height: 320px;
+    overflow: auto;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--text);
+    background: var(--chat-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+}
+.court-vote-summary {
+    font-size: 13px;
+    color: var(--secondary-text);
+    margin-bottom: 10px;
+}
+.court-vote-summary b {
+    color: var(--text);
+}
+/* 列表项（案件） */
+.court-case-item .contact-info {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+}
+.court-avatars {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 6px;
+}
+.contact-avatar-wrap {
+    flex: none;
+}
+.court-mini-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: var(--chat-bg);
+    border: 1px solid var(--border);
+    flex: none;
+}
+.court-mini-avatar.court-avatar-empty {
+    background: var(--chat-bg);
+    border: 1px dashed var(--border);
+}
+.contact-text {
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+    text-align: center;
+}
+.court-case-item .name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    display: block;
+    text-align: center;
+}
+.court-case-item .uid {
+    font-size: 12px;
+    color: var(--secondary-text);
+    margin-top: 2px;
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    line-height: 1.45;
+    text-align: center;
+}
+.court-case-tags {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    justify-content: center;
+    margin-top: 4px;
+    flex-wrap: wrap;
+}
+.court-status-badge {
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    background: var(--chat-bg);
+    border: 1px solid var(--border);
+    color: var(--secondary-text);
+}
+.court-vote-mini {
+    font-size: 11px;
+    color: var(--secondary-text);
+}
+.court-actions .btn.danger {
+    color: #e5484d;
+    border-color: rgba(229, 72, 77, 0.4);
+}
+.court-actions .btn.danger:hover {
+    background: rgba(229, 72, 77, 0.1);
 }
 
 /* 资源广场（发现页子页：左分区 / 右文件） */
