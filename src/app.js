@@ -10503,6 +10503,202 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
     }
 
+    // ===== 蔚蓝档案点击效果 Lite（baspark-core，本地 vendored，全局 BASpark）=====
+    // 与完整版互斥：同一时间只能启用一个。存储键 oc_click_fx_lite / oc_click_fx_lite_params。
+    // baspark-core 已通过 window.__BASPARK_MANUAL_INIT__ 关闭自带自动初始化（见 index.html 内联标记），
+    // 由本模块显式调用 BASpark.init/destroy 接管生命周期，确保默认关闭且与完整版互斥。
+    function isBaClickFxLiteEnabled() {
+        try { return localStorage.getItem('oc_click_fx_lite') === '1'; } catch (e) { return false; }
+    }
+    // 把 hex 颜色转为 baspark-core 需要的 'R,G,B' 字符串
+    function hexToRgbStr(hex) {
+        if (typeof hex !== 'string' || !hex) return null;
+        let h = hex.replace('#', '');
+        if (h.length === 3) h = h.split('').map(c => c + c).join('');
+        if (h.length !== 6) return null;
+        const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+        if ([r, g, b].some(isNaN)) return null;
+        return r + ',' + g + ',' + b;
+    }
+    // 读取 Lite 详细参数，合并默认值
+    function getClickFxLiteParams() {
+        let p = {};
+        try { p = JSON.parse(localStorage.getItem('oc_click_fx_lite_params') || '{}'); } catch (e) { p = {}; }
+        if (typeof p !== 'object' || !p) p = {};
+        if (typeof p.color !== 'string') p.color = '#2dafff';
+        if (typeof p.scale !== 'number') p.scale = 1.2;
+        if (typeof p.opacity !== 'number') p.opacity = 0.8;
+        if (typeof p.trailEnabled !== 'boolean') p.trailEnabled = true;
+        if (typeof p.speed !== 'number') p.speed = 1.0;
+        if (typeof p.trailSpeed !== 'number') p.trailSpeed = 1.0;
+        if (typeof p.clickSpeed !== 'number') p.clickSpeed = 1.0;
+        if (typeof p.maxTrail !== 'number') p.maxTrail = 16;
+        return p;
+    }
+    // 把存储参数转换为 baspark-core 的 init opts（color 由 hex 转 'R,G,B'）
+    function buildBASparkOpts() {
+        const p = getClickFxLiteParams();
+        const rgb = hexToRgbStr(p.color) || '45,175,255';
+        return {
+            color: rgb,
+            scale: p.scale,
+            opacity: p.opacity,
+            trailEnabled: p.trailEnabled,
+            speed: p.speed,
+            trailSpeed: p.trailSpeed,
+            clickSpeed: p.clickSpeed,
+            maxTrail: p.maxTrail
+        };
+    }
+    // 根据开关创建/销毁 Lite 特效；与完整版互斥（完整版开启时强制 Lite 关闭）
+    function applyClickFxLite() {
+        if (isBaClickFxEnabled()) {
+            // 完整版优先：Lite 必须保持关闭，避免两个全局 click 监听叠加
+            if (window.BASpark && typeof window.BASpark.destroy === 'function') {
+                try { window.BASpark.destroy(); } catch (e) {}
+            }
+            return;
+        }
+        const enabled = isBaClickFxLiteEnabled();
+        if (enabled) {
+            if (window.BASpark && typeof window.BASpark.init === 'function') {
+                try { window.BASpark.init(buildBASparkOpts()); }
+                catch (e) { console.error('[baspark-core] 初始化失败:', e); }
+            }
+        } else if (window.BASpark && typeof window.BASpark.destroy === 'function') {
+            try { window.BASpark.destroy(); } catch (e) {}
+        }
+    }
+    // Lite 详细效果配置弹窗（参数对应 baspark-core 配置项）
+    function openBaFxLiteModal() {
+        if (document.getElementById('baFxLiteModalOverlay')) return;
+        const params = getClickFxLiteParams();
+        function persistAndApply() {
+            try { localStorage.setItem('oc_click_fx_lite_params', JSON.stringify(params)); } catch (e) {}
+            applyClickFxLite();
+        }
+        const SLIDERS = [
+            { path: 'scale', label: '粒子缩放', min: 0.5, max: 3, step: 0.05 },
+            { path: 'opacity', label: '整体透明度', min: 0.1, max: 1, step: 0.05 },
+            { path: 'speed', label: '整体速度', min: 0.2, max: 3, step: 0.05 },
+            { path: 'trailSpeed', label: '拖尾速度', min: 0.2, max: 3, step: 0.05 },
+            { path: 'clickSpeed', label: '点击速度', min: 0.2, max: 3, step: 0.05 },
+            { path: 'maxTrail', label: '最大拖尾点', min: 1, max: 100, step: 1 }
+        ];
+        const TOGGLES = [
+            { key: 'trailEnabled', label: '鼠标拖尾' }
+        ];
+        let html = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">' +
+            '<div style="font-size:16px;font-weight:600;color:var(--text);">Lite 详细效果配置</div>' +
+            '<button id="baFxLiteModalClose" style="background:transparent;border:none;color:var(--secondary-text);font-size:18px;cursor:pointer;">✕</button>' +
+            '</div>';
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-color);">' +
+            '<span style="font-size:13px;color:var(--text);">粒子颜色</span>' +
+            '<input type="color" id="fxLiteColor" value="' + (params.color || '#2dafff') + '" style="width:48px;height:28px;border:none;background:none;cursor:pointer;">' +
+            '</div>';
+        SLIDERS.forEach(s => {
+            const cur = params[s.path];
+            const shown = (cur != null) ? cur : '默认';
+            const val = (cur != null) ? cur : ((s.min + s.max) / 2);
+            html += '<div style="padding:9px 0;border-bottom:1px solid var(--border-color);">' +
+                '<div style="display:flex;justify-content:space-between;font-size:13px;color:var(--text);margin-bottom:4px;">' +
+                '<span>' + s.label + '</span><span id="fxLitev_' + s.path + '">' + shown + '</span></div>' +
+                '<input type="range" id="fxLites_' + s.path + '" min="' + s.min + '" max="' + s.max + '" step="' + s.step + '" value="' + val + '" style="width:100%;accent-color:var(--accent);">' +
+                '</div>';
+        });
+        TOGGLES.forEach(t => {
+            const cur = params[t.key];
+            html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border-color);">' +
+                '<span style="font-size:13px;color:var(--text);">' + t.label + '</span>' +
+                '<label class="oc-switch"><input type="checkbox" id="fxLitet_' + t.key + '" ' + (cur === false ? '' : 'checked') + '><span class="oc-switch-slider"></span></label>' +
+                '</div>';
+        });
+        html += '<div style="display:flex;gap:10px;margin-top:16px;">' +
+            '<button id="baFxLiteRestoreBtn" style="flex:1;padding:9px 0;border:1px solid var(--border-color);background:var(--panel-bg);color:var(--text);border-radius:8px;cursor:pointer;font-family:inherit;font-size:13px;">恢复默认</button>' +
+            '<button id="baFxLiteConfirmBtn" style="flex:1;padding:9px 0;border:none;background:var(--accent);color:#fff;border-radius:8px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;">确认</button>' +
+            '</div>';
+
+        const overlay = document.createElement('div');
+        overlay.className = 'custom-modal-overlay';
+        overlay.id = 'baFxLiteModalOverlay';
+        overlay.style.zIndex = '30000';
+        const card = document.createElement('div');
+        card.className = 'custom-modal ba-fx-lite-modal';
+        card.id = 'baFxLiteModalCard';
+        card.style.maxWidth = '420px';
+        card.style.maxHeight = '82vh';
+        card.style.overflowY = 'auto';
+        card.style.padding = '20px 22px';
+        card.innerHTML = html;
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+
+        card.querySelector('#fxLiteColor').addEventListener('input', (e) => {
+            params.color = e.target.value; persistAndApply();
+        });
+        SLIDERS.forEach(s => {
+            const el = card.querySelector('#fxLites_' + s.path);
+            const valEl = card.querySelector('#fxLitev_' + s.path);
+            el.addEventListener('input', () => {
+                const v = (s.step >= 1) ? parseInt(el.value, 10) : parseFloat(el.value);
+                params[s.path] = v;
+                valEl.textContent = v;
+                persistAndApply();
+            });
+        });
+        TOGGLES.forEach(t => {
+            const el = card.querySelector('#fxLitet_' + t.key);
+            el.addEventListener('change', () => { params[t.key] = el.checked; persistAndApply(); });
+        });
+        function closeModal() {
+            overlay.classList.add('closing');
+            card.classList.add('closing');
+            let done = false;
+            const finish = () => { if (done) return; done = true; if (overlay.parentNode) overlay.parentNode.removeChild(overlay); };
+            overlay.addEventListener('animationend', finish, { once: true });
+            card.addEventListener('animationend', finish, { once: true });
+            setTimeout(finish, 400);
+        }
+        function resetToDefault() {
+            try { localStorage.removeItem('oc_click_fx_lite_params'); } catch (e) {}
+            for (const k of Object.keys(params)) delete params[k];
+            Object.assign(params, getClickFxLiteParams());
+            persistAndApply();
+            SLIDERS.forEach(s => {
+                const el = card.querySelector('#fxLites_' + s.path);
+                const valEl = card.querySelector('#fxLitev_' + s.path);
+                if (!el) return;
+                const cur = params[s.path];
+                const shown = (cur != null) ? cur : '默认';
+                const v = (cur != null) ? cur : ((s.min + s.max) / 2);
+                el.value = v;
+                if (valEl) valEl.textContent = shown;
+            });
+            TOGGLES.forEach(t => {
+                const el = card.querySelector('#fxLitet_' + t.key);
+                if (el) el.checked = params[t.key] !== false;
+            });
+            const cc = card.querySelector('#fxLiteColor');
+            if (cc) cc.value = params.color || '#2dafff';
+        }
+        card.querySelector('#baFxLiteModalClose').addEventListener('click', closeModal);
+        card.querySelector('#baFxLiteConfirmBtn').addEventListener('click', closeModal);
+        card.querySelector('#baFxLiteRestoreBtn').addEventListener('click', resetToDefault);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+    }
+
+    // 让「完整版 / Lite」两个点击特效开关在 UI 上保持互斥一致（开一个即把另一个置灰关闭）
+    function syncClickFxToggles() {
+        const ft = document.getElementById('baClickFxToggle');
+        const lt = document.getElementById('baClickFxLiteToggle');
+        const fe = document.getElementById('baClickFxDetailEntry');
+        const le = document.getElementById('baClickFxLiteDetailEntry');
+        if (ft) ft.checked = isBaClickFxEnabled();
+        if (lt) lt.checked = isBaClickFxLiteEnabled();
+        if (fe) fe.style.display = isBaClickFxEnabled() ? '' : 'none';
+        if (le) le.style.display = isBaClickFxLiteEnabled() ? '' : 'none';
+    }
+
     function renderSettingsAppearance() {
         settingsContent.innerHTML = `
             <h3>通用</h3>
@@ -11336,6 +11532,19 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     '<span class="label">详细效果配置</span>' +
                     '<span class="value"><i class="fa-solid fa-chevron-right" style="color:var(--secondary-text);"></i></span>' +
                 '</div>' +
+                '<div class="settings-item" id="settingsBaClickFxLite" style="margin-top:2px;">' +
+                    '<span class="label">蔚蓝档案点击效果 Lite</span>' +
+                    '<span class="value">' +
+                        '<label class="oc-switch">' +
+                            '<input type="checkbox" id="baClickFxLiteToggle">' +
+                            '<span class="oc-switch-slider"></span>' +
+                        '</label>' +
+                    '</span>' +
+                '</div>' +
+                '<div class="settings-item" id="baClickFxLiteDetailEntry" style="display:none;cursor:pointer;">' +
+                    '<span class="label">Lite 详细效果配置</span>' +
+                    '<span class="value"><i class="fa-solid fa-chevron-right" style="color:var(--secondary-text);"></i></span>' +
+                '</div>' +
                 '<div class="settings-item" id="settingsSidebarBar">' +
                     '<span class="label">侧边栏竖线</span>' +
                     '<span class="value">' +
@@ -11404,6 +11613,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
 
         // 蔚蓝档案点击效果开关（设置 → 主题，与深色/连消息同块，默认关闭）
+        // 完整版与 Lite 互斥：开一个自动关另一个
         const baToggle = document.getElementById('baClickFxToggle');
         const baDetailEntry = document.getElementById('baClickFxDetailEntry');
         if (baToggle) {
@@ -11411,12 +11621,39 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             baToggle.addEventListener('change', () => {
                 try { localStorage.setItem('oc_click_fx', baToggle.checked ? '1' : '0'); } catch (e) {}
                 applyClickFx();
+                if (baToggle.checked) {
+                    // 开启完整版 → 强制关闭 Lite（并同步 UI）
+                    try { localStorage.setItem('oc_click_fx_lite', '0'); } catch (e) {}
+                    applyClickFxLite();
+                }
+                syncClickFxToggles();
                 if (baDetailEntry) baDetailEntry.style.display = baToggle.checked ? '' : 'none';
             });
         }
         if (baDetailEntry) {
             baDetailEntry.style.display = isBaClickFxEnabled() ? '' : 'none';
             baDetailEntry.addEventListener('click', () => { openBaFxModal(); });
+        }
+
+        // 蔚蓝档案点击效果 Lite 开关（与完整版互斥）
+        const baLiteToggle = document.getElementById('baClickFxLiteToggle');
+        const baLiteDetailEntry = document.getElementById('baClickFxLiteDetailEntry');
+        if (baLiteToggle) {
+            baLiteToggle.checked = isBaClickFxLiteEnabled();
+            baLiteToggle.addEventListener('change', () => {
+                try { localStorage.setItem('oc_click_fx_lite', baLiteToggle.checked ? '1' : '0'); } catch (e) {}
+                if (baLiteToggle.checked) {
+                    // 开启 Lite → 强制关闭完整版（并同步 UI）
+                    try { localStorage.setItem('oc_click_fx', '0'); } catch (e) {}
+                    applyClickFx();
+                }
+                applyClickFxLite();
+                syncClickFxToggles();
+            });
+        }
+        if (baLiteDetailEntry) {
+            baLiteDetailEntry.style.display = isBaClickFxLiteEnabled() ? '' : 'none';
+            baLiteDetailEntry.addEventListener('click', () => { openBaFxLiteModal(); });
         }
 
         // 侧边栏竖线（总开关，默认开启）：关闭后全部竖条（含 hover 与选中常驻）都不显示
@@ -11730,7 +11967,14 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     applySidebarBarSettings();
 
     // 蔚蓝档案点击特效：按设置初始化（默认关闭）
+    // 互斥归一化：完整版与 Lite 同一时间只能启用一个（完整版优先），避免存储标志冲突导致 UI 显示错乱
+    try {
+        if (isBaClickFxEnabled()) localStorage.setItem('oc_click_fx_lite', '0');
+        else if (isBaClickFxLiteEnabled()) localStorage.setItem('oc_click_fx', '0');
+    } catch (e) {}
     applyClickFx();
+    // 蔚蓝档案点击效果 Lite：同样按设置初始化（默认关闭；baspark-core 已禁用自动初始化由本模块接管）
+    applyClickFxLite();
 
     // 聊天选中边界约束：昵称/文本各自独立，不允许拖选跨界
     setupSelectionBoundary();
