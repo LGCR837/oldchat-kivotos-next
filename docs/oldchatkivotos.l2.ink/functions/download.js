@@ -121,7 +121,15 @@ const CSS = '' +
     '@media(max-width:400px){.dls{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}}\n' +
     '.dls .btn{margin:0;text-align:center}\n' +
     'ul{padding-left:20px}\n' +
-    'li{margin:6px 0}\n';
+    'li{margin:6px 0}\n' +
+    '.notice{border:2px solid #000;padding:14px 16px;margin:0 0 24px;background:#fff}\n' +
+    '.notice h2{margin:0 0 10px;border-bottom:0;padding:0;font-size:16px}\n' +
+    '.notice ul{padding-left:18px;margin:6px 0}\n' +
+    '.notice li{margin:5px 0;font-size:13px}\n' +
+    '.notice-foot{margin:10px 0 0;font-size:13px}\n' +
+    '.notice b{font-weight:700}\n' +
+    '.btn-inline{display:inline-block;border-bottom:2px solid #000;font-weight:700;color:#000;text-decoration:none}\n' +
+    '.btn-inline:hover{background:#000;color:#fff;border-bottom-color:#000}\n';
 
 function render(releases) {
     const base = 'https://github.com/' + REPO + '/releases/download/';
@@ -163,6 +171,15 @@ function render(releases) {
         '  <h1>OldChat For Kivotos Next<br>下载页</h1>\n' +
         '  <p class="subtitle">一个 MomoTalk 风格的第三方 OldChat 桌面客户端</p>\n' +
         '  <p class="intro">OldChat For Kivotos Next 第三方 OldChat 桌面客户端。界面大幅参考了蔚蓝档案的 MomoTalk 风格，底层基于 Rust + Tauri + Web 构建，支持 Windows / Linux / macOS 多架构。提供免安装单文件与系统安装包（AppImage / deb / rpm / NSIS），并由 Aoharu Reverie (LGCR837) 开源维护。</p>\n' +
+        '  <div class="notice">\n' +
+        '    <h2>Windows 运行环境（打不开请装）</h2>\n' +
+        '    <ul>\n' +
+        '      <li><b>Windows 10</b>（大部分自带，不行再装）：<a class="btn-inline" href="https://developer.microsoft.com/zh-cn/microsoft-edge/webview2/" target="_blank" rel="noopener">' + esc('Microsoft Edge WebView2 运行时') + '</a></li>\n' +
+        '      <li><b>Windows 7 / 8 / 8.1</b> 装 <b>WebView2 v109</b>（默认不自带）：<a class="btn-inline" href="https://www.catalog.update.microsoft.com/Search.aspx?q=webview2%20runtime%20109.0.1518.140" target="_blank" rel="noopener">' + esc('WebView2 Runtime 109.0.1518.140') + '</a></li>\n' +
+        '      <li><b>VC++ 运行库</b>（报错再装，一般不用）：<a class="btn-inline" href="https://aka.ms/vc14/vc_redist.x64.exe" target="_blank" rel="noopener">x64</a> / <a class="btn-inline" href="https://aka.ms/vc14/vc_redist.x86.exe" target="_blank" rel="noopener">x86</a></li>\n' +
+        '    </ul>\n' +
+        '    <p class="notice-foot">Windows 7 请确保安装了 <b>SP1</b>，以及补丁：<a class="btn-inline" href="https://www.catalog.update.microsoft.com/Search.aspx?q=KB4490628" target="_blank" rel="noopener">KB4490628</a>（服务堆栈更新）、<a class="btn-inline" href="https://www.catalog.update.microsoft.com/Search.aspx?q=KB4474419" target="_blank" rel="noopener">KB4474419</a>（SHA-2 代码签名支持）。</p>\n' +
+        '  </div>\n' +
         '  <p>\n' +
         '    <a class="btn" href="/">查看官网</a>\n' +
         '    <a class="btn" href="https://github.com/' + REPO + '/releases" target="_blank" rel="noopener">GitHub Releases</a>\n' +

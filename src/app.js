@@ -2511,14 +2511,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 切换/重建会话时：先隐藏容器 → 同步贴底 → 等图片布局稳定（scrollHeight 正确）→ 再揭示，
     // 确保第一帧即位于底部，彻底消除「先显示旧位置/顶部再瞬移到底部」的闪烁。
     // fade=true 时揭示带淡入动画；afterReveal 在揭示完成后回调（如标记已读）。
+    // 代际计数器：每次 pinAndReveal 自增并捕获自己的 gen。
+    // 过期的揭示（上一轮切换遗留的 600ms 兜底 / img load 回调）见到 gen 不符即弃用，
+    // 避免频繁切群时「旧揭示」把还该藏着的容器亮出来造成闪烁，也避免容器卡在隐藏态。
+    let _pinRevealGen = 0;
     function pinAndReveal(afterReveal, fade) {
+        const myGen = ++_pinRevealGen;
         _stickToBottom = true;
         messagesContainer.style.visibility = 'hidden';
         pinToBottom();
-        const imgs = messagesContainer.querySelectorAll('.message img');
-        let pending = 0;
-        imgs.forEach(function (img) { if (!img.complete) pending++; });
         const doReveal = function () {
+            if (myGen !== _pinRevealGen) {
+                return; // 已被更新的切换取代，丢弃本次揭示
+            }
+            if (doReveal._done) return; // 防止重复揭示（造成二次闪烁）
+            doReveal._done = true;
             pinToBottom();
             if (fade) {
                 messagesContainer.classList.remove('fade-in');
@@ -2530,20 +2537,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             updateScrollToBottomBtn();
             if (typeof afterReveal === 'function') afterReveal();
         };
-        if (pending === 0) {
-            requestAnimationFrame(doReveal);
-        } else {
-            let done = 0;
-            const onDone = function () { if (++done >= pending) requestAnimationFrame(doReveal); };
-            imgs.forEach(function (img) {
-                if (!img.complete) {
-                    img.addEventListener('load', onDone, { once: true });
-                    img.addEventListener('error', onDone, { once: true });
-                }
-            });
-            // 兜底：最多等 600ms，避免个别图片卡住导致列表不显示
-            setTimeout(doReveal, 600);
-        }
+        // 下一帧即揭示（文本布局已稳定），不再等图片加载 → 切换/进群「秒进」，不再卡几百 ms；
+        // 图片随后加载时若仍在贴底，补一次贴底，避免内容被撑高后偏离底部。
+        requestAnimationFrame(doReveal);
+        // 安全网：极端情况下 rAF 未触发时兜底揭示（平时被 _done 短路，不影响速度）
+        setTimeout(doReveal, 600);
+        const imgs = messagesContainer.querySelectorAll('.message img');
+        imgs.forEach(function (img) {
+            if (!img.complete) {
+                img.addEventListener('load', function () { if (myGen === _pinRevealGen && _stickToBottom) pinToBottom(); }, { once: true });
+                img.addEventListener('error', function () { if (myGen === _pinRevealGen && _stickToBottom) pinToBottom(); }, { once: true });
+            }
+        });
     }
 
     const emojiPlazaBtn = document.getElementById('emojiPlazaBtn');
@@ -2662,16 +2667,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     const musicList = document.getElementById('musicList');
     const musicTabs = document.getElementById('musicTabs');
     const musicWorkspace = document.getElementById('musicWorkspace');
-    let musicTab = 'plaza';          // plaza / ranking / mine
+    const musicSearchBox = document.getElementById('musicSearchBox');
+    const musicSearchInput = document.getElementById('musicSearchInput');
+    const musicSearchBtn = document.getElementById('musicSearchBtn');
+    let musicTab = 'plaza';          // plaza / ranking / search / mine
     let musicLoaded = false;         // 是否已加载过
     let musicCurrentPage = 1;
     const musicPageSize = 20;
     let musicData = [];              // 当前已加载的音乐列表（用于上一首/下一首）
+    let musicSearchQuery = '';       // 搜索关键词
 
     function musicEndpoint() {
         if (musicTab === 'mine') return '/v1/music/plaza/mine';
         if (musicTab === 'ranking') return '/v1/music/plaza/ranking';
         return '/v1/music/plaza';
+    }
+
+    // 构造列表/搜索请求 URL（搜索走 ?limit=50&offset=N&sort=latest&q= 形式）
+    function musicUrl(offset) {
+        const base = musicEndpoint();
+        if (musicTab === 'search') {
+            return base + `?limit=50&offset=${offset}&sort=latest&q=${encodeURIComponent(musicSearchQuery)}`;
+        }
+        return base + `?limit=${musicPageSize}&offset=${offset}`;
     }
 
     function createMusicItem(m) {
@@ -2691,10 +2709,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     async function loadMusicList() {
         if (!musicList) return;
+        // 搜索页：未输入关键词时不发请求，给出占位提示
+        if (musicTab === 'search' && !musicSearchQuery) {
+            musicList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--secondary-text);">输入关键词搜索音乐</div>';
+            musicLoaded = true;
+            return;
+        }
         musicList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--secondary-text);">加载中...</div>';
         try {
             const offset = (musicCurrentPage - 1) * musicPageSize;
-            const res = await apiFetch(musicEndpoint() + `?limit=${musicPageSize}&offset=${offset}`);
+            const res = await apiFetch(musicUrl(offset));
             const data = await res.json();
             const items = (data.items || data.list || data.data || (Array.isArray(data) ? data : [])).filter(Boolean);
             musicData = items;
@@ -2717,7 +2741,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         musicCurrentPage++;
                         try {
                             const offset2 = (musicCurrentPage - 1) * musicPageSize;
-                            const res2 = await apiFetch(musicEndpoint() + `?limit=${musicPageSize}&offset=${offset2}`);
+                            const res2 = await apiFetch(musicUrl(offset2));
                             const data2 = await res2.json();
                             const items2 = (data2.items || data2.list || data2.data || (Array.isArray(data2) ? data2 : [])).filter(Boolean);
                             musicData = musicData.concat(items2);
@@ -2752,7 +2776,28 @@ document.addEventListener('DOMContentLoaded', async () => {
             btn.classList.add('active');
             musicTab = btn.dataset.musicTab;
             musicCurrentPage = 1;
+            // 搜索选项卡：显示搜索框并聚焦；其余隐藏
+            if (musicTab === 'search') {
+                if (musicSearchBox) musicSearchBox.style.display = '';
+                if (musicSearchInput) setTimeout(() => musicSearchInput.focus(), 50);
+            } else {
+                if (musicSearchBox) musicSearchBox.style.display = 'none';
+            }
             loadMusicList();
+        });
+    }
+
+    // 音乐搜索：回车或点击图标按钮触发
+    function doMusicSearch() {
+        if (!musicSearchInput) return;
+        musicSearchQuery = musicSearchInput.value.trim();
+        musicCurrentPage = 1;
+        loadMusicList();
+    }
+    if (musicSearchBtn) musicSearchBtn.addEventListener('click', doMusicSearch);
+    if (musicSearchInput) {
+        musicSearchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); doMusicSearch(); }
         });
     }
 
@@ -3187,19 +3232,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 音乐界面右上角三大金刚键
     const tauriInvoke = (typeof window !== 'undefined') && (window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke);
+    // 注：musicWin*Btn 已交由全局「事件委托」(document 上的 click 监听，按 id 后缀 Win*Btn 派发) 统一处理。
+    // 此处若再单独绑定 click 会与全局委托重复触发（toggle_maximize_window 被调两次 → 最大化后瞬间还原）。
+    // 仅保留「打开时同步一次最大/还原图标」，状态同步由全局 syncMaximizeState 在 resize/初始化时统一完成。
     if (IS_TAURI && tauriInvoke) {
-        const musicWinMinBtn = document.getElementById('musicWinMinBtn');
         const musicWinMaxBtn = document.getElementById('musicWinMaxBtn');
-        const musicWinCloseBtn = document.getElementById('musicWinCloseBtn');
-        if (musicWinMinBtn) musicWinMinBtn.addEventListener('click', () => {
-            tauriInvoke('minimize_window').catch(e => console.error('[music] minimize:', e));
-        });
-        if (musicWinMaxBtn) musicWinMaxBtn.addEventListener('click', () => {
-            tauriInvoke('toggle_maximize_window').catch(e => console.error('[music] maximize:', e));
-        });
-        if (musicWinCloseBtn) musicWinCloseBtn.addEventListener('click', () => {
-            tauriInvoke('close_window').catch(e => console.error('[music] close:', e));
-        });
+        if (musicWinMaxBtn) {
+            const i = musicWinMaxBtn.querySelector('i');
+            tauriInvoke('is_window_maximized').then(function (isMax) {
+                if (!i) return;
+                i.className = isMax ? 'fa-regular fa-clone' : 'fa-regular fa-square';
+                musicWinMaxBtn.title = isMax ? '还原' : '最大化';
+            }).catch(function () {});
+        }
     }
 
     const mergeMessages = document.querySelector('meta[name="theme-merge-messages"]')?.content === 'true';
@@ -3256,7 +3301,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         requestAnimationFrame(() => overlay.style.opacity = '1');
 
         const scroll = overlay.querySelector('#sp-scroll');
-        scroll.innerHTML = '<div style="text-align:center;padding:40px;color:#999;">加载中...</div>';
+        scroll.innerHTML = '<div class="oc-page-loading"><span class="oc-spinner xl"></span><span>加载中...</span></div>';
 
         // 初始化自绘滚动条
         let spScrollbar = null;
@@ -3343,10 +3388,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 spMaxBtn.title = isMax ? '还原' : '最大化';
             }).catch(function(){});
         }
+        // spWinMin/Max/Close 按钮已由全局「事件委托」(document 的 click 监听，按 id 后缀 WinMinBtn/WinMaxBtn/WinCloseBtn 派发) 统一处理。
+        // 此处若再单独绑定 click 会与全局委托重复触发（toggle_maximize_window 被调两次 → 最大化后瞬间还原）。
+        // 因此只保留「打开时同步一次图标」，状态同步由全局 syncMaximizeState 在 resize/初始化时统一完成。
         if (spInvoke) {
-            if (spMinBtn) spMinBtn.addEventListener('click', function() { spInvoke('minimize_window').catch(function(){}); });
-            if (spMaxBtn) spMaxBtn.addEventListener('click', function() { spInvoke('toggle_maximize_window').then(spSyncMaxIcon).catch(function(){}); });
-            if (spCloseBtn) spCloseBtn.addEventListener('click', function() { spInvoke('close_window').catch(function(){}); });
             spSyncMaxIcon(); // 打开时同步一次图标
         }
 
@@ -3973,7 +4018,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.body.appendChild(overlay);
         requestAnimationFrame(() => overlay.style.opacity = '1');
         const scroll = overlay.querySelector('#gm-scroll');
-        scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">加载中...</div>';
+        scroll.innerHTML = '<div class="oc-page-loading"><span class="oc-spinner xl"></span><span>加载中...</span></div>';
 
         async function load() {
             try {
@@ -3987,8 +4032,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const info = (groupsData.groups || []).find(g => g.group_id === groupId) || {};
                 if (membersData.error) { scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">' + membersData.error + '</div>'; return; }
                 const members = (membersData.members || []).map(m => ({
+                    // 机器主键：ncuid 优先（用于 API 调用、isSelfUid 比对）
                     uid: getUid(m),
                     ncuid: m.ncuid || getUid(m),
+                    // 旧 uid（USR-XXX），kick/admin 后端要求 user_uid 字段填这个
                     displayUid: getDisplayUid(m),
                     name: m.display_name || m.username || getUid(m),
                     avatar: m.avatar_url || '',
@@ -4004,7 +4051,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const mUid = m.uid;
                     const isMe = isSelfUid(mUid);
                     const rl = m.role === 2 ? '群主' : (m.role === 1 ? '管理员' : '');
-                    membersHtml += `<div class="gm-member-item" data-uid="${escapeHtml(mUid)}" data-ncuid="${escapeHtml(m.ncuid || '')}" data-role="${m.role || 0}" style="cursor:pointer;">` +
+                    membersHtml += `<div class="gm-member-item" data-uid="${escapeHtml(mUid)}" data-ncuid="${escapeHtml(m.ncuid || '')}" data-display-uid="${escapeHtml(m.displayUid || mUid)}" data-role="${m.role || 0}" style="cursor:pointer;">` +
                         `<img class="gm-member-avatar" src="${cachedResolveMediaUrl(m.avatar || defaultAvatar)}" onerror="this.src='${defaultAvatar}'">` +
                         `<div class="gm-member-info"><div class="gm-member-name">${escapeHtml(m.name)}</div><div class="gm-member-uid">${escapeHtml(m.displayUid)}</div></div>` +
                         (rl ? `<span class="gm-member-tag role-${m.role}">${rl}</span>` : '') +
@@ -4046,6 +4093,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         const m = {
                             uid: item.dataset.uid,
                             ncuid: item.dataset.ncuid,
+                            displayUid: item.dataset.displayUid || item.dataset.uid,
                             role: parseInt(item.dataset.role || '0', 10),
                             name: (item.querySelector('.gm-member-name') || {}).textContent || ''
                         };
@@ -4058,6 +4106,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         const m = {
                             uid: item.dataset.uid,
                             ncuid: item.dataset.ncuid,
+                            displayUid: item.dataset.displayUid || item.dataset.uid,
                             role: parseInt(item.dataset.role || '0', 10),
                             name: (item.querySelector('.gm-member-name') || {}).textContent || ''
                         };
@@ -4163,10 +4212,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             async function gmKick(member) {
                 if (!await showConfirm('确定将 ' + (member.name || member.uid) + ' 踢出群聊吗？')) return;
                 try {
+                    // 双写：user_uid 用真正的旧 uid（USR-XXX），user_ncuid 用 ncuid
+                    // 后端两个字段独立校验，任一缺失即报"uid or ncuid is required"
+                    const userUid = member.displayUid || member.uid;
+                    const userNcuid = member.ncuid || member.uid;
                     const r = await apiFetch('/v1/groups/kick', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ group_id: groupId, user_uid: member.uid, user_ncuid: member.ncuid })
+                        body: JSON.stringify({ group_id: groupId, user_uid: userUid, user_ncuid: userNcuid })
                     });
                     const d = await r.json();
                     if (d.error) { showAlert(d.error); return; }
@@ -4178,10 +4231,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const verb = admin ? '设为管理员' : '取消管理员';
                 if (!await showConfirm('确定将 ' + (member.name || member.uid) + ' ' + verb + '吗？')) return;
                 try {
+                    // 双写：user_uid 用真正的旧 uid（USR-XXX），user_ncuid 用 ncuid
+                    const userUid = member.displayUid || member.uid;
+                    const userNcuid = member.ncuid || member.uid;
                     const r = await apiFetch('/v1/groups/admin', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ group_id: groupId, user_uid: member.uid, user_ncuid: member.ncuid, admin: admin })
+                        body: JSON.stringify({ group_id: groupId, user_uid: userUid, user_ncuid: userNcuid, admin: admin })
                     });
                     const d = await r.json();
                     if (d.error) { showAlert(d.error); return; }
@@ -4679,8 +4735,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     function hideMemberMenu() {
         if (memberMenuEl) {
-            memberMenuEl.remove();
+            const el = memberMenuEl;
             memberMenuEl = null;
+            // 快速淡出：移除 .show 触发 CSS 过渡，过渡结束后移除元素
+            el.classList.remove('show');
+            el.addEventListener('transitionend', () => el.remove(), { once: true });
+            setTimeout(() => el.remove(), 200);
         }
         document.removeEventListener('click', memberMenuClose);
         document.removeEventListener('contextmenu', memberMenuClose);
@@ -5529,7 +5589,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         pollInFlight = true;
         try {
             if (currentConv) {
-                await fetchLatestMessages(currentConv.type, currentConv.id, currentConv.key, true);
+                await fetchLatestMessages(currentConv.type, currentConv.id, currentConv.key, true, 'poll');
             }
             await loadUnreadCounts();
             notifyPollNewMessages();
@@ -5642,7 +5702,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         try {
             const curKey = currentConv ? currentConv.key : null;
             if (currentConv) {
-                await fetchLatestMessages(currentConv.type, currentConv.id, currentConv.key);
+                await fetchLatestMessages(currentConv.type, currentConv.id, currentConv.key, false, 'reconnect');
             }
             // 多会话消息接受：断线期间非当前会话的消息，静默补拉（串行，避免并发风暴）；跳过当前会话（已上面补过）
             if (isMultiSessionEnabled()) {
@@ -7421,7 +7481,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // 从缓存恢复会话
     function restoreConversation(key) {
         const cached = convCache[key];
-        if (!cached) return false;
+        if (!cached) {
+            return false;
+        }
         // 检查缓存 fragment 是否为空（可能因竞态条件导致空缓存）
         if (!cached.fragment || cached.fragment.childNodes.length === 0) {
             delete convCache[key];
@@ -7463,7 +7525,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // 同步完成后丢弃旧缓存，用最新消息重建 DOM，只缓存最新一页
     let fetchLatestReqId = 0;
     // quiet=true：不显示「同步中」指示器（轮询模式每 5s 调用一次，否则指示器会持续闪烁）
-    async function fetchLatestMessages(type, id, convKey, quiet) {
+    async function fetchLatestMessages(type, id, convKey, quiet, source) {
         const PAGE_SIZE = 30;
         const reqId = ++fetchLatestReqId;
         // 显示同步中指示器
@@ -7690,7 +7752,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             // 顶部插入「加载中」指示器（拉取更早消息时显示，完成后移除）
             let historySpinner = document.createElement('div');
             historySpinner.className = 'history-loading';
-            historySpinner.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 加载中...';
+            historySpinner.innerHTML = '<span class="oc-spinner sm"></span> 加载中...';
             messagesContainer.insertBefore(historySpinner, messagesContainer.firstChild);
             try {
                 const offset = convOffset[convKey] || 0;
@@ -7851,7 +7913,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     // 绑定滚动监听（用于加载历史 + 维护贴底状态）；缓存恢复路径此前未绑定，会导致上滑后无法拉取历史
                     attachScrollListener(type, id, convKey, 30);
                     // 后台拉取最新消息（已用缓存恢复 DOM，故静默刷新，不显示「同步中」）
-                    fetchLatestMessages(type, id, convKey, true);
+                    fetchLatestMessages(type, id, convKey, true, 'switch-cache');
                 });
                 return;
             }
@@ -7869,7 +7931,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             delete seenMsgIds[convKey];
         }
         messagesContainer._scrollHandler && messagesContainer.removeEventListener('scroll', messagesContainer._scrollHandler);
-        fetchLatestMessages(type, id, convKey);
+        fetchLatestMessages(type, id, convKey, false, 'switch-nocache');
         } finally {
             _switchingConv = false;
         }
@@ -7941,36 +8003,43 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             imgWrap.className = 'chat-image-wrap';
             const imgSpin = document.createElement('div');
             imgSpin.className = 'img-loading';
-            imgSpin.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+            imgSpin.innerHTML = '<span class="oc-spinner lg"></span>';
             imgWrap.appendChild(imgSpin);
             imgWrap.appendChild(imgEl);
 
             let _imgLoaded = false;
-            let _imgSpinTimer = setTimeout(() => {
-                if (!_imgLoaded) imgWrap.classList.add('show-spinner');
-            }, 2000);
+            // 占位框 + 转圈立即显示：灰底盒子始终占位，避免「空消息」空白
+            imgWrap.classList.add('show-spinner');
 
-            imgEl.onload = function () {
+            // 媒体缓存(MediaCache)会先把 <img> 的 src 换成 1x1 透明占位 gif，
+            // 其 load/error 事件不能视作「图片已就绪」，否则占位框会在 1x1 gif 解码完成的瞬间塌掉 → 空白。
+            function isRealImageReady() {
+                if (!imgEl.complete) return false;
+                if (imgEl.naturalWidth > 1 && imgEl.naturalHeight > 1) return true;
+                // 兜底：真实图自身恰好 1x1 的极端情况，用来源协议判断（data: 一定是占位 gif）
+                const s = imgEl.src || '';
+                return !s.startsWith('data:') && (s.startsWith('blob:') || /^https?:/.test(s));
+            }
+
+            imgEl.addEventListener('load', function () {
+                if (!isRealImageReady()) return; // 仍是 MediaCache 的 1x1 占位 gif，忽略
                 _imgLoaded = true;
-                clearTimeout(_imgSpinTimer);
                 imgWrap.classList.remove('show-spinner');
                 imgWrap.classList.add('loaded');
-            };
-            imgEl.onerror = function () {
+            });
+            imgEl.addEventListener('error', function () {
+                if (imgEl.src && imgEl.src.startsWith('data:')) return; // 1x1 占位 gif 出错，忽略
                 if (this.dataset.original) {
-                    // 缩略图失败：尝试一次原图，并重置 2s 转圈计时
+                    // 缩略图失败：尝试一次原图
                     const orig = this.dataset.original;
                     this.dataset.original = '';
                     this.src = cachedResolveMediaUrl(orig);
-                    clearTimeout(_imgSpinTimer);
-                    _imgSpinTimer = setTimeout(() => { if (!_imgLoaded) imgWrap.classList.add('show-spinner'); }, 2000);
                 } else {
                     _imgLoaded = true;
-                    clearTimeout(_imgSpinTimer);
                     imgWrap.classList.remove('show-spinner');
                     imgWrap.classList.add('loaded', 'img-error');
                 }
-            };
+            });
             if (origUrl) imgEl.dataset.original = origUrl; // 右键「查看原图」使用
             imgEl.onclick = () => openImageViewer(imgEl);
             imgEl.src = cachedResolveMediaUrl(thumbUrl);
@@ -9688,6 +9757,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const member = {
                 uid: gmMember.dataset.uid,
                 ncuid: gmMember.dataset.ncuid,
+                displayUid: gmMember.dataset.displayUid || gmMember.dataset.uid,
                 role: parseInt(gmMember.dataset.role || '0', 10),
                 name: (gmMember.querySelector('.gm-member-name') || {}).textContent || ''
             };
@@ -10721,6 +10791,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         document.getElementById('settingsMyMusic')?.addEventListener('click', () => {
             switchTab('music');
             musicTab = 'mine';
+            if (musicSearchBox) musicSearchBox.style.display = 'none';
             musicLoaded = false;
             loadMusicList();
         });
@@ -11864,7 +11935,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 const wrap = document.createElement('div');
                 wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:12px;padding:28px 0;color:var(--secondary-text);';
                 const spin = document.createElement('div');
-                spin.style.cssText = 'width:26px;height:26px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:updateSpin 0.8s linear infinite;';
+                spin.className = 'oc-spinner';
                 const label = document.createElement('div');
                 label.style.fontSize = '13px';
                 label.textContent = msg || '正在检查更新…';
@@ -12092,7 +12163,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 delete seenMsgIds[ck];
                 convOffset[ck] = 0;
                 convHasMore[ck] = true;
-                fetchLatestMessages(currentConv.type, currentConv.id, ck);
+                fetchLatestMessages(currentConv.type, currentConv.id, ck, false, 'settings-consec');
             });
         }
 

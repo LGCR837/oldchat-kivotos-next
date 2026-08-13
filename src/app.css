@@ -1108,6 +1108,55 @@ body::-webkit-scrollbar {
 	border-bottom-color: var(--accent);
 }
 
+/* 音乐搜索框（搜索选项卡专属，侧边栏相对其他页多出的部分） */
+.music-search-box {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--border);
+	flex-shrink: 0;
+}
+
+.music-search-input {
+	flex: 1;
+	min-width: 0;
+	padding: 7px 10px;
+	border: 1px solid var(--border);
+	border-radius: 16px;
+	background: var(--chat-bg);
+	color: var(--text);
+	font-size: 13px;
+	font-family: inherit;
+	outline: none;
+	transition: border-color 0.15s, background-color 0.15s;
+}
+
+.music-search-input:focus {
+	border-color: var(--accent);
+}
+
+.music-search-btn {
+	flex-shrink: 0;
+	width: 32px;
+	height: 32px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: none;
+	border-radius: 50%;
+	background: var(--hover);
+	color: var(--text);
+	cursor: pointer;
+	font-size: 13px;
+	transition: background-color 0.15s, color 0.15s;
+}
+
+.music-search-btn:hover {
+	background: var(--accent);
+	color: #fff;
+}
+
 /* ===== 音乐右侧工作区（参考 CRMusic） ===== */
 .music-workspace {
 	position: absolute;
@@ -1493,7 +1542,8 @@ body::-webkit-scrollbar {
 	cursor: pointer;
 	color: var(--text);
 	font-size: 14px;
-	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
+	transition: background-color 0.15s ease;
 }
 
 .more-menu button:hover {
@@ -1524,7 +1574,8 @@ body::-webkit-scrollbar {
 	cursor: pointer;
 	font-size: 14px;
 	color: var(--text);
-	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
+	transition: background-color 0.15s ease;
 }
 
 .context-menu-item:hover {
@@ -2210,10 +2261,35 @@ body::-webkit-scrollbar {
 	justify-content: flex-end;
 }
 
-/* 检查更新弹窗：加载转圈 */
-@keyframes updateSpin {
-	from { transform: rotate(0deg); }
-	to { transform: rotate(360deg); }
+/* 统一加载转圈：复用启动闪屏的环形风格（accent 粉 + 浅色轨道），替代各处 FontAwesome fa-spinner */
+@keyframes ocSpinnerSpin { to { transform: rotate(360deg); } }
+.oc-spinner {
+	display: inline-block;
+	width: 20px; height: 20px;
+	border-radius: 50%;
+	box-sizing: border-box;
+	border: 3px solid rgba(250, 148, 166, 0.25);
+	border-top-color: var(--accent, #fa94a6);
+	animation: ocSpinnerSpin 0.9s linear infinite;
+	flex: none;
+}
+.oc-spinner.sm { width: 14px; height: 14px; border-width: 2px; }
+.oc-spinner.lg { width: 36px; height: 36px; border-width: 4px; }
+@media (prefers-reduced-motion: reduce) {
+	.oc-spinner { animation-duration: 2.4s; }
+}
+
+/* 全窗口面板的加载态：居中粉环，风格对齐启动闪屏（.xl 42px 与 .app-splash-spinner 一致） */
+.oc-spinner.xl { width: 42px; height: 42px; border-width: 4px; }
+.oc-page-loading {
+	min-height: 100%;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 14px;
+	color: var(--secondary-text);
+	font-size: 13px;
 }
 
 .custom-modal-actions .btn {
