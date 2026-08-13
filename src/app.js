@@ -7127,8 +7127,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (messagesContainer.lastChild !== scrollAnchor) {
             messagesContainer.appendChild(scrollAnchor);
         }
-        // 恢复滚动位置（同步设置，不依赖 rAF，避免与 switchConversation 中的 scrollToBottom 冲突）
-        messagesContainer.scrollTop = cached.scrollTop;
+        // 恢复滚动位置：直接定位到底部（切换会话即显示最新消息，避免出现「先回到上次位置再瞬移下去」的观感）
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
         // 恢复状态
         seenMsgIds[key] = cached.seenMsgIds;
         convOffset[key] = cached.offset;
