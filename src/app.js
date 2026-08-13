@@ -2437,6 +2437,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 聊天界面自绘滚动条
     let chatScrollbar = null;
+    // 贴底状态：为 true 时持续把消息容器钉在底部（图片/媒体异步加载撑高内容后重新贴底），
+    // 用户上滑离开底部时置为 false，避免把正在看历史的用户强行拽回底部。
+    let _stickToBottom = true;
     if (window['dumogu-scrollbar'] && window['dumogu-scrollbar'].DumoguScrollbar) {
         chatScrollbar = new window['dumogu-scrollbar'].DumoguScrollbar({ keepShow: true });
         chatScrollbar.bind(messagesContainer);
@@ -2493,8 +2496,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     if (scrollToBottomBtn) {
         scrollToBottomBtn.addEventListener('click', () => {
+            _stickToBottom = true;
             scrollToBottom(true, true);
         });
+    }
+
+    // 立即把消息容器滚动到底部（同步、无延迟），用于切换会话/增量追加等需要「第一帧即底部」的场景
+    function pinToBottom() {
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        if (chatScrollbar) { try { chatScrollbar.update(); } catch (e) {} }
+        updateScrollToBottomBtn();
     }
 
     const emojiPlazaBtn = document.getElementById('emojiPlazaBtn');
@@ -7128,7 +7139,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             messagesContainer.appendChild(scrollAnchor);
         }
         // 恢复滚动位置：直接定位到底部（切换会话即显示最新消息，避免出现「先回到上次位置再瞬移下去」的观感）
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        _stickToBottom = true;
+        pinToBottom();
         // 恢复状态
         seenMsgIds[key] = cached.seenMsgIds;
         convOffset[key] = cached.offset;
@@ -7255,8 +7267,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     convOffset[convKey] = msgs.length;
                     convHasMore[convKey] = msgs.length >= PAGE_SIZE;
 
-                    // 瞬时滚动到新消息位置（切换会话场景下不做平滑滚动，避免「切换后滑动」观感）
-                    scrollToBottom(true);
+                    // 瞬时滚动到新消息位置（仅在贴底时，避免把正在看历史的用户拽回底部）
+                    if (_stickToBottom) pinToBottom();
+                    else updateScrollToBottomBtn();
 
                     // 缓存最新 DOM
                     delete convCache[convKey];
@@ -7366,6 +7379,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
         messagesContainer._scrollHandler = async () => {
             updateScrollToBottomBtn();
+            // 维护贴底状态：用户上滑离开底部则取消贴底，回到底部附近恢复贴底
+            const distFromBottom = messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight;
+            _stickToBottom = distFromBottom < messagesContainer.clientHeight / 2;
             if (!convHasMore[convKey] || isLoadingMore) return;
             if (messagesContainer.scrollTop > 5) return;
 
@@ -7530,10 +7546,36 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (convCache[convKey]) {
             // 检查 restoreConversation 返回值：false 表示缓存无效（空 fragment 等），需走无缓存路径
             if (restoreConversation(convKey)) {
-                // 切换会话：同步瞬间跳到底部（不要走 scrollToBottom 的 rAF/setTimeout 延迟，否则会出现「切换后才滚到底」的观感）
-                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                // 切换会话：第一帧即贴底，且保持贴底直到图片/媒体加载完成，避免「先显示旧位置再瞬移下去」
+                _stickToBottom = true;
+                // 先隐藏容器，等图片布局稳定（scrollHeight 正确）后再贴底并揭示，彻底消除首帧错位
+                messagesContainer.style.visibility = 'hidden';
+                pinToBottom();
+                const imgs = messagesContainer.querySelectorAll('.message img');
+                let pending = 0;
+                imgs.forEach(function (img) { if (!img.complete) pending++; });
+                const reveal = function () {
+                    pinToBottom();
+                    messagesContainer.style.visibility = '';
+                };
+                if (pending === 0) {
+                    requestAnimationFrame(reveal);
+                } else {
+                    let done = 0;
+                    const onDone = function () { if (++done >= pending) requestAnimationFrame(reveal); };
+                    imgs.forEach(function (img) {
+                        if (!img.complete) {
+                            img.addEventListener('load', onDone, { once: true });
+                            img.addEventListener('error', onDone, { once: true });
+                        }
+                    });
+                    // 兜底：最多等 500ms，避免个别图片卡住导致列表不显示
+                    setTimeout(reveal, 500);
+                }
                 if (chatScrollbar) chatScrollbar.update();
                 updateScrollToBottomBtn();
+                // 绑定滚动监听（用于加载历史 + 维护贴底状态）；缓存恢复路径此前未绑定，会导致上滑后无法拉取历史
+                attachScrollListener(type, id, convKey, 30);
                 // 后台拉取最新消息（已用缓存恢复 DOM，故静默刷新，不显示「同步中」）
                 fetchLatestMessages(type, id, convKey, true);
                 return;
@@ -7754,9 +7796,14 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
 
         if (msgType === 'video') {
-            // ArtPlayer 容器：插入 DOM 后由 initArtPlayers 初始化播放器
+            // 默认显示缩略图（thumb_url），点击后原地加载 ArtPlayer（见 messagesContainer 点击委托）
             const vUrl = cachedResolveMediaUrl(msg.media_url || '');
-            content = `<div class="video-message" data-src="${escapeHtml(vUrl)}" style="width:320px;max-width:100%;aspect-ratio:16/9;background:#000;"></div>`;
+            const tUrl = cachedResolveMediaUrl(msg.thumb_url || msg.media_url || '');
+            content = `
+                <div class="video-thumb" data-video-src="${escapeHtml(vUrl)}" title="点击播放">
+                    <img class="video-thumb-img" src="${escapeHtml(tUrl)}" alt="视频" onerror="this.style.display='none'">
+                    <div class="video-thumb-play"><div class="play-circle"><i class="fa-solid fa-play"></i></div></div>
+                </div>`;
         } else if (msgType === 'audio') {
             content = `<audio controls style="max-width:200px;" src="${cachedResolveMediaUrl(msg.media_url || '')}"></audio>`;
         } else if (msgType === 'resource' || msgType === 'file') {
@@ -8083,7 +8130,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         bubble.className = 'message-bubble';
         bubble.innerHTML = content;
         // 红包/视频/转发聊天记录：不显示气泡外框（去掉背景/内边距/小箭头），仅保留卡片或播放器本身
-        if (bubble.querySelector('.red-packet-card') || bubble.querySelector('.video-message') || bubble.querySelector('.forward-card')) {
+        if (bubble.querySelector('.red-packet-card') || bubble.querySelector('.video-message') || bubble.querySelector('.video-thumb') || bubble.querySelector('.forward-card')) {
             bubble.classList.add('no-frame');
         }
         // v3 按钮消息：为内联按钮绑定点击事件
@@ -8340,6 +8387,21 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
     // 点击引用块跳转到被引用的消息
     messagesContainer.addEventListener('click', function(e) {
+        // 视频缩略图：点击原地加载 ArtPlayer（默认只显示封面，避免一进会话就起一堆播放器/占带宽）
+        const vthumb = e.target.closest('.video-thumb');
+        if (vthumb && !vthumb.dataset.playing) {
+            const vUrl = vthumb.dataset.videoSrc || '';
+            if (vUrl) {
+                vthumb.dataset.playing = '1';
+                const player = document.createElement('div');
+                player.className = 'video-message';
+                player.setAttribute('data-src', vUrl);
+                player.style.cssText = 'width:320px;max-width:100%;aspect-ratio:16/9;background:#000;';
+                vthumb.replaceWith(player);
+                initArtPlayers(player.parentElement || player);
+            }
+            return;
+        }
         const quoteBlock = e.target.closest('.quote-block, .quote-block-image');
         if (!quoteBlock) return;
         const quotedId = quoteBlock.dataset.quotedId;

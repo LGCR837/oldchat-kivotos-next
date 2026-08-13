@@ -1765,6 +1765,56 @@ body::-webkit-scrollbar {
 	opacity: 1
 }
 
+/* 视频缩略图：默认显示封面，点击后原地加载 ArtPlayer */
+.video-thumb {
+	position: relative;
+	width: 320px;
+	max-width: 100%;
+	aspect-ratio: 16 / 9;
+	background: #000;
+	border-radius: 8px;
+	overflow: hidden;
+	cursor: pointer
+}
+
+.video-thumb-img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	display: block
+}
+
+.video-thumb-play {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	pointer-events: none
+}
+
+.video-thumb-play .play-circle {
+	width: 54px;
+	height: 54px;
+	border-radius: 50%;
+	background: rgba(0, 0, 0, 0.55);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: transform 0.15s, background 0.15s
+}
+
+.video-thumb:hover .play-circle {
+	transform: scale(1.08);
+	background: rgba(0, 0, 0, 0.7)
+}
+
+.video-thumb-play .play-circle i {
+	color: #fff;
+	font-size: 22px;
+	margin-left: 3px
+}
+
 .voice-message {
 	display: flex;
 	flex-direction: column;
