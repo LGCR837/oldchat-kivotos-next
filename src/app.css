@@ -44,7 +44,6 @@
 	--overlay: rgba(0,0,0,0.5);
 	--discover-icon-bg: rgba(250,148,166,0.18);
 	--discover-icon-fg: #fa94a6;
-	--context-menu-bg: var(--chat-bg);
 }
 
 [data-theme-mode="dark"] {
@@ -81,7 +80,6 @@
 	--overlay: rgba(0,0,0,0.6);
 	--discover-icon-bg: rgba(255,255,255,0.10);
 	--discover-icon-fg: #b8c2d0;
-	--context-menu-bg: rgba(26, 26, 46, 0.72);
 }
 
 body, .sidebar, .chat-area, .messages, .input-area, .contact-list, .chat-header, .sidebar-header, .message-bubble, .message-time, .contact-item, .more-menu, .custom-context-menu, .emoticon-picker {
@@ -1504,7 +1502,7 @@ body::-webkit-scrollbar {
 
 .custom-context-menu {
 	position: fixed;
-	background: var(--context-menu-bg, var(--chat-bg));
+	background: var(--chat-bg);
 	border: 1px solid var(--border);
 	box-shadow: var(--shadow);
 	z-index: 9999;
@@ -1519,12 +1517,6 @@ body::-webkit-scrollbar {
 .custom-context-menu.show {
 	opacity: 1;
 	transform: scale(1);
-}
-
-/* 深色模式：右键菜单背景改为半透明深色 + 毛玻璃模糊，透出底层内容更有层次 */
-[data-theme-mode="dark"] .custom-context-menu {
-	-webkit-backdrop-filter: blur(14px) saturate(160%);
-	backdrop-filter: blur(14px) saturate(160%);
 }
 
 .context-menu-item {
