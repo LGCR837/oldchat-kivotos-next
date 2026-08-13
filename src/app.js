@@ -7532,8 +7532,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             if (restoreConversation(convKey)) {
                 // 立即滚动到底部，避免用户看到缓存 DOM 在顶部（restoreConversation 用 rAF 恢复 scrollTop，不够及时）
                 scrollToBottom(true);
-                // 后台拉取最新消息（会重建 DOM、替换缓存、淡入动画、滚动到底部）
-                fetchLatestMessages(type, id, convKey);
+                // 后台拉取最新消息（已用缓存恢复 DOM，故静默刷新，不显示「同步中」）
+                fetchLatestMessages(type, id, convKey, true);
                 return;
             }
             // 缓存无效，删除缓存后继续走无缓存路径
