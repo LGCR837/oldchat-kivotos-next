@@ -4015,7 +4015,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (myRole === 2) {
                     btnsHtml = `<div class="gm-actions">` +
                         `<button class="gm-settings-btn" id="gmSettingsBtn">群设置</button>` +
-                        `<button class="gm-dissolve-btn" id="gmDissolveBtn">解散群聊</button>` +
                         `</div>`;
                 } else if (myRole === 1) {
                     btnsHtml = `<div class="gm-actions">` +
@@ -4041,22 +4040,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                 // 成员项点击：弹出成员操作菜单（查看资料 / 设管理员 / 踢出）
                 scroll.querySelectorAll('.gm-member-item[data-uid]').forEach(item => {
-                    item.addEventListener('click', () => {
+                    item.addEventListener('click', (e) => {
+                        e.stopPropagation();
                         const m = {
                             uid: item.dataset.uid,
                             ncuid: item.dataset.ncuid,
                             role: parseInt(item.dataset.role || '0', 10),
                             name: (item.querySelector('.gm-member-name') || {}).textContent || ''
                         };
-                        showMemberActions(m, myRole, item);
+                        showMemberActions(m, myRole, e);
                     });
                 });
 
                 // 群操作按钮
                 const gsBtn = scroll.querySelector('#gmSettingsBtn');
                 if (gsBtn) gsBtn.addEventListener('click', () => openGroupSettings());
-                const gdBtn = scroll.querySelector('#gmDissolveBtn');
-                if (gdBtn) gdBtn.addEventListener('click', () => gmDissolve());
                 const glBtn = scroll.querySelector('#gmLeaveBtn');
                 if (glBtn) glBtn.addEventListener('click', () => gmLeaveGroup());
 
@@ -4065,6 +4063,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 };
                 window.gmLeaveGroup = async function() {
                     if (!await showConfirm('确定要退出该群聊吗？')) return;
+                    if (!await showConfirm('再次确认：退出后将不再接收该群的新消息。')) return;
                     try {
                         const r = await apiFetch('/v1/groups/leave', {
                             method: 'POST',
@@ -4092,39 +4091,43 @@ document.addEventListener('DOMContentLoaded', async () => {
                 };
 
             // ===== 成员操作菜单 / 群管理动作 =====
-            function showMemberActions(member, myRole, anchorEl) {
+            // 复用全局 custom-context-menu：定位在鼠标位置、带缩放/淡入动画、点击外部关闭
+            function showMemberActions(member, myRole, e) {
                 if (isSelfUid(member.uid)) { openSpacePanel(member.uid); return; }
                 const isTargetOwner = member.role === 2;
                 const isTargetAdmin = member.role === 1;
                 const canKick = (myRole === 2) || (myRole === 1 && !isTargetAdmin && !isTargetOwner);
                 const canSetAdmin = (myRole === 2) && !isTargetOwner;
-                let items = '<div class="context-menu-item" data-act="profile">查看资料</div>';
+                let menuHtml = '<div class="context-menu-item" data-act="profile">查看资料</div>';
                 if (canSetAdmin) {
-                    items += isTargetAdmin
+                    menuHtml += isTargetAdmin
                         ? '<div class="context-menu-item" data-act="unadmin">取消管理员</div>'
                         : '<div class="context-menu-item" data-act="admin">设为管理员</div>';
                 }
                 if (canKick) {
-                    items += '<div class="context-menu-item danger" data-act="kick">踢出群聊</div>';
+                    menuHtml += '<div class="context-menu-item danger" data-act="kick">踢出群聊</div>';
                 }
                 const menu = document.createElement('div');
-                menu.className = 'custom-context-menu show';
-                menu.innerHTML = items;
-                const rect = anchorEl.getBoundingClientRect();
-                menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 200)) + 'px';
-                menu.style.top = (rect.bottom + 4) + 'px';
+                menu.className = 'custom-context-menu';
+                const x = Math.min(e.clientX, window.innerWidth - 180);
+                const y = Math.min(e.clientY, window.innerHeight - 200);
+                menu.style.left = x + 'px';
+                menu.style.top = y + 'px';
+                menu.innerHTML = menuHtml;
                 document.body.appendChild(menu);
-                const close = () => { if (menu.parentNode) menu.remove(); document.removeEventListener('click', onDocClick, true); };
-                const onDocClick = (ev) => { if (!menu.contains(ev.target)) close(); };
-                setTimeout(() => document.addEventListener('click', onDocClick, true), 0);
+                requestAnimationFrame(() => menu.classList.add('show'));
                 menu.addEventListener('click', (e2) => {
                     const act = e2.target.dataset.act;
-                    close();
+                    menu.remove();
                     if (act === 'profile') openSpacePanel(member.uid);
                     else if (act === 'admin') gmSetAdmin(member, true);
                     else if (act === 'unadmin') gmSetAdmin(member, false);
                     else if (act === 'kick') gmKick(member);
                 });
+                const closeHandler = (ev) => {
+                    if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', closeHandler); }
+                };
+                setTimeout(() => document.addEventListener('click', closeHandler), 0);
             }
 
             async function gmKick(member) {
@@ -4159,6 +4162,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             async function gmDissolve() {
                 if (!await showConfirm('确定要解散该群聊吗？此操作不可恢复！')) return;
                 if (!await showConfirm('再次确认：解散后所有成员将被移出，群聊无法恢复。')) return;
+                if (!await showConfirm('最后确认：群聊一旦解散将无法恢复，您确定吗？')) return;
                 try {
                     const r = await apiFetch('/v1/groups/dissolve', {
                         method: 'POST',
@@ -4196,6 +4200,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                         <span>群设置</span>
                     </div>
                     <div style="flex:1;overflow-y:auto;padding:16px;">
+                        <div class="gm-set-avatar-wrap" id="gsAvatarWrap" title="点击更换群头像">
+                            <img class="gm-set-avatar" id="gsAvatar" src="${cachedResolveMediaUrl(avatar)}" onerror="this.src='${defaultAvatar}'">
+                            <div class="gm-set-avatar-mask">更换群头像</div>
+                        </div>
+                        <input type="file" id="gsAvatarInput" accept="image/*" style="display:none">
                         <div class="gm-set-row">
                             <label>群名称</label>
                             <input class="gm-uid-input" id="gsName" value="${escapeHtml(info.name || '')}" style="width:100%;box-sizing:border-box;" />
@@ -4209,6 +4218,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             <input type="checkbox" id="gsMute" ${mute} />
                         </div>
                         <button class="gm-settings-btn" id="gsSave" style="width:100%;margin-top:16px;">保存</button>
+                        ${myRole === 2 ? '<button class="gm-dissolve-btn" id="gsDissolve" style="width:100%;margin-top:12px;">解散群聊</button>' : ''}
                     </div>
                 `;
                 document.body.appendChild(sOverlay);
@@ -4238,6 +4248,39 @@ document.addEventListener('DOMContentLoaded', async () => {
                         load();
                     } catch (e) { showAlert('保存失败'); btn.disabled = false; btn.textContent = '保存'; }
                 });
+
+                // 更换群头像（先上传到 /v1/media 拿到 URL，再写回 /v1/groups/avatar）
+                const gsAvatarWrap = sOverlay.querySelector('#gsAvatarWrap');
+                const gsAvatarInput = sOverlay.querySelector('#gsAvatarInput');
+                if (gsAvatarWrap && gsAvatarInput) {
+                    gsAvatarWrap.addEventListener('click', () => gsAvatarInput.click());
+                    gsAvatarInput.addEventListener('change', async (e2) => {
+                        const file = e2.target.files[0];
+                        if (!file) return;
+                        try {
+                            const fd = new FormData();
+                            fd.append('file', file);
+                            const up = await apiFetch('/v1/media', { method: 'POST', body: fd });
+                            const upData = await up.json();
+                            if (upData.error || !upData.url) { showAlert('上传失败: ' + (upData.error || '未知错误')); return; }
+                            const r = await apiFetch('/v1/groups/avatar', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ group_id: groupId, avatar_url: upData.url })
+                            });
+                            const d = await r.json();
+                            if (d.error) { showAlert(d.error); return; }
+                            info.avatar_url = upData.url;
+                            const av = sOverlay.querySelector('#gsAvatar');
+                            if (av) av.src = cachedResolveMediaUrl(upData.url);
+                            showAlert('群头像已更新');
+                        } catch (err) { showAlert('更换失败'); }
+                    });
+                }
+
+                // 解散群聊（仅群主，入口置于群设置内）
+                const gsDissolve = sOverlay.querySelector('#gsDissolve');
+                if (gsDissolve) gsDissolve.addEventListener('click', () => gmDissolve());
             }
             } catch (e) {
                 scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">加载失败</div>';
@@ -8350,7 +8393,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         timeDiv.textContent = time;
         msgDiv.appendChild(timeDiv);
 
-        // 阅后即焚支持
+        // 阅后即焚支持：默认在气泡内显示「阅后即焚」占位（带气泡框），点击后才显示真实内容并开始计时焚毁
         let burnSeconds = 0;
         try {
             const parsed = JSON.parse(msg.body || '{}');
@@ -8358,24 +8401,22 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         } catch (e) {
             burnSeconds = msg.burn_after_seconds || 0;
         }
-        if (burnSeconds > 0) {
+        if (burnSeconds > 0 && !isSelf) {
             msgDiv.classList.add('burn-message');
-            bubble.style.setProperty('display', 'none', 'important');
-            const burnHint = document.createElement('div');
-            burnHint.className = 'burn-hint';
-            burnHint.textContent = '阅后即焚';
-            msgDiv.insertBefore(burnHint, timeDiv);
-            burnHint.addEventListener('click', (e) => {
+            const burnRealHtml = bubble.innerHTML;
+            bubble.classList.add('burn-locked');
+            bubble.innerHTML = '<span class="burn-lock"><i class="fa-solid fa-fire"></i> 阅后即焚 · 点击查看</span>';
+            bubble.addEventListener('click', (e) => {
+                if (bubble.dataset.burnRevealed === '1') return; // 已揭示：放行内部交互（如视频播放）
                 e.stopPropagation();
-                burnHint.style.display = 'none';
-                bubble.style.removeProperty('display');
-                msgDiv.classList.add('revealed');
+                bubble.dataset.burnRevealed = '1';
+                bubble.classList.remove('burn-locked');
+                bubble.innerHTML = burnRealHtml;
+                msgDiv.classList.add('burn-revealed');
+                // 计时仅在点击查看后开始（而非收到即计时）
                 setTimeout(() => {
-                    bubble.style.setProperty('display', 'none', 'important');
-                    const recalled = document.createElement('div');
-                    recalled.className = 'time-separator';
-                    recalled.textContent = sender + ' 撤回了一条消息';
-                    msgDiv.appendChild(recalled);
+                    bubble.classList.add('burn-destroyed');
+                    bubble.innerHTML = '<span class="burn-lock burn-destroyed">🔥 已焚毁</span>';
                     msgDiv.classList.add('burned');
                 }, burnSeconds * 1000);
             });

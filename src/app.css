@@ -2785,49 +2785,49 @@ body::-webkit-scrollbar {
     padding: 20px 16px;
 }
 .gm-leave-btn {
-    width: 100%;
-    padding: 10px;
-    border-radius: 20px;
-    border: none;
-    background: var(--danger);
-    color: #fff;
-    font-size: 15px;
-    cursor: pointer;
-    font-family: inherit;
-    font-weight: 500;
+	width: 100%;
+	padding: 10px;
+	border-radius: 20px;
+	border: 1px solid var(--danger);
+	background: transparent;
+	color: var(--danger);
+	font-size: 15px;
+	cursor: pointer;
+	font-family: inherit;
+	font-weight: 500;
 }
-.gm-leave-btn:hover { opacity: 0.85; }
+.gm-leave-btn:hover { background: var(--danger); color: #fff; }
 .gm-member-tag.role-2 { color: #f0a020; font-weight: 600; }
 .gm-member-tag.role-1 { color: var(--accent); font-weight: 600; }
 .gm-member-tag.me { color: var(--secondary-text); }
 .gm-member-item:hover { background: var(--hover); }
 .gm-settings-btn {
-    width: 100%;
-    padding: 10px;
-    border-radius: 20px;
-    border: 1px solid var(--border);
-    background: var(--accent);
-    color: #fff;
-    font-size: 15px;
-    cursor: pointer;
-    font-family: inherit;
-    font-weight: 500;
-    margin-bottom: 10px;
+	width: 100%;
+	padding: 10px;
+	border-radius: 20px;
+	border: 1px solid var(--border);
+	background: transparent;
+	color: var(--text);
+	font-size: 15px;
+	cursor: pointer;
+	font-family: inherit;
+	font-weight: 500;
+	margin-bottom: 10px;
 }
-.gm-settings-btn:hover { opacity: 0.85; }
+.gm-settings-btn:hover { background: var(--hover); }
 .gm-dissolve-btn {
-    width: 100%;
-    padding: 10px;
-    border-radius: 20px;
-    border: none;
-    background: var(--danger);
-    color: #fff;
-    font-size: 15px;
-    cursor: pointer;
-    font-family: inherit;
-    font-weight: 500;
+	width: 100%;
+	padding: 10px;
+	border-radius: 20px;
+	border: 1px solid var(--danger);
+	background: transparent;
+	color: var(--danger);
+	font-size: 15px;
+	cursor: pointer;
+	font-family: inherit;
+	font-weight: 500;
 }
-.gm-dissolve-btn:hover { opacity: 0.85; }
+.gm-dissolve-btn:hover { background: var(--danger); color: #fff; }
 .gm-set-row {
     display: flex;
     align-items: center;
@@ -2840,6 +2840,29 @@ body::-webkit-scrollbar {
 .gm-set-row label { font-weight: 500; }
 .context-menu-item.danger { color: var(--danger); }
 .context-menu-item.danger:hover { background: var(--danger); color: #fff; }
+
+/* 阅后即焚气泡占位 */
+.burn-lock { color: var(--danger); cursor: pointer; }
+.burn-destroyed { color: var(--secondary-text); font-style: italic; }
+/* 群设置 - 更换群头像 */
+.gm-set-avatar-wrap {
+	position: relative;
+	width: 72px; height: 72px;
+	margin: 0 auto 16px;
+	border-radius: 50%;
+	overflow: hidden;
+	cursor: pointer;
+	background: var(--border);
+}
+.gm-set-avatar { width: 100%; height: 100%; object-fit: cover; }
+.gm-set-avatar-mask {
+	position: absolute; inset: 0;
+	display: flex; align-items: center; justify-content: center;
+	background: rgba(0,0,0,0.45);
+	color: #fff; font-size: 12px; text-align: center;
+	opacity: 0; transition: opacity 0.15s;
+}
+.gm-set-avatar-wrap:hover .gm-set-avatar-mask { opacity: 1; }
 
 /* 个人主页 */
 .mp-header {
