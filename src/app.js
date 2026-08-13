@@ -4127,14 +4127,24 @@ document.addEventListener('DOMContentLoaded', async () => {
                 hideMemberMenu();
                 const menu = document.createElement('div');
                 menu.className = 'custom-context-menu';
-                const x = Math.min(clientX, window.innerWidth - 180);
-                const y = Math.min(clientY, window.innerHeight - 200);
-                menu.style.left = x + 'px';
-                menu.style.top = y + 'px';
+                // 先按鼠标位置放（不硬编码余量，避免矮菜单被过度上拉）
+                menu.style.left = clientX + 'px';
+                menu.style.top = clientY + 'px';
                 menu.innerHTML = menuHtml;
                 document.body.appendChild(menu);
                 memberMenuEl = menu;
-                requestAnimationFrame(() => menu.classList.add('show'));
+                // 测量真实尺寸后做视口 clamp：矮菜单（如仅「查看资料」一项）紧贴鼠标，
+                // 高菜单则向上/向左翻转，避免被屏幕边缘切断
+                requestAnimationFrame(() => {
+                    const vw = window.innerWidth, vh = window.innerHeight;
+                    const w = menu.offsetWidth, h = menu.offsetHeight;
+                    let x = clientX, y = clientY;
+                    if (x + w > vw - 8) x = Math.max(8, vw - 8 - w);
+                    if (y + h > vh - 8) y = Math.max(8, vh - 8 - h);
+                    menu.style.left = x + 'px';
+                    menu.style.top = y + 'px';
+                    menu.classList.add('show');
+                });
                 menu.addEventListener('click', (e2) => {
                     const act = e2.target.dataset.act;
                     hideMemberMenu();
