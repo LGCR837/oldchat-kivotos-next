@@ -7255,8 +7255,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     convOffset[convKey] = msgs.length;
                     convHasMore[convKey] = msgs.length >= PAGE_SIZE;
 
-                    // 平滑滚动到新消息位置
-                    scrollToBottom(true, true);
+                    // 瞬时滚动到新消息位置（切换会话场景下不做平滑滚动，避免「切换后滑动」观感）
+                    scrollToBottom(true);
 
                     // 缓存最新 DOM
                     delete convCache[convKey];
@@ -7530,8 +7530,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (convCache[convKey]) {
             // 检查 restoreConversation 返回值：false 表示缓存无效（空 fragment 等），需走无缓存路径
             if (restoreConversation(convKey)) {
-                // 立即滚动到底部，避免用户看到缓存 DOM 在顶部（restoreConversation 用 rAF 恢复 scrollTop，不够及时）
-                scrollToBottom(true);
+                // 切换会话：同步瞬间跳到底部（不要走 scrollToBottom 的 rAF/setTimeout 延迟，否则会出现「切换后才滚到底」的观感）
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                if (chatScrollbar) chatScrollbar.update();
+                updateScrollToBottomBtn();
                 // 后台拉取最新消息（已用缓存恢复 DOM，故静默刷新，不显示「同步中」）
                 fetchLatestMessages(type, id, convKey, true);
                 return;
