@@ -2410,6 +2410,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     let currentConv = null;
     const seenMsgIds = {};
+    // 多会话消息接受：非当前会话的 WS 推送消息暂存于此（per-convKey 内存数组），打开会话时合并展示
+    const bgMsgStore = {};
+    const BG_MAX = 200; // 每会话最多暂存条数，防止内存膨胀
     let switchRequestId = 0;
     let contacts = { friends: [], groups: [] };
     let _incomingFriendReqCache = null; // 会话内缓存：好友申请列表（避免每次打开用户主页都拉取 /v1/friends/requests）
@@ -5118,6 +5121,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             fetchProfileBatch();
             // 加载未读计数（同步等待，避免后续 switchConversation 清红点后被覆盖）
             await loadUnreadCounts();
+            // 多会话消息接受：首次联系人加载完成后，对所有会话做一次静默补拉，补回离线期间漏掉的消息
+            if (isMultiSessionEnabled()) backfillAllConversations();
         } catch (e) { console.error(e); }
     }
 
@@ -5323,14 +5328,54 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // 同时刷新未读红点，保证非当前会话在断线期间累积的未读也能显示出来。
     async function syncAfterReconnect() {
         try {
+            const curKey = currentConv ? currentConv.key : null;
             if (currentConv) {
                 await fetchLatestMessages(currentConv.type, currentConv.id, currentConv.key);
+            }
+            // 多会话消息接受：断线期间非当前会话的消息，静默补拉（串行，避免并发风暴）；跳过当前会话（已上面补过）
+            if (isMultiSessionEnabled()) {
+                const tasks = [];
+                (contacts.friends || []).forEach(f => { if (f && f.uid && `direct:${f.uid}` !== curKey) tasks.push(['direct', f.uid, 'direct:' + f.uid]); });
+                (contacts.groups || []).forEach(g => { if (g && g.id && `group:${g.id}` !== curKey) tasks.push(['group', g.id, 'group:' + g.id]); });
+                for (const t of tasks) {
+                    await fetchLatestSilent(t[0], t[1], t[2]);
+                }
             }
             await loadUnreadCounts();
             console.log('[WS] 重连后已补拉当前会话消息与未读计数');
         } catch (e) {
             console.warn('[WS] 重连补拉失败:', e);
         }
+    }
+
+    // 静默补拉：拉取某会话最新一页并落入后台缓存（不渲染 DOM），用于断线/启动后的后台 catch-up。
+    // 复用 fetchLatestMessages 的「最新一页 offset=0」原语（/v1/groups/messages/after 有 Bug 已回退），靠 pushBgMsg 去重。
+    async function fetchLatestSilent(type, id, convKey) {
+        try {
+            const url = type === 'group'
+                ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=30&offset=0`
+                : `/v1/direct/messages/v2?with_ncuid=${encodeURIComponent(id)}&limit=30&offset=0`;
+            const res = await apiFetch(url);
+            const data = await res.json();
+            if (data && data.error) return;
+            const msgs = (data.messages || []).slice().reverse();
+            msgs.forEach(m => { if (m && m.id) pushBgMsg(convKey, buildMsgObj(m, convKey, type === 'group', type === 'group' ? id : undefined)); });
+        } catch (e) { /* 静默忽略，不影响当前会话 */ }
+    }
+
+    // 首次加载联系人后对所有会话做一次静默补拉，补回完全离线期间漏掉的消息（开关开启时）
+    let _backfillDone = false;
+    async function backfillAllConversations() {
+        if (_backfillDone) return;
+        _backfillDone = true;
+        try {
+            const tasks = [];
+            (contacts.friends || []).forEach(f => { if (f && f.uid) tasks.push(['direct', f.uid, 'direct:' + f.uid]); });
+            (contacts.groups || []).forEach(g => { if (g && g.id) tasks.push(['group', g.id, 'group:' + g.id]); });
+            for (const t of tasks) {
+                await fetchLatestSilent(t[0], t[1], t[2]);
+            }
+        } catch (e) { /* 静默忽略 */ }
     }
 
     // ===== 聊天记录搜索（当前会话）=====
@@ -5873,6 +5918,47 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         return sep;
     }
 
+    // ===== 多会话消息接受（设置 → 通用 → 多会话消息接受，默认开启）=====
+    function isMultiSessionEnabled() {
+        try { return localStorage.getItem('oc_multi_session') !== '0'; } catch (e) { return true; }
+    }
+    // 把一条 WS 推送消息归一化为统一结构（direct/group 共用），与 handleWsMessage 内现 render 分支一致
+    function buildMsgObj(d, convKey, isGroup, groupId) {
+        const fromUid = getFromUid(d);
+        const base = {
+            id: d.id,
+            from_uid: fromUid,
+            from_name: getFromName(d) || lookupName(fromUid),
+            from_avatar: getFromAvatar(d),
+            body: d.body || '',
+            msg_type: d.msg_type || 'text',
+            media_url: d.media_url || null,
+            thumb_url: d.thumb_url || null,
+            created_at: d.created_at,
+        };
+        if (isGroup) { base.group_id = groupId; base.group_seq = d.group_seq || 0; }
+        return base;
+    }
+    function pushBgMsg(convKey, msg) {
+        if (!msg || !msg.id) return;
+        if (!bgMsgStore[convKey]) bgMsgStore[convKey] = [];
+        const arr = bgMsgStore[convKey];
+        if (arr.some(m => m.id === msg.id)) return;
+        arr.push(msg);
+        if (arr.length > BG_MAX) arr.splice(0, arr.length - BG_MAX);
+    }
+    function drainBgStore(convKey) {
+        const arr = bgMsgStore[convKey] || [];
+        delete bgMsgStore[convKey];
+        return arr;
+    }
+    function removeBgMsg(convKey, id) {
+        if (bgMsgStore[convKey]) bgMsgStore[convKey] = bgMsgStore[convKey].filter(m => m.id !== id);
+    }
+    function clearAllBgStores() {
+        for (const k in bgMsgStore) delete bgMsgStore[k];
+    }
+
     function handleWsMessage(msg) {
         if (!msg) return;
         // 兼容服务器裸消息格式（无 type 包装，直接推送消息对象）
@@ -5891,6 +5977,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const convKey = `direct:${fromUid}`;
             // 只在当前会话匹配时才显示消息
             if (!currentConv || currentConv.key !== convKey) {
+                // 多会话消息接受：先暂存消息到后台，切到该会话时秒开
+                if (isMultiSessionEnabled()) pushBgMsg(convKey, buildMsgObj(d, convKey, false));
                 // 非当前会话，增加未读计数
                 unreadCounts[convKey] = (unreadCounts[convKey] || 0) + 1;
                 updateUnreadBadge(convKey, unreadCounts[convKey]);
@@ -5929,6 +6017,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const convKey = `group:${groupId}`;
             // 只在当前会话匹配时才显示消息
             if (!currentConv || currentConv.key !== convKey) {
+                // 多会话消息接受：先暂存消息到后台，切到该会话时秒开
+                if (isMultiSessionEnabled()) pushBgMsg(convKey, buildMsgObj(d, convKey, true, groupId));
                 // 非当前会话，增加未读计数
                 unreadCounts[convKey] = (unreadCounts[convKey] || 0) + 1;
                 updateUnreadBadge(convKey, unreadCounts[convKey]);
@@ -5955,6 +6045,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const d = msg.data || {};
             const messageId = d.message_id || '';
             const fromUid = getFromUid(d); // from_ncuid = 撤回者NCUID
+            if (messageId) removeBgMsg(`direct:${fromUid}`, messageId);
             const isMe = uidEq(fromUid, myUid);
             // 在当前会话中查找被撤回的消息
             if (currentConv && currentConv.type === 'direct') {
@@ -5976,6 +6067,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const fromUid = getFromUid(d); // from_ncuid = 撤回者NCUID
             const isMe = uidEq(fromUid, myUid);
             const convKey = `group:${groupId}`;
+            if (messageId) removeBgMsg(convKey, messageId);
             if (currentConv && currentConv.key === convKey) {
                 const target = document.querySelector(`.message[data-msg-id="${CSS.escape(messageId)}"]`);
                 if (target) {
@@ -7083,6 +7175,19 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
             // 后端返回 DESC（最新在前）→ 反转为 ASC（旧→新）
             const msgs = (data.messages || []).slice().reverse();
+
+            // 多会话消息接受：把后台暂存的该会话消息并入（按时间排序 + id 去重），打开会话即秒开
+            if (isMultiSessionEnabled() && bgMsgStore[convKey] && bgMsgStore[convKey].length) {
+                const merged = msgs.concat(bgMsgStore[convKey]).sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+                const seenM = new Set();
+                const deduped = [];
+                for (const m of merged) {
+                    if (m && m.id && !seenM.has(m.id)) { seenM.add(m.id); deduped.push(m); }
+                }
+                delete bgMsgStore[convKey];
+                msgs.length = 0;
+                Array.prototype.push.apply(msgs, deduped);
+            }
 
             // ====== 增量更新：检查是否已有缓存 DOM，尝试增量追加新消息 ======
             const existingMsgEls = messagesContainer.querySelectorAll('.message[data-msg-id]');
@@ -10730,6 +10835,18 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
                     WebSocket优先：默认走 WebSocket，连续失败 3 次后自动降级为轮询，并每 60 秒重试 WebSocket，恢复后自动切回。仅WebSocket：只用 WebSocket（断线指数退避重连）。仅轮询：不建立 WebSocket，每 5 秒轮询一次。轮询期间请求 UA 为 <span style="color:var(--text);">OldChatForKivotosNextPollingMode</span>，其他模式保持 OldChatForKivotosNext。
                 </div>
+                <div class="settings-item" id="settingsMultiSession">
+                    <span class="label">多会话消息接受</span>
+                    <span class="value">
+                        <label class="oc-switch">
+                            <input type="checkbox" id="multiSessionToggle">
+                            <span class="oc-switch-slider"></span>
+                        </label>
+                    </span>
+                </div>
+                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
+                    开启后，后台持续接收所有会话的 WebSocket 消息并暂存，切换到该会话时无需等待加载即可秒开（仍只拉最新一页，不翻历史）。关闭则退回原行为，不再暂存以节省内存。
+                </div>
             </div>
             <h3 style="margin-top:20px;">侧边栏</h3>
             <div class="settings-group">
@@ -10818,6 +10935,16 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 localStorage.setItem('oc_request_mode', reqSel.value);
                 if (typeof window.__ocApplyRequestMode === 'function') window.__ocApplyRequestMode();
                 if (typeof showAlert === 'function') showAlert('请求模式已切换为「' + reqSel.value + '」，已即时生效');
+            });
+        }
+        // 多会话消息接受开关（设置 → 通用，默认开启）：开启时后台暂存非当前会话消息，关闭时清空后台缓存退回收敛
+        const msToggle = document.getElementById('multiSessionToggle');
+        if (msToggle) {
+            msToggle.checked = isMultiSessionEnabled();
+            msToggle.addEventListener('change', () => {
+                try { localStorage.setItem('oc_multi_session', msToggle.checked ? '1' : '0'); } catch (e) {}
+                if (!msToggle.checked) clearAllBgStores();
+                if (typeof showAlert === 'function') showAlert('多会话消息接受已' + (msToggle.checked ? '开启' : '关闭'));
             });
         }
         // 重点分区开关（设置 → 通用 → 侧边栏 → 重点分区，默认关闭）
