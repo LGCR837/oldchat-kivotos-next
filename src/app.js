@@ -3996,6 +3996,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }));
                 const avatar = info.avatar_url || defaultAvatar;
                 const myRole = info.role || 0;
+                gmMyRole = myRole;  // 供全局右键菜单共享「我的角色」
                 const isOwner = myRole === 2;
 
                 let membersHtml = '';
@@ -4038,7 +4039,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     '</div>' +
                     btnsHtml;
 
-                // 成员项点击：弹出成员操作菜单（查看资料 / 设管理员 / 踢出）
+                // 成员项左键点击：弹出成员操作菜单（查看资料 / 设管理员 / 踢出）
                 scroll.querySelectorAll('.gm-member-item[data-uid]').forEach(item => {
                     item.addEventListener('click', (e) => {
                         e.stopPropagation();
@@ -4048,9 +4049,23 @@ document.addEventListener('DOMContentLoaded', async () => {
                             role: parseInt(item.dataset.role || '0', 10),
                             name: (item.querySelector('.gm-member-name') || {}).textContent || ''
                         };
-                        showMemberActions(m, myRole, e);
+                        showMemberActions(m, myRole, e.clientX, e.clientY);
+                    });
+                    // 成员项右键：同样弹出成员操作菜单
+                    item.addEventListener('contextmenu', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const m = {
+                            uid: item.dataset.uid,
+                            ncuid: item.dataset.ncuid,
+                            role: parseInt(item.dataset.role || '0', 10),
+                            name: (item.querySelector('.gm-member-name') || {}).textContent || ''
+                        };
+                        showMemberActions(m, myRole, e.clientX, e.clientY);
                     });
                 });
+                // 暴露给全局右键菜单处理器（在成员项上右键时复用同一菜单）
+                window.__gmShowMemberActions = showMemberActions;
 
                 // 群操作按钮
                 const gsBtn = scroll.querySelector('#gmSettingsBtn');
@@ -4092,7 +4107,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             // ===== 成员操作菜单 / 群管理动作 =====
             // 复用全局 custom-context-menu：定位在鼠标位置、带缩放/淡入动画、点击外部关闭
-            function showMemberActions(member, myRole, e) {
+            // 单例：打开新菜单前先关闭旧菜单（避免「旧菜单不消失」）
+            function showMemberActions(member, myRole, clientX, clientY) {
                 if (isSelfUid(member.uid)) { openSpacePanel(member.uid); return; }
                 const isTargetOwner = member.role === 2;
                 const isTargetAdmin = member.role === 1;
@@ -4107,27 +4123,31 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (canKick) {
                     menuHtml += '<div class="context-menu-item danger" data-act="kick">踢出群聊</div>';
                 }
+                // 关闭任何已存在的成员菜单（单例）
+                hideMemberMenu();
                 const menu = document.createElement('div');
                 menu.className = 'custom-context-menu';
-                const x = Math.min(e.clientX, window.innerWidth - 180);
-                const y = Math.min(e.clientY, window.innerHeight - 200);
+                const x = Math.min(clientX, window.innerWidth - 180);
+                const y = Math.min(clientY, window.innerHeight - 200);
                 menu.style.left = x + 'px';
                 menu.style.top = y + 'px';
                 menu.innerHTML = menuHtml;
                 document.body.appendChild(menu);
+                memberMenuEl = menu;
                 requestAnimationFrame(() => menu.classList.add('show'));
                 menu.addEventListener('click', (e2) => {
                     const act = e2.target.dataset.act;
-                    menu.remove();
+                    hideMemberMenu();
                     if (act === 'profile') openSpacePanel(member.uid);
                     else if (act === 'admin') gmSetAdmin(member, true);
                     else if (act === 'unadmin') gmSetAdmin(member, false);
                     else if (act === 'kick') gmKick(member);
                 });
-                const closeHandler = (ev) => {
-                    if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', closeHandler); }
-                };
-                setTimeout(() => document.addEventListener('click', closeHandler), 0);
+                // 延迟注册关闭监听，避免当前这次点击事件误关刚打开的菜单
+                setTimeout(() => {
+                    document.addEventListener('click', memberMenuClose);
+                    document.addEventListener('contextmenu', memberMenuClose);
+                }, 0);
             }
 
             async function gmKick(member) {
@@ -4640,6 +4660,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     let contextMenu = null;
     let contextMsgId = null;
     let lastSelectedText = '';  // mouseup 时保存选区文本，供 contextmenu 使用
+
+    // 群成员操作菜单单例：保证任意时刻最多一个成员菜单，打开新菜单即关闭旧的
+    let memberMenuEl = null;
+    let gmMyRole = 0;  // 当前打开的群管理中「我的角色」，供右键菜单共享
+    function memberMenuClose(ev) {
+        if (memberMenuEl && !memberMenuEl.contains(ev.target)) hideMemberMenu();
+    }
+    function hideMemberMenu() {
+        if (memberMenuEl) {
+            memberMenuEl.remove();
+            memberMenuEl = null;
+        }
+        document.removeEventListener('click', memberMenuClose);
+        document.removeEventListener('contextmenu', memberMenuClose);
+    }
 
     // 在消息区域抬起鼠标时保存选区文本（右键 mousedown 可能清除选区）
     document.addEventListener('mouseup', () => {
@@ -9620,6 +9655,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
     document.addEventListener('contextmenu', (e) => {
         hideContextMenu();
+        hideMemberMenu();  // 关闭任何已打开的群成员菜单
 
         // 1. 编辑框（input/textarea）显示自绘右键菜单
         const editTarget = e.target.closest('input[type="text"], input[type="password"], input[type="search"], input[type="url"], input[type="email"], input:not([type]), textarea');
@@ -9632,6 +9668,22 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         // 2. 聊天输入区域除输入框外禁止右键
         if (e.target.closest('.input-area')) {
             e.preventDefault();
+            return;
+        }
+
+        // 2.5 群成员项：复用成员操作菜单（左键/右键均触发同一菜单）
+        const gmMember = e.target.closest('.gm-member-item');
+        if (gmMember) {
+            e.preventDefault();
+            const member = {
+                uid: gmMember.dataset.uid,
+                ncuid: gmMember.dataset.ncuid,
+                role: parseInt(gmMember.dataset.role || '0', 10),
+                name: (gmMember.querySelector('.gm-member-name') || {}).textContent || ''
+            };
+            if (window.__gmShowMemberActions) {
+                window.__gmShowMemberActions(member, gmMyRole, e.clientX, e.clientY);
+            }
             return;
         }
 
