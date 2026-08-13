@@ -310,6 +310,12 @@ function resolveMediaUrl(url) {
         const rest = url.slice('channel-private:'.length);
         return 'http://oc.mcl0.dpdns.org/channel-media/' + rest;
     }
+    // 已经是 /channel-media/ 形式的路径或绝对 URL：只能走 oc 主机，禁止用 MEDIA_BASE / 候选 host 拼接
+    // （否则签名失效 → 404）。鉴权完全依赖 URL 自带的 ?exp=&sig=，必须原样保留查询串、不能换 host、不能加鉴权头。
+    if (typeof url === 'string' && url.indexOf('/channel-media/') !== -1) {
+        if (/^https?:/i.test(url)) return url;
+        return 'http://oc.mcl0.dpdns.org' + (url.startsWith('/') ? '' : '/') + url;
+    }
     if (/^(https?:|data:|blob:)/.test(url)) return url;
     if (MEDIA_BASE && url.startsWith('/')) return MEDIA_BASE + url;
     return url;
@@ -404,10 +410,11 @@ function debounce(fn, wait) {
     function shouldCache(url) {
         if (!url) return false;
         if (/^(data:|blob:|about:|chrome-extension:|tauri:|ipc\.localhost)/i.test(url)) return false;
-        // 频道媒体（/channel-media/ 与 channel-private: scheme）是「全局签名下载」：签名就在 URL 文件名里，
-        // 该端点不认 Authorization 头——带了反而拒签返回 401。必须交由浏览器原生 <img> 直接加载（无鉴权头），
-        // 与官方 Android 客户端一致。故 MediaCache 不接管，避免 Bearer 污染签名 URL 导致的 401 刷屏。
-        if (url.indexOf('/channel-media/') !== -1 || /^channel-private:/i.test(url)) return false;
+        // 频道媒体（resolve 后为 http://oc.mcl0.dpdns.org/channel-media/...）是「全局签名下载」：
+        // 鉴权在 URL 的 exp+sig 里，任何 Authorization 头都会被拒签（401）。但 fetchOne 的频道分支已改为
+        // 「纯无鉴权 fetch」，既能拿到 blob 走内存/IndexedDB 缓存（减少重复请求），又不会污染签名 URL，
+        // 故此处交由 MediaCache 接管。失败时回落原生 <img> 直接加载（无鉴权头）作为兜底。
+        if (url.indexOf('/channel-media/') !== -1) return true;
         if (/^(https?:)?\/\//i.test(url)) return true;
         return false;
     }
@@ -462,24 +469,20 @@ function debounce(fn, wait) {
             if (tk) baseHeaders['Authorization'] = 'Bearer ' + tk;
         } catch (e) {}
 
-        // /channel-media/ 是「全局签名下载」端点：签名在 URL 里，但实测仅 v1 风格裸 Bearer 被 401。
-        // 依次尝试：① v2 会话签名（Bearer + 会话头，与其它 v2 接口一致）② 不带任何鉴权（依赖 URL 自身签名）
+        // /channel-media/ 是「全局签名下载」端点（官方 §14.10）：鉴权完全在 URL 的 exp+sig 里，
+        // 任何 Authorization 头（Bearer / v2 会话头）都会被拒签返回 401。因此只走「纯无鉴权 fetch」，
+        // 且 mediaCandidateUrls 已针对 /channel-media/ 固定返回 [url]（不展开 host 候选，避免误打到 files/60.205 报 404）。
         if (isChannelMedia) {
-            const attempts = [];
-            const h2 = Object.assign({}, baseHeaders);
-            try { Object.assign(h2, await signV2ForAnyPath(u, 'GET')); } catch (e) {}
-            attempts.push(h2);
-            attempts.push({});
             let lastErr;
-            for (const h of attempts) {
-                try {
-                    const resp = await tauriHttpFetch(u, { headers: h });
-                    if (resp && resp.ok) return await resp.blob();
-                    const b2 = await fetchMediaRust(u, h);
-                    if (b2) return b2;
-                } catch (e) { lastErr = e; }
-            }
-            console.error('[MediaCache] channel-media 抓取失败:', u, '|', (lastErr && lastErr.message) || lastErr);
+            try {
+                const resp = await tauriHttpFetch(u, {});
+                if (resp && resp.ok) return await resp.blob();
+            } catch (e) { lastErr = e; }
+            try {
+                const b2 = await fetchMediaRust(u, {});
+                if (b2) return b2;
+            } catch (e) { lastErr = e; }
+            console.error('[MediaCache] channel-media 抓取失败（URL 签名可能已过期，需重新拉取帖子列表以获得新签名）:', u, '|', (lastErr && lastErr.message) || lastErr);
             throw lastErr || new Error('channel-media fetch failed: ' + u);
         }
 

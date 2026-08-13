@@ -42,6 +42,66 @@ function renderNotes(body) {
     return '<p class="notes">' + esc(body).replace(/\n/g, '<br>') + '</p>\n';
 }
 
+// 按文件名分类为 {os, arch, fmt, label}，未知格式返回 null（自动跳过）
+function classify(name) {
+    const n = String(name).toLowerCase();
+    let os = '', arch = '', fmt = '';
+    if (/\.dmg$/.test(n)) { os = 'macOS'; fmt = 'dmg'; }
+    else if (/setup\.exe$/.test(n)) { os = 'Windows'; fmt = '安装包'; }
+    else if (/\.msi$/.test(n)) { os = 'Windows'; fmt = 'MSI'; }
+    else if (/windows-amd64\.exe$/.test(n)) { os = 'Windows'; arch = 'amd64'; }
+    else if (/windows-arm64\.exe$/.test(n)) { os = 'Windows'; arch = 'arm64'; }
+    else if (/windows-i386\.exe$/.test(n)) { os = 'Windows'; arch = 'i386'; }
+    else if (/\.appimage$/.test(n)) { os = 'Linux'; fmt = 'AppImage'; }
+    else if (/\.deb$/.test(n)) { os = 'Linux'; fmt = 'deb'; }
+    else if (/\.rpm$/.test(n)) { os = 'Linux'; fmt = 'rpm'; }
+    else if (/linux-amd64$/.test(n)) { os = 'Linux'; arch = 'amd64'; }
+    else if (/linux-arm64$/.test(n)) { os = 'Linux'; arch = 'arm64'; }
+    else return null;
+    if (!arch) {
+        if (/aarch64/.test(n) || /arm64/.test(n)) arch = 'arm64';
+        else if (/x86_64/.test(n) || /x64/.test(n) || /amd64/.test(n)) arch = 'amd64';
+    }
+    let archLabel = arch;
+    if (os === 'macOS') archLabel = (arch === 'arm64') ? 'Apple Silicon' : 'Intel';
+    const label = os + (archLabel ? (' ' + archLabel) : '') + (fmt ? (' ' + fmt) : '');
+    return { os: os, arch: archLabel, fmt: fmt, label: label };
+}
+
+// 渲染顺序（与下载页「不限制一行个数」一致，仅决定先后）
+const RANK = {
+    'Windows|amd64|': 1,
+    'Windows|amd64|安装包': 2,
+    'Windows|arm64|': 3,
+    'Windows|arm64|安装包': 4,
+    'Windows|i386|': 5,
+    'Linux|amd64|': 6,
+    'Linux|amd64|AppImage': 7,
+    'Linux|amd64|deb': 8,
+    'Linux|amd64|rpm': 9,
+    'Linux|arm64|': 10,
+    'macOS|Apple Silicon|dmg': 11,
+    'macOS|Intel|dmg': 12
+};
+
+// 从真实资产渲染按钮；无资产时返回空串（交由调用方回退 buildAssets）
+function buildLinksFromAssets(assets) {
+    if (!assets || !assets.length) return '';
+    const items = [];
+    assets.forEach(function (a) {
+        const c = classify(a.name);
+        if (!c) return;
+        const href = MIRROR + a.browser_download_url;
+        items.push({
+            rank: RANK[c.os + '|' + c.arch + '|' + c.fmt] || 99,
+            html: '<a class="btn" href="' + esc(href) + '" target="_blank" rel="noopener">' + esc(c.label) + '</a>\n'
+        });
+    });
+    if (!items.length) return '';
+    items.sort(function (x, y) { return x.rank - y.rank; });
+    return items.map(function (i) { return i.html; }).join('');
+}
+
 const CSS = '' +
     'body{max-width:720px;margin:0 auto;padding:24px;font-family:-apple-system,"Noto Sans SC",sans-serif;line-height:1.7;color:#000;background:#fff}\n' +
     'h1{font-size:32px;margin:8px 0;font-weight:800;letter-spacing:-0.5px}\n' +
@@ -57,9 +117,8 @@ const CSS = '' +
     '.btn:active{background:#fff;color:#000;transform:translate(0,0);box-shadow:0 0 0 #000}\n' +
     '.btn:focus-visible{background:#000;color:#fff;outline:none}\n' +
     '.tag{display:inline-block;font-size:12px;font-weight:700;color:#fff;background:#000;padding:2px 8px;margin-left:8px;vertical-align:middle;border-radius:0}\n' +
-    '.dls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 0 0}\n' +
-    '@media(max-width:520px){.dls{grid-template-columns:repeat(2,minmax(0,1fr))}}\n' +
-    '@media(max-width:360px){.dls{grid-template-columns:1fr}}\n' +
+    '.dls{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin:10px 0 0}\n' +
+    '@media(max-width:400px){.dls{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}}\n' +
     '.dls .btn{margin:0;text-align:center}\n' +
     'ul{padding-left:20px}\n' +
     'li{margin:6px 0}\n';
@@ -74,13 +133,16 @@ function render(releases) {
         const date = fmtDate(r.published_at);
         const badge = i === 0 ? ' <span class="tag">最新</span>' : '';
 
-        let links = '';
-        buildAssets(tag).forEach(function (pair) {
-            const label = pair[0];
-            const file = pair[1];
-            links += '<a class="btn" href="' + MIRROR + base + tag + '/' + file +
-                '" target="_blank" rel="noopener">' + esc(label) + '</a>\n';
-        });
+        let links = buildLinksFromAssets(r.assets);
+        if (!links) {
+            // 兜底：KV 中尚无资产列表时（如旧缓存），用写死的 5 产物
+            buildAssets(tag).forEach(function (pair) {
+                const label = pair[0];
+                const file = pair[1];
+                links += '<a class="btn" href="' + MIRROR + base + tag + '/' + file +
+                    '" target="_blank" rel="noopener">' + esc(label) + '</a>\n';
+            });
+        }
 
         blocks += '<h2>' + tag + badge + '</h2>\n';
         if (date) blocks += '<p class="v">发布于 ' + date + '</p>\n';
@@ -100,7 +162,7 @@ function render(releases) {
         '<body>\n' +
         '  <h1>OldChat For Kivotos Next<br>下载页</h1>\n' +
         '  <p class="subtitle">一个 MomoTalk 风格的第三方 OldChat 桌面客户端</p>\n' +
-        '  <p class="intro">OldChat For Kivotos Next 第三方 OldChat 桌面客户端。界面大幅参考了蔚蓝档案的 MomoTalk 风格，底层基于 Rust + Tauri + Web 构建，支持 Windows 与 Linux 多架构。下载即用(部分环境需要手动安装Webview框架)，并由 Aoharu Reverie (LGCR837) 开源维护。</p>\n' +
+        '  <p class="intro">OldChat For Kivotos Next 第三方 OldChat 桌面客户端。界面大幅参考了蔚蓝档案的 MomoTalk 风格，底层基于 Rust + Tauri + Web 构建，支持 Windows / Linux / macOS 多架构。提供免安装单文件与系统安装包（AppImage / deb / rpm / NSIS），并由 Aoharu Reverie (LGCR837) 开源维护。</p>\n' +
         '  <p>\n' +
         '    <a class="btn" href="/">查看官网</a>\n' +
         '    <a class="btn" href="https://github.com/' + REPO + '/releases" target="_blank" rel="noopener">GitHub Releases</a>\n' +
@@ -108,8 +170,9 @@ function render(releases) {
         blocks +
         '  <h2>说明</h2>\n' +
         '  <ul>\n' +
-        '    <li>Windows 直接双击运行；Linux 需先 <code>chmod +x</code> 赋予可执行权限。</li>\n' +
-        '    <li>所有版本均为原生单文件，部分环境下需要安装 Webview 框架。</li>\n' +
+        '    <li>Windows 可直接双击 <b>免安装单文件</b> 运行，或用 <b>NSIS 安装包</b> 安装到系统；Linux 推荐用 <b>AppImage</b>（双击运行）/ <b>deb</b>（Ubuntu/Debian）/ <b>rpm</b>（Fedora）安装。</li>\n' +
+        '    <li>macOS 为未签名 dmg：首次打开请<strong>右键 → 打开</strong>（或终端执行 <code>xattr -cr /Applications/OldChat\\ For\\ Kivotos.app</code>）以越过 Gatekeeper 拦截。</li>\n' +
+        '    <li>Linux 免安装单文件与 macOS 原生包在部分环境需系统已带 WebView 框架。</li>\n' +
         '    <li>本项目基于 GNU GPL-3.0 开源，由 Aoharu Reverie（LGCR837）开发维护。</li>\n' +
         '  </ul>\n' +
         '</body>\n' +

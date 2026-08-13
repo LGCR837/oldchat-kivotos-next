@@ -54,13 +54,21 @@ async function doRefresh(context) {
     const releases = result.releases
         .filter(function (r) { return r && !r.draft; })
         .map(function (r) {
+            const assets = (r.assets || []).map(function (a) {
+                return {
+                    name: a.name,
+                    browser_download_url: a.browser_download_url,
+                    size: a.size
+                };
+            });
             return {
                 tag: r.tag_name,
                 name: r.name || r.tag_name,
                 body: (r.body || '').replace(/\r/g, '').trim(),
                 published_at: r.published_at,
                 prerelease: !!r.prerelease,
-                html_url: r.html_url
+                html_url: r.html_url,
+                assets: assets
             };
         })
         .sort(function (a, b) {

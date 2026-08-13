@@ -158,3 +158,121 @@ jobs:
           args: --no-bundle --target ${{ matrix.target }}
           uploadPlainBinary: true
           releaseAssetNamePattern: oldchat-kivotos-next-app-${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}-${{ matrix.asset_suffix }}
+
+  linux-bundles:
+    name: Build and Upload Linux Bundles (amd64 · AppImage/deb/rpm)
+    if: github.event_name == 'release' || inputs.linux_only == true || inputs.build_all == true
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc g++ libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libfuse2 appstream
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build and upload Tauri bundles (AppImage + deb + rpm)
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseId: ${{ github.event_name == 'release' && github.event.release.id || inputs.release_id }}
+          args: --bundles appimage,deb,rpm --target x86_64-unknown-linux-gnu
+
+  windows-installer:
+    name: Build and Upload Windows Installer (${{ matrix.asset_suffix }})
+    if: github.event_name == 'release' || inputs.linux_only == false || inputs.build_all == true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset_suffix: windows-amd64-setup
+          - platform: windows-latest
+            target: aarch64-pc-windows-msvc
+            asset_suffix: windows-arm64-setup
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # 产出 NSIS 安装包（已在 tauri.conf.json 设 webviewInstallMode=EmbedBootstrapper 内嵌 WebView2 引导）
+      # 保留上方 windows 任务产出的免安装单文件 .exe，两种形态并存
+      - name: Build and upload Tauri installer (NSIS)
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseId: ${{ github.event_name == 'release' && github.event.release.id || inputs.release_id }}
+          args: --bundles nsis --target ${{ matrix.target }}
+
+  macos:
+    name: Build and Upload macOS (${{ matrix.asset_suffix }})
+    if: github.event_name == 'release' || inputs.linux_only == false || inputs.build_all == true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            asset_suffix: macos-aarch64
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            asset_suffix: macos-x64
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # 未签名 dmg：用户首次打开需右键→打开（或终端 xattr -cr 放行），后续有 Apple 证书再补 notarize
+      - name: Build and upload Tauri bundle (unsigned dmg)
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          releaseId: ${{ github.event_name == 'release' && github.event.release.id || inputs.release_id }}
+          args: --bundles dmg --target ${{ matrix.target }}
