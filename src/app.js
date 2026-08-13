@@ -3988,27 +3988,42 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (membersData.error) { scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">' + membersData.error + '</div>'; return; }
                 const members = (membersData.members || []).map(m => ({
                     uid: getUid(m),
+                    ncuid: m.ncuid || getUid(m),
                     displayUid: getDisplayUid(m),
                     name: m.display_name || m.username || getUid(m),
-                    avatar: m.avatar_url || ''
+                    avatar: m.avatar_url || '',
+                    role: m.role || 0
                 }));
                 const avatar = info.avatar_url || defaultAvatar;
-                const isOwner = info.role === 2;
+                const myRole = info.role || 0;
+                const isOwner = myRole === 2;
 
                 let membersHtml = '';
                 members.forEach(m => {
                     const mUid = m.uid;
                     const isMe = isSelfUid(mUid);
-                    membersHtml += `<div class="gm-member-item" data-uid="${escapeHtml(mUid)}" style="cursor:pointer;">` +
+                    const rl = m.role === 2 ? '群主' : (m.role === 1 ? '管理员' : '');
+                    membersHtml += `<div class="gm-member-item" data-uid="${escapeHtml(mUid)}" data-ncuid="${escapeHtml(m.ncuid || '')}" data-role="${m.role || 0}" style="cursor:pointer;">` +
                         `<img class="gm-member-avatar" src="${cachedResolveMediaUrl(m.avatar || defaultAvatar)}" onerror="this.src='${defaultAvatar}'">` +
                         `<div class="gm-member-info"><div class="gm-member-name">${escapeHtml(m.name)}</div><div class="gm-member-uid">${escapeHtml(m.displayUid)}</div></div>` +
-                        (isMe ? '<span class="gm-member-tag">我</span>' : '') +
+                        (rl ? `<span class="gm-member-tag role-${m.role}">${rl}</span>` : '') +
+                        (isMe ? '<span class="gm-member-tag me">我</span>' : '') +
                         `</div>`;
                 });
 
                 let btnsHtml = '';
-                if (!isOwner) {
-                    btnsHtml = `<div class="gm-actions"><button class="gm-leave-btn" onclick="gmLeaveGroup()">退出群聊</button></div>`;
+                if (myRole === 2) {
+                    btnsHtml = `<div class="gm-actions">` +
+                        `<button class="gm-settings-btn" id="gmSettingsBtn">群设置</button>` +
+                        `<button class="gm-dissolve-btn" id="gmDissolveBtn">解散群聊</button>` +
+                        `</div>`;
+                } else if (myRole === 1) {
+                    btnsHtml = `<div class="gm-actions">` +
+                        `<button class="gm-settings-btn" id="gmSettingsBtn">群设置</button>` +
+                        `<button class="gm-leave-btn" id="gmLeaveBtn">退出群聊</button>` +
+                        `</div>`;
+                } else {
+                    btnsHtml = `<div class="gm-actions"><button class="gm-leave-btn" id="gmLeaveBtn">退出群聊</button></div>`;
                 }
 
                 scroll.innerHTML =
@@ -4024,15 +4039,26 @@ document.addEventListener('DOMContentLoaded', async () => {
                     '</div>' +
                     btnsHtml;
 
-                // 成员项点击：打开该成员的用户空间
+                // 成员项点击：弹出成员操作菜单（查看资料 / 设管理员 / 踢出）
                 scroll.querySelectorAll('.gm-member-item[data-uid]').forEach(item => {
                     item.addEventListener('click', () => {
-                        const uid = item.dataset.uid;
-                        if (uid && !isSelfUid(uid)) {
-                            openSpacePanel(uid);
-                        }
+                        const m = {
+                            uid: item.dataset.uid,
+                            ncuid: item.dataset.ncuid,
+                            role: parseInt(item.dataset.role || '0', 10),
+                            name: (item.querySelector('.gm-member-name') || {}).textContent || ''
+                        };
+                        showMemberActions(m, myRole, item);
                     });
                 });
+
+                // 群操作按钮
+                const gsBtn = scroll.querySelector('#gmSettingsBtn');
+                if (gsBtn) gsBtn.addEventListener('click', () => openGroupSettings());
+                const gdBtn = scroll.querySelector('#gmDissolveBtn');
+                if (gdBtn) gdBtn.addEventListener('click', () => gmDissolve());
+                const glBtn = scroll.querySelector('#gmLeaveBtn');
+                if (glBtn) glBtn.addEventListener('click', () => gmLeaveGroup());
 
                 window.gmShowInvite = function() {
                     openInvitePanel(groupId, members);
@@ -4064,6 +4090,155 @@ document.addEventListener('DOMContentLoaded', async () => {
                         }
                     } catch (e) { showAlert('请求失败'); }
                 };
+
+            // ===== 成员操作菜单 / 群管理动作 =====
+            function showMemberActions(member, myRole, anchorEl) {
+                if (isSelfUid(member.uid)) { openSpacePanel(member.uid); return; }
+                const isTargetOwner = member.role === 2;
+                const isTargetAdmin = member.role === 1;
+                const canKick = (myRole === 2) || (myRole === 1 && !isTargetAdmin && !isTargetOwner);
+                const canSetAdmin = (myRole === 2) && !isTargetOwner;
+                let items = '<div class="context-menu-item" data-act="profile">查看资料</div>';
+                if (canSetAdmin) {
+                    items += isTargetAdmin
+                        ? '<div class="context-menu-item" data-act="unadmin">取消管理员</div>'
+                        : '<div class="context-menu-item" data-act="admin">设为管理员</div>';
+                }
+                if (canKick) {
+                    items += '<div class="context-menu-item danger" data-act="kick">踢出群聊</div>';
+                }
+                const menu = document.createElement('div');
+                menu.className = 'custom-context-menu show';
+                menu.innerHTML = items;
+                const rect = anchorEl.getBoundingClientRect();
+                menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 200)) + 'px';
+                menu.style.top = (rect.bottom + 4) + 'px';
+                document.body.appendChild(menu);
+                const close = () => { if (menu.parentNode) menu.remove(); document.removeEventListener('click', onDocClick, true); };
+                const onDocClick = (ev) => { if (!menu.contains(ev.target)) close(); };
+                setTimeout(() => document.addEventListener('click', onDocClick, true), 0);
+                menu.addEventListener('click', (e2) => {
+                    const act = e2.target.dataset.act;
+                    close();
+                    if (act === 'profile') openSpacePanel(member.uid);
+                    else if (act === 'admin') gmSetAdmin(member, true);
+                    else if (act === 'unadmin') gmSetAdmin(member, false);
+                    else if (act === 'kick') gmKick(member);
+                });
+            }
+
+            async function gmKick(member) {
+                if (!await showConfirm('确定将 ' + (member.name || member.uid) + ' 踢出群聊吗？')) return;
+                try {
+                    const r = await apiFetch('/v1/groups/kick', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ group_id: groupId, user_uid: member.uid, user_ncuid: member.ncuid })
+                    });
+                    const d = await r.json();
+                    if (d.error) { showAlert(d.error); return; }
+                    load();
+                } catch (e) { showAlert('请求失败'); }
+            }
+
+            async function gmSetAdmin(member, admin) {
+                const verb = admin ? '设为管理员' : '取消管理员';
+                if (!await showConfirm('确定将 ' + (member.name || member.uid) + ' ' + verb + '吗？')) return;
+                try {
+                    const r = await apiFetch('/v1/groups/admin', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ group_id: groupId, user_uid: member.uid, user_ncuid: member.ncuid, admin: admin })
+                    });
+                    const d = await r.json();
+                    if (d.error) { showAlert(d.error); return; }
+                    load();
+                } catch (e) { showAlert('请求失败'); }
+            }
+
+            async function gmDissolve() {
+                if (!await showConfirm('确定要解散该群聊吗？此操作不可恢复！')) return;
+                if (!await showConfirm('再次确认：解散后所有成员将被移出，群聊无法恢复。')) return;
+                try {
+                    const r = await apiFetch('/v1/groups/dissolve', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ group_id: groupId })
+                    });
+                    const d = await r.json();
+                    if (d.error) { showAlert(d.error); return; }
+                    overlay.remove();
+                    contacts.groups = contacts.groups.filter(g => g.id !== groupId);
+                    renderContacts();
+                    if (currentConv && currentConv.type === 'group' && currentConv.id === groupId) {
+                        if (contacts.groups.length > 0) {
+                            const g = contacts.groups[0];
+                            switchConversation('group', g.id, g.name);
+                        } else if (contacts.friends.length > 0) {
+                            const f = contacts.friends[0];
+                            switchConversation('direct', f.uid, f.name);
+                        } else {
+                            chatArea.innerHTML = '<div style="text-align:center;padding:80px 20px;color:var(--secondary-text);">暂无会话</div>';
+                            currentConv = null;
+                        }
+                    }
+                } catch (e) { showAlert('请求失败'); }
+            }
+
+            function openGroupSettings() {
+                const sOverlay = document.createElement('div');
+                sOverlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:10001;background:var(--bg);display:flex;flex-direction:column;font-family:inherit;opacity:0;transition:opacity 0.2s;';
+                const approval = info.join_approval ? 'checked' : '';
+                const mute = info.global_mute ? 'checked' : '';
+                sOverlay.innerHTML = `
+                    <div class="gm-header">
+                        <button class="gm-back" id="gsBack"><i class="fa-solid fa-chevron-left"></i></button>
+                        <span>群设置</span>
+                    </div>
+                    <div style="flex:1;overflow-y:auto;padding:16px;">
+                        <div class="gm-set-row">
+                            <label>群名称</label>
+                            <input class="gm-uid-input" id="gsName" value="${escapeHtml(info.name || '')}" style="width:100%;box-sizing:border-box;" />
+                        </div>
+                        <div class="gm-set-row">
+                            <label>入群审批</label>
+                            <input type="checkbox" id="gsApproval" ${approval} />
+                        </div>
+                        <div class="gm-set-row">
+                            <label>全员禁言</label>
+                            <input type="checkbox" id="gsMute" ${mute} />
+                        </div>
+                        <button class="gm-settings-btn" id="gsSave" style="width:100%;margin-top:16px;">保存</button>
+                    </div>
+                `;
+                document.body.appendChild(sOverlay);
+                requestAnimationFrame(() => sOverlay.style.opacity = '1');
+                sOverlay.querySelector('#gsBack').addEventListener('click', () => sOverlay.remove());
+                sOverlay.querySelector('#gsSave').addEventListener('click', async () => {
+                    const name = sOverlay.querySelector('#gsName').value.trim();
+                    const joinApproval = sOverlay.querySelector('#gsApproval').checked;
+                    const globalMute = sOverlay.querySelector('#gsMute').checked;
+                    const btn = sOverlay.querySelector('#gsSave');
+                    btn.disabled = true; btn.textContent = '保存中...';
+                    try {
+                        await apiFetch('/v1/groups/settings', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ group_id: groupId, join_approval: joinApproval, global_mute: globalMute })
+                        });
+                        if (name && name !== (info.name || '')) {
+                            await apiFetch('/v1/groups/name', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ group_id: groupId, name: name })
+                            });
+                        }
+                        showAlert('已保存');
+                        sOverlay.remove();
+                        load();
+                    } catch (e) { showAlert('保存失败'); btn.disabled = false; btn.textContent = '保存'; }
+                });
+            }
             } catch (e) {
                 scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">加载失败</div>';
             }

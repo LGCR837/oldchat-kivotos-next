@@ -2797,6 +2797,49 @@ body::-webkit-scrollbar {
     font-weight: 500;
 }
 .gm-leave-btn:hover { opacity: 0.85; }
+.gm-member-tag.role-2 { color: #f0a020; font-weight: 600; }
+.gm-member-tag.role-1 { color: var(--accent); font-weight: 600; }
+.gm-member-tag.me { color: var(--secondary-text); }
+.gm-member-item:hover { background: var(--hover); }
+.gm-settings-btn {
+    width: 100%;
+    padding: 10px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--accent);
+    color: #fff;
+    font-size: 15px;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 500;
+    margin-bottom: 10px;
+}
+.gm-settings-btn:hover { opacity: 0.85; }
+.gm-dissolve-btn {
+    width: 100%;
+    padding: 10px;
+    border-radius: 20px;
+    border: none;
+    background: var(--danger);
+    color: #fff;
+    font-size: 15px;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 500;
+}
+.gm-dissolve-btn:hover { opacity: 0.85; }
+.gm-set-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 4px;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+    color: var(--text);
+}
+.gm-set-row label { font-weight: 500; }
+.context-menu-item.danger { color: var(--danger); }
+.context-menu-item.danger:hover { background: var(--danger); color: #fff; }
 
 /* 个人主页 */
 .mp-header {
