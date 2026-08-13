@@ -2508,6 +2508,44 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateScrollToBottomBtn();
     }
 
+    // 切换/重建会话时：先隐藏容器 → 同步贴底 → 等图片布局稳定（scrollHeight 正确）→ 再揭示，
+    // 确保第一帧即位于底部，彻底消除「先显示旧位置/顶部再瞬移到底部」的闪烁。
+    // fade=true 时揭示带淡入动画；afterReveal 在揭示完成后回调（如标记已读）。
+    function pinAndReveal(afterReveal, fade) {
+        _stickToBottom = true;
+        messagesContainer.style.visibility = 'hidden';
+        pinToBottom();
+        const imgs = messagesContainer.querySelectorAll('.message img');
+        let pending = 0;
+        imgs.forEach(function (img) { if (!img.complete) pending++; });
+        const doReveal = function () {
+            pinToBottom();
+            if (fade) {
+                messagesContainer.classList.remove('fade-in');
+                void messagesContainer.offsetWidth;
+                messagesContainer.classList.add('fade-in');
+            }
+            messagesContainer.style.visibility = '';
+            if (chatScrollbar) { try { chatScrollbar.update(); } catch (e) {} }
+            updateScrollToBottomBtn();
+            if (typeof afterReveal === 'function') afterReveal();
+        };
+        if (pending === 0) {
+            requestAnimationFrame(doReveal);
+        } else {
+            let done = 0;
+            const onDone = function () { if (++done >= pending) requestAnimationFrame(doReveal); };
+            imgs.forEach(function (img) {
+                if (!img.complete) {
+                    img.addEventListener('load', onDone, { once: true });
+                    img.addEventListener('error', onDone, { once: true });
+                }
+            });
+            // 兜底：最多等 600ms，避免个别图片卡住导致列表不显示
+            setTimeout(doReveal, 600);
+        }
+    }
+
     const emojiPlazaBtn = document.getElementById('emojiPlazaBtn');
 
     // 侧边栏顶部选项卡切换逻辑
@@ -7327,10 +7365,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             convOffset[convKey] = msgs.length;
             convHasMore[convKey] = msgs.length >= PAGE_SIZE;
 
-            // 先滚动到底部，再缓存（确保缓存中的 scrollTop 是底部位置）
-            scrollToBottom(true);
-
-            // 丢弃旧缓存，缓存最新渲染的 DOM（只缓存最新一页）
+            // 先缓存最新渲染的 DOM（只缓存最新一页）
             // 注意：不能调用 cacheCurrentConversation()，它会清空容器
             delete convCache[convKey];
             if (currentConv?.key) {
@@ -7346,21 +7381,21 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 };
             }
 
-            // 触发淡入动画，同时恢复可见性（动画从 opacity: 0 开始，不会闪）
-            messagesContainer.classList.remove('fade-in');
-            void messagesContainer.offsetWidth;
-            messagesContainer.classList.add('fade-in');
-            messagesContainer.style.visibility = '';
-
-            // 重新附加滚动加载监听器
+            // 重新附加滚动加载监听器（揭示前绑定，避免首滑丢失监听）
             attachScrollListener(type, id, convKey, PAGE_SIZE);
 
-            // 标记已读
-            if (type === 'group') {
-                await apiFetch('/v1/groups/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ group_id: id }) });
-            } else {
-                await apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(withUidParam(id)) });
-            }
+            // 第一帧即底部：pinAndReveal 先同步贴底，等图片布局稳定后再揭示（带淡入），
+            // 彻底消除「先显示顶部/旧位置再瞬移到底部」的观感。标记已读放在揭示后异步进行。
+            pinAndReveal(async function () {
+                try {
+                    if (type === 'group') {
+                        await apiFetch('/v1/groups/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ group_id: id }) });
+                    } else {
+                        await apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(withUidParam(id)) });
+                    }
+                } catch (e) {}
+            }, true);
+            return;
         } catch (e) {
             console.error(e);
         } finally {
@@ -7546,38 +7581,15 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (convCache[convKey]) {
             // 检查 restoreConversation 返回值：false 表示缓存无效（空 fragment 等），需走无缓存路径
             if (restoreConversation(convKey)) {
-                // 切换会话：第一帧即贴底，且保持贴底直到图片/媒体加载完成，避免「先显示旧位置再瞬移下去」
+                // 切换会话：第一帧即贴底。pinAndReveal 先隐藏容器→同步贴底→等图片布局稳定→再揭示，
+                // 彻底消除「先显示旧位置/顶部再瞬移到底部」的观感。
                 _stickToBottom = true;
-                // 先隐藏容器，等图片布局稳定（scrollHeight 正确）后再贴底并揭示，彻底消除首帧错位
-                messagesContainer.style.visibility = 'hidden';
-                pinToBottom();
-                const imgs = messagesContainer.querySelectorAll('.message img');
-                let pending = 0;
-                imgs.forEach(function (img) { if (!img.complete) pending++; });
-                const reveal = function () {
-                    pinToBottom();
-                    messagesContainer.style.visibility = '';
-                };
-                if (pending === 0) {
-                    requestAnimationFrame(reveal);
-                } else {
-                    let done = 0;
-                    const onDone = function () { if (++done >= pending) requestAnimationFrame(reveal); };
-                    imgs.forEach(function (img) {
-                        if (!img.complete) {
-                            img.addEventListener('load', onDone, { once: true });
-                            img.addEventListener('error', onDone, { once: true });
-                        }
-                    });
-                    // 兜底：最多等 500ms，避免个别图片卡住导致列表不显示
-                    setTimeout(reveal, 500);
-                }
-                if (chatScrollbar) chatScrollbar.update();
-                updateScrollToBottomBtn();
-                // 绑定滚动监听（用于加载历史 + 维护贴底状态）；缓存恢复路径此前未绑定，会导致上滑后无法拉取历史
-                attachScrollListener(type, id, convKey, 30);
-                // 后台拉取最新消息（已用缓存恢复 DOM，故静默刷新，不显示「同步中」）
-                fetchLatestMessages(type, id, convKey, true);
+                pinAndReveal(function () {
+                    // 绑定滚动监听（用于加载历史 + 维护贴底状态）；缓存恢复路径此前未绑定，会导致上滑后无法拉取历史
+                    attachScrollListener(type, id, convKey, 30);
+                    // 后台拉取最新消息（已用缓存恢复 DOM，故静默刷新，不显示「同步中」）
+                    fetchLatestMessages(type, id, convKey, true);
+                });
                 return;
             }
             // 缓存无效，删除缓存后继续走无缓存路径
