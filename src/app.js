@@ -4121,7 +4121,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         : '<div class="context-menu-item" data-act="admin">设为管理员</div>';
                 }
                 if (canKick) {
-                    menuHtml += '<div class="context-menu-item danger" data-act="kick">踢出群聊</div>';
+                    menuHtml += '<div class="context-menu-item" data-act="kick" style="color:#ff6b6b;">踢出群聊</div>';
                 }
                 // 关闭任何已存在的成员菜单（单例）
                 hideMemberMenu();
