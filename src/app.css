@@ -3796,6 +3796,96 @@ body::-webkit-scrollbar {
     opacity: 0.5;
     cursor: not-allowed;
 }
+
+/* 每日刮刮乐（发现页右侧） */
+.scratch-card {
+    max-width: 480px;
+    margin: 8px 0;
+}
+.scratch-status {
+    color: var(--secondary-text);
+    font-size: 13px;
+    margin-bottom: 12px;
+}
+.scratch-balance {
+    font-size: 14px;
+    margin-bottom: 16px;
+}
+.scratch-balance b {
+    color: var(--accent);
+}
+.scratch-slots {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 10px;
+    margin-bottom: 20px;
+}
+.scratch-slot {
+    aspect-ratio: 1 / 1;
+    border-radius: 10px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text);
+    padding: 4px;
+    position: relative;
+    overflow: hidden;
+    user-select: none;
+    transition: transform .15s ease;
+}
+.scratch-slot .scratch-prize {
+    opacity: 0;
+    transition: opacity .35s ease .12s;
+    line-height: 1.25;
+}
+.scratch-slot.revealed {
+    background: linear-gradient(135deg, #ffe7a3, #ffb54d);
+    border-color: transparent;
+    color: #5a3b00;
+}
+.scratch-slot.revealed.win {
+    background: linear-gradient(135deg, #b6ffb0, #4ade80);
+    color: #064e2b;
+}
+.scratch-slot.revealed .scratch-prize {
+    opacity: 1;
+}
+.scratch-cover {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, #ffd76e, #ff9f43);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: 800;
+    color: #fff;
+    transition: opacity .35s ease;
+}
+.scratch-slot.revealed .scratch-cover {
+    opacity: 0;
+    pointer-events: none;
+}
+.scratch-btn {
+    padding: 10px 28px;
+    border: none;
+    border-radius: 22px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+}
+.scratch-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
 .checkin-card {
     background: var(--panel-bg);
     border: 1px solid var(--border);

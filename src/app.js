@@ -1861,6 +1861,7 @@ const V1_TO_V2 = {
     '/v1/me/bug-reports': '/v2/me/bug-reports',
     '/v1/me/user-reports': '/v2/me/user-reports',
     '/v1/me/delete': '/v2/me/delete',
+    '/v1/me/scratch': '/v2/me/scratch',
     // 动态
     '/v1/moments': '/v2/moments',
     '/v1/moments/like': '/v2/moments/like',
@@ -12436,6 +12437,136 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
     }
 
+    // ===== 每日刮刮乐（入口在发现页，渲染于右侧 .discover-main，不新开页面） =====
+    // 接口文档见 docs/oldchat-docs-20260814/nx7.md §22.5
+    // GET /v1/me/scratch  → 查询今日状态（already_done/total_reward/coin_balance/slots）
+    // POST /v1/me/scratch → 执行刮奖（请求体 {}）
+    function scratchSlotLabel(v) {
+        const map = { 0: '谢谢惠顾', 1: '1 金币', 5: '5 金币', 10: '10 金币', 20: '20 金币' };
+        return map[v] !== undefined ? map[v] : (v + ' 金币');
+    }
+
+    // 拉取刮刮乐状态：优先回传已解析对象；404/异常回传 null（视为功能未上线）
+    async function scratchLoad() {
+        try {
+            const res = await apiFetch('/v1/me/scratch', { method: 'GET' });
+            if (res.status === 404) return null;
+            const text = await res.text();
+            let data = {};
+            try { data = JSON.parse(text); } catch (e) { console.warn('[scratch] not JSON:', text.slice(0, 100)); }
+            if (data && typeof data.body === 'string') { try { data = JSON.parse(data.body); } catch (e) {} }
+            return data;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    async function renderScratch(main) {
+        main = main || document.querySelector('.main-panel[data-panel="discover"] .discover-main');
+        if (!main) return;
+        main.innerHTML = '<h3>每日刮刮乐</h3><div style="text-align:center;padding:20px;color:var(--secondary-text);">加载中...</div>';
+        try {
+            const data = await scratchLoad();
+            if (!data) {
+                main.innerHTML = '<h3>每日刮刮乐</h3><div style="text-align:center;padding:60px 20px;color:var(--secondary-text);"><i class="fa-solid fa-hammer" style="font-size:32px;margin-bottom:12px;display:block;"></i>功能建设中，敬请期待</div>';
+                return;
+            }
+            paintScratch(main, data, false);
+        } catch (e) {
+            console.error('[scratch]', e);
+            main.innerHTML = '<h3>每日刮刮乐</h3><div style="text-align:center;padding:20px;color:var(--secondary-text);">加载失败</div>';
+        }
+    }
+
+    // 绘制刮卡（reveal=true 时直接展示结果；否则覆盖层隐藏待刮）
+    function paintScratch(main, data, reveal) {
+        const already = !!data.already_done;
+        const reward = data.total_reward || 0;
+        const balance = data.coin_balance || 0;
+        const slots = Array.isArray(data.slots) ? data.slots.slice(0, 5) : [];
+        while (slots.length < 5) slots.push(0);
+        const showResult = reveal || already;
+
+        let html = '<h3>每日刮刮乐</h3>';
+        html += '<div class="scratch-card">';
+        html += '<div class="scratch-status">' + (already ? '今日已刮奖，明天再来吧' : '中奖概率很高，每天可刮一次') + '</div>';
+        html += '<div class="scratch-balance">金币余额：<b>' + balance + '</b>' + (reward > 0 ? '　今日已刮得：<b>' + reward + '</b> 金币' : '') + '</div>';
+        html += '<div class="scratch-slots" id="scratchSlots">';
+        for (let i = 0; i < 5; i++) {
+            const v = slots[i];
+            const prizeText = showResult ? scratchSlotLabel(v) : '?';
+            const cls = 'scratch-slot' + (showResult ? ' revealed' + (v > 0 ? ' win' : '') : '');
+            html += '<div class="' + cls + '" data-idx="' + i + '">';
+            html += '<div class="scratch-prize">' + prizeText + '</div>';
+            html += '<div class="scratch-cover">?</div>';
+            html += '</div>';
+        }
+        html += '</div>';
+        html += '<button class="scratch-btn" id="scratchBtn"' + (already ? ' disabled' : '') + '>' + (already ? '明日再来' : '刮一刮') + '</button>';
+        html += '</div>';
+        main.innerHTML = html;
+
+        const btn = document.getElementById('scratchBtn');
+        if (btn && !already) {
+            btn.addEventListener('click', async () => {
+                btn.disabled = true;
+                btn.textContent = '刮奖中...';
+                try {
+                    const res = await apiFetch('/v1/me/scratch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: '{}'
+                    });
+                    const rtext = await res.text();
+                    let rd = {};
+                    try { rd = JSON.parse(rtext); } catch (e) {}
+                    if (rd && typeof rd.body === 'string') { try { rd = JSON.parse(rd.body); } catch (e) {} }
+                    if (res.status >= 400 || rd.error) {
+                        // 已刮过或失败：回退展示提示并刷新状态
+                        const msg = rd && rd.error ? rd.error : (res.status >= 400 ? '刮奖失败' : '刮奖失败');
+                        if (typeof showAlert === 'function') showAlert(msg);
+                        const fresh = await scratchLoad();
+                        if (fresh) paintScratch(main, fresh, false);
+                        return;
+                    }
+                    // 成功：揭示结果
+                    paintScratchReveal(main, rd);
+                    const got = rd.total_reward || 0;
+                    if (typeof showAlert === 'function') showAlert(got > 0 ? ('恭喜获得 ' + got + ' 金币！') : '可惜没有中奖，明天再来~');
+                } catch (e) {
+                    console.error('[scratch]', e);
+                    if (typeof showAlert === 'function') showAlert('刮奖失败，请稍后再试');
+                    btn.disabled = false;
+                    btn.textContent = '刮一刮';
+                }
+            });
+        }
+    }
+
+    // 在已绘制的刮卡上揭示本次刮奖结果
+    function paintScratchReveal(main, rd) {
+        const reward = rd.total_reward || 0;
+        const balance = rd.coin_balance || 0;
+        const slots = Array.isArray(rd.slots) ? rd.slots.slice(0, 5) : [];
+        while (slots.length < 5) slots.push(0);
+
+        const statusEl = main.querySelector('.scratch-status');
+        const balanceEl = main.querySelector('.scratch-balance');
+        const btn = document.getElementById('scratchBtn');
+        if (statusEl) statusEl.textContent = '今日已刮奖，明天再来吧';
+        if (balanceEl) balanceEl.innerHTML = '金币余额：<b>' + balance + '</b>' + (reward > 0 ? '　今日已刮得：<b>' + reward + '</b> 金币' : '');
+        if (btn) { btn.disabled = true; btn.textContent = '明日再来'; }
+
+        const slotEls = main.querySelectorAll('.scratch-slot');
+        slotEls.forEach((el, i) => {
+            const v = slots[i] || 0;
+            const prize = el.querySelector('.scratch-prize');
+            if (prize) prize.textContent = scratchSlotLabel(v);
+            el.classList.add('revealed');
+            if (v > 0) el.classList.add('win');
+        });
+    }
+
     // ===== 系统通知页（入口在发现页，设计参考签到墙） =====
     // 从多个候选字段名中取第一个非空值（兼容不同版本后端字段命名）
     function noticePick(obj, names) {
@@ -13839,6 +13970,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             if (main) {
                 main.classList.add('discover-has-content');
                 renderCheckin(main);
+            }
+        } else if (target === 'scratch') {
+            const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
+            if (main) {
+                main.classList.add('discover-has-content');
+                renderScratch(main);
             }
         } else if (target === 'notice') {
             const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
