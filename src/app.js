@@ -12064,7 +12064,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         </select>
                     </span>
                 </div>
-                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
+                <div class="settings-note">
                     WebSocket优先：默认走 WebSocket，连续失败 3 次后自动降级为轮询，并每 60 秒重试 WebSocket，恢复后自动切回。仅WebSocket：只用 WebSocket（断线指数退避重连）。仅轮询：不建立 WebSocket，每 5 秒轮询一次。轮询期间请求 UA 为 <span style="color:var(--text);">OldChatForKivotosNextPollingMode</span>，其他模式保持 OldChatForKivotosNext。
                 </div>
                 <div class="settings-item" id="settingsMultiSession">
@@ -12076,7 +12076,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         </label>
                     </span>
                 </div>
-                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
+                <div class="settings-note">
                     开启后，后台持续接收所有会话的 WebSocket 消息并暂存，切换到该会话时无需等待加载即可秒开（仍只拉最新一页，不翻历史）。关闭则退回原行为，不再暂存以节省内存。
                 </div>
                 <div class="settings-item" id="settingsMsgSortFix">
@@ -12088,7 +12088,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         </label>
                     </span>
                 </div>
-                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
+                <div class="settings-note">
                     默认关闭：新消息一律追加到末尾、不重排（时间戳不精准，乱序插入会让消息看起来错位于历史中间；实时推送本就如此）。开启后，增量/轮询拉取会按时间戳修正顺序，必要时把消息插入到正确位置（开销略大，仅在你确实观察到顺序错乱时开启）。
                 </div>
                 <div class="settings-item" id="settingsTaskbarFlash">
@@ -12100,7 +12100,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         </label>
                     </span>
                 </div>
-                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
+                <div class="settings-note">
                     开启后，窗口最小化到任务栏时新消息会闪烁任务栏图标（Windows）。关闭则不再闪烁。被折叠的会话始终不会触发任何通知。
                 </div>
                 <div class="settings-item" id="settingsTrayNotify">
@@ -12112,7 +12112,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         </label>
                     </span>
                 </div>
-                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
+                <div class="settings-note">
                     开启后，窗口隐藏到系统托盘时新消息会弹出系统通知。关闭则不再弹出。被折叠的会话始终不会触发任何通知。
                 </div>
             </div>
@@ -12141,7 +12141,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         <span id="prioActiveVal" style="min-width:72px;text-align:right;">30 秒</span>
                     </span>
                 </div>
-                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
+                <div class="settings-note">
                     开启后，有未读的会话会立即进入「重点」分组；最近打开过的群聊与私聊在「进入延迟」后进入（0=立即，31=不自动进入，默认 5 秒）；「闲置移除」控制进入后保留多久（0=立即，31=永不移除，默认 30 秒）；未读会话始终立即进入；移动时带滑动动画。
                 </div>
             </div>
@@ -12180,7 +12180,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     <span class="label">清除媒体缓存（图片/音频/头像）</span>
                     <span class="value"><i class="fa-solid fa-trash-can"></i></span>
                 </div>
-                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
+                <div class="settings-note">
                     <span id="settingsCacheSize">计算中...</span>
                 </div>
             </div>

@@ -3714,6 +3714,20 @@ body::-webkit-scrollbar {
 .settings-item:last-child {
     border-bottom: none;
 }
+/* 带备注的父选项：去掉其与备注之间的分割线（备注属于该选项） */
+.settings-item:has(+ .settings-note) {
+    border-bottom: none;
+}
+/* 选项备注：本身带下边框，与下方选项分隔；作为组末子元素时不显示（避免贴着组圆角底边） */
+.settings-note {
+    padding: 8px 14px;
+    font-size: 12px;
+    color: var(--secondary-text);
+    border-bottom: 1px solid var(--border);
+}
+.settings-note:last-child {
+    border-bottom: none;
+}
 .settings-item:hover {
     background: var(--hover);
 }
