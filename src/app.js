@@ -5808,6 +5808,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             });
             for (const [uid, count] of Object.entries(directCount)) {
                 const convKey = `direct:${uid}`;
+                if (currentConv && currentConv.key === convKey) continue; // 当前正在查看的会话不显示未读红点
                 unreadCounts[convKey] = count;
                 updateUnreadBadge(convKey, count);
                 if (directLast[uid]) unreadLastMsg[convKey] = directLast[uid];
@@ -5822,6 +5823,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             });
             for (const [groupId, count] of Object.entries(groupCount)) {
                 const convKey = `group:${groupId}`;
+                if (currentConv && currentConv.key === convKey) continue; // 当前正在查看的会话不显示未读红点
                 unreadCounts[convKey] = count;
                 updateUnreadBadge(convKey, count);
                 if (groupLast[groupId]) unreadLastMsg[convKey] = groupLast[groupId];
@@ -11254,7 +11256,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 const items = data.items || (data.data && data.data.items) || [];
                 const imgs = items.filter(it => it.type === 'image' && it.media_url);
                 if (!imgs.length) {
-                    grid.innerHTML = '<div class="collected-emoji-empty">收藏夹还是空的<br>在聊天中右键消息选择「收藏」即可加入</div>';
+                    grid.innerHTML = '<div class="collected-emoji-empty">暂不可用</div>';
                     return;
                 }
                 grid.innerHTML = '';
@@ -11273,7 +11275,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     grid.appendChild(itemEl);
                 });
             } catch (e) {
-                grid.innerHTML = '<div class="collected-emoji-empty">加载失败，请稍后重试</div>';
+                grid.innerHTML = '<div class="collected-emoji-empty">暂不可用</div>';
             }
         };
 
