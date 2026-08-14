@@ -1377,6 +1377,51 @@ function downloadFile(url, filename) {
         .catch(function(e) { console.error('文件下载失败:', e); });
 }
 
+// 把一条聊天消息收藏到「收藏夹」（§37：GET/POST /v1/favorites）
+async function addMessageToFavorites(msgDiv) {
+    if (!msgDiv) return;
+    const msgType = msgDiv.dataset.msgType || 'text';
+    let rawMsg = {};
+    try { rawMsg = JSON.parse(msgDiv.dataset.rawBody || '{}'); } catch (e) {}
+    const fromName = msgDiv.dataset.fromName || rawMsg.from_name || rawMsg.display_name || '';
+    const convName = (currentConv && currentConv.name) ? currentConv.name : (rawMsg.group_id ? '群聊' : '私聊');
+    let title = fromName || '消息';
+    let mediaUrl = rawMsg.media_url || rawMsg.url || '';
+    if (msgType === 'text') {
+        const txt = (rawMsg.body || msgDiv.querySelector('.message-bubble')?.innerText || '').trim();
+        title = txt ? txt.slice(0, 40) : (fromName || '文本消息');
+    } else if (msgType === 'image') {
+        title = '图片' + (fromName ? ' · ' + fromName : '');
+    } else if (msgType === 'voice' || msgType === 'audio') {
+        title = '语音' + (fromName ? ' · ' + fromName : '');
+    } else if (msgType === 'video') {
+        title = '视频' + (fromName ? ' · ' + fromName : '');
+    } else if (msgType === 'resource' || msgType === 'file') {
+        title = (rawMsg.name || '文件') + (fromName ? ' · ' + fromName : '');
+    } else if (msgType === 'red_packet') {
+        title = (rawMsg.title || '红包') + (fromName ? ' · ' + fromName : '');
+    } else if (msgType === 'music') {
+        title = (rawMsg.title || '音乐') + (fromName ? ' · ' + fromName : '');
+    }
+    try {
+        const res = await apiFetch('/v1/favorites/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: msgType,
+                target_id: msgDiv.dataset.msgId,
+                title: title,
+                subtitle: convName,
+                media_url: mediaUrl,
+                extra: JSON.stringify(rawMsg)
+            })
+        });
+        const data = await res.json();
+        if (data.error) { showAlert(data.error); return; }
+        showAlert('已收藏到收藏夹');
+    } catch (e) { showAlert('收藏失败'); }
+}
+
 // 文件下载按钮：点击走带权鉴下载（不再 target=_blank 浏览器打开）
 document.addEventListener('click', function(e) {
     var el = e.target && e.target.closest ? e.target.closest('.file-download-btn') : null;
@@ -1783,6 +1828,7 @@ const V1_TO_V2 = {
     '/v1/groups/dissolve': '/v2/groups/dissolve',
     '/v1/groups/list': '/v2/groups/list',
     '/v1/groups/members': '/v2/groups/members',
+    '/v1/groups/members/lookup': '/v2/groups/members/lookup',
     // 红包
     '/v1/redpackets/send': '/v2/redpackets/send',
     '/v1/redpackets/claim': '/v2/redpackets/claim',
@@ -1808,6 +1854,7 @@ const V1_TO_V2 = {
     '/v1/me/group-reports': '/v2/me/group-reports',
     '/v1/me/bug-reports': '/v2/me/bug-reports',
     '/v1/me/user-reports': '/v2/me/user-reports',
+    '/v1/me/delete': '/v2/me/delete',
     // 动态
     '/v1/moments': '/v2/moments',
     '/v1/moments/like': '/v2/moments/like',
@@ -1831,9 +1878,17 @@ const V1_TO_V2 = {
     '/v1/channels/posts/send': '/v2/channels/posts/send',
     '/v1/channels/reactions/toggle': '/v2/channels/reactions/toggle',
     '/v1/channels/read': '/v2/channels/read',
+    '/v1/channels/states': '/v2/channels/states',
+    '/v1/channels/events/after': '/v2/channels/events/after',
     '/v1/files/check': '/v2/files/check',
     '/v1/files/upload': '/v2/files/upload',
-    '/v1/resources/upload': '/v2/resources/upload'
+    '/v1/resources/upload': '/v2/resources/upload',
+    '/v1/resources/download': '/v2/resources/download',
+    // 未读 / 差量 / 网关（v2 新增端点，客户端暂未接入，先占位保证未来直接可用）
+    '/v1/unread/direct': '/v2/unread/direct',
+    '/v1/unread/groups': '/v2/unread/groups',
+    '/v1/updates/difference': '/v2/updates/difference',
+    '/v1/gateway': '/v2/gateway'
 };
 
 // 命中映射表则把 /v1/xxx 换成 /v2/xxx（精确路径或路径+查询参数）
@@ -4160,18 +4215,21 @@ document.addEventListener('DOMContentLoaded', async () => {
                 gmMyRole = myRole;  // 供全局右键菜单共享「我的角色」
                 const isOwner = myRole === 2;
 
-                let membersHtml = '';
-                members.forEach(m => {
+                // 单个成员项 HTML（供初始渲染与搜索过滤复用）
+                function memberItemHtml(m) {
                     const mUid = m.uid;
                     const isMe = isSelfUid(mUid);
                     const rl = m.role === 2 ? '群主' : (m.role === 1 ? '管理员' : '');
-                    membersHtml += `<div class="gm-member-item" data-uid="${escapeHtml(mUid)}" data-ncuid="${escapeHtml(m.ncuid || '')}" data-display-uid="${escapeHtml(m.displayUid || mUid)}" data-role="${m.role || 0}" style="cursor:pointer;">` +
+                    return `<div class="gm-member-item" data-uid="${escapeHtml(mUid)}" data-ncuid="${escapeHtml(m.ncuid || '')}" data-display-uid="${escapeHtml(m.displayUid || mUid)}" data-role="${m.role || 0}" style="cursor:pointer;">` +
                         `<img class="gm-member-avatar" src="${cachedResolveMediaUrl(m.avatar || defaultAvatar)}" onerror="this.src='${defaultAvatar}'">` +
                         `<div class="gm-member-info"><div class="gm-member-name">${escapeHtml(m.name)}</div><div class="gm-member-uid">${escapeHtml(m.displayUid)}</div></div>` +
                         (rl ? `<span class="gm-member-tag role-${m.role}">${rl}</span>` : '') +
                         (isMe ? '<span class="gm-member-tag me">我</span>' : '') +
                         `</div>`;
-                });
+                }
+
+                let currentMembers = members;  // 供搜索过滤复用
+                let membersHtml = members.map(memberItemHtml).join('');
 
                 let btnsHtml = '';
                 if (myRole === 2) {
@@ -4196,6 +4254,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     '</div>' +
                     '<div class="gm-section">' +
                         '<div class="gm-section-header"><span>成员列表 (' + members.length + ')</span><button class="gm-invite-btn" onclick="gmShowInvite()">+ 邀请</button></div>' +
+                        '<div class="gm-member-search"><input id="gmMemberSearch" type="text" placeholder="搜索成员（昵称 / UID）..."></div>' +
                         '<div class="gm-members-list">' + membersHtml + '</div>' +
                     '</div>' +
                     btnsHtml;
@@ -4206,33 +4265,91 @@ document.addEventListener('DOMContentLoaded', async () => {
                     scroll.dataset.faded = '1';
                 }
 
-                // 成员项左键点击：弹出成员操作菜单（查看资料 / 设管理员 / 踢出）
-                scroll.querySelectorAll('.gm-member-item[data-uid]').forEach(item => {
-                    item.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        const m = {
-                            uid: item.dataset.uid,
-                            ncuid: item.dataset.ncuid,
-                            displayUid: item.dataset.displayUid || item.dataset.uid,
-                            role: parseInt(item.dataset.role || '0', 10),
-                            name: (item.querySelector('.gm-member-name') || {}).textContent || ''
-                        };
-                        showMemberActions(m, myRole, e.clientX, e.clientY);
+                // 成员项交互（左键 / 右键）：抽成函数，供搜索重渲染后重新绑定
+                function bindMemberItems() {
+                    scroll.querySelectorAll('.gm-member-item[data-uid]').forEach(item => {
+                        item.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            const m = {
+                                uid: item.dataset.uid,
+                                ncuid: item.dataset.ncuid,
+                                displayUid: item.dataset.displayUid || item.dataset.uid,
+                                role: parseInt(item.dataset.role || '0', 10),
+                                name: (item.querySelector('.gm-member-name') || {}).textContent || ''
+                            };
+                            showMemberActions(m, myRole, e.clientX, e.clientY);
+                        });
+                        // 成员项右键：同样弹出成员操作菜单
+                        item.addEventListener('contextmenu', (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const m = {
+                                uid: item.dataset.uid,
+                                ncuid: item.dataset.ncuid,
+                                displayUid: item.dataset.displayUid || item.dataset.uid,
+                                role: parseInt(item.dataset.role || '0', 10),
+                                name: (item.querySelector('.gm-member-name') || {}).textContent || ''
+                            };
+                            showMemberActions(m, myRole, e.clientX, e.clientY);
+                        });
                     });
-                    // 成员项右键：同样弹出成员操作菜单
-                    item.addEventListener('contextmenu', (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const m = {
-                            uid: item.dataset.uid,
-                            ncuid: item.dataset.ncuid,
-                            displayUid: item.dataset.displayUid || item.dataset.uid,
-                            role: parseInt(item.dataset.role || '0', 10),
-                            name: (item.querySelector('.gm-member-name') || {}).textContent || ''
-                        };
-                        showMemberActions(m, myRole, e.clientX, e.clientY);
+                }
+                bindMemberItems();
+
+                // ===== 群成员查询（搜索）：客户端即时过滤 + 服务端 lookup 兜底 =====
+                const membersListEl = scroll.querySelector('.gm-members-list');
+                const searchInput = scroll.querySelector('#gmMemberSearch');
+                function renderMembersList(arr) {
+                    if (!membersListEl) return;
+                    membersListEl.innerHTML = arr.length
+                        ? arr.map(memberItemHtml).join('')
+                        : '<div class="gm-members-empty">未找到匹配的成员</div>';
+                    bindMemberItems();
+                }
+                function clientFilter(q) {
+                    const ql = q.toLowerCase();
+                    return currentMembers.filter(mm =>
+                        (mm.name || '').toLowerCase().includes(ql) ||
+                        (mm.displayUid || '').toLowerCase().includes(ql) ||
+                        (mm.uid || '').toLowerCase().includes(ql) ||
+                        (mm.ncuid || '').toLowerCase().includes(ql)
+                    );
+                }
+                // 服务端 lookup 返回的成员可能字段较少（仅 id/username/avatar_url），
+                // 优先用已加载全量成员补全角色/昵称等信息
+                function enrichLookupResult(r) {
+                    const id = r.id || r.uid || r.ncuid || '';
+                    const found = currentMembers.find(m => m.uid === id || m.ncuid === id || m.displayUid === id);
+                    if (found) return found;
+                    return {
+                        uid: id,
+                        ncuid: r.ncuid || id,
+                        displayUid: r.username || r.display_name || id,
+                        name: r.display_name || r.username || id,
+                        avatar: r.avatar_url || '',
+                        role: r.role || 0
+                    };
+                }
+                async function doServerLookup(q) {
+                    try {
+                        const res = await apiFetch('/v2/groups/members/lookup?group_id=' + encodeURIComponent(groupId) + '&query=' + encodeURIComponent(q));
+                        if (!res || !res.ok) return;
+                        const data = await res.json();
+                        const list = data.members || [];
+                        if (list.length === 0) return; // 保留客户端过滤结果
+                        renderMembersList(list.map(enrichLookupResult));
+                    } catch (e) { /* 服务端查询失败时保留客户端过滤结果 */ }
+                }
+                if (searchInput) {
+                    let deb;
+                    searchInput.addEventListener('input', () => {
+                        const q = searchInput.value.trim();
+                        // 即时客户端过滤（反馈快、离线可用），随后异步命中服务端 lookup
+                        renderMembersList(q ? clientFilter(q) : currentMembers);
+                        clearTimeout(deb);
+                        if (q) deb = setTimeout(() => doServerLookup(q), 300);
                     });
-                });
+                }
                 // 暴露给全局右键菜单处理器（在成员项上右键时复用同一菜单）
                 window.__gmShowMemberActions = showMemberActions;
 
@@ -5677,6 +5794,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     let wsSessionId = null;
     let wsEncKey = null;
     let wsMacKey = null;
+    // 增量补差基线 pts（§30.3）：断线重连后用本地 pts 调 /v2/updates/difference 补齐漏掉的事件
+    let wsPts = Number(localStorage.getItem('oc_ws_pts') || 0);
+    function saveWsPts() { try { localStorage.setItem('oc_ws_pts', String(wsPts)); } catch (e) {} }
 
     // 指数退避调度重连
     function scheduleWsReconnect() {
@@ -5834,10 +5954,30 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 }
             }
             await loadUnreadCounts();
+            // PTS 增量补差：兜底补齐长断开窗口内 WS 可能漏掉的事件
+            await fetchUpdatesDifference();
             console.log('[WS] 重连后已补拉当前会话消息与未读计数');
         } catch (e) {
             console.warn('[WS] 重连补拉失败:', e);
         }
+    }
+
+    // §30.3 PTS 增量补差：断线重连后用本地 pts 补齐断开期间可能漏掉的事件（account_event 差量回放）
+    async function fetchUpdatesDifference() {
+        if (wsPts <= 0) return; // 无基线 pts 则依赖现有全量补拉
+        try {
+            const res = await apiFetch(`/v2/updates/difference?pts=${wsPts}&limit=200`);
+            if (!res || !res.ok) return;
+            const data = await res.json();
+            if (data.reset) { console.log('[WS] updates/difference reset=true，依赖现有全量补拉'); return; }
+            const events = data.events || [];
+            for (const ev of events) {
+                // 差量事件以 account_event 结构回放：{ pts, pts_count, type, payload }
+                handleWsMessage({ type: 'account_event', data: ev });
+                if (typeof ev.pts === 'number') { wsPts = ev.pts; saveWsPts(); }
+            }
+            if (typeof data.next_pts === 'number') { wsPts = data.next_pts; saveWsPts(); }
+        } catch (e) { console.warn('[WS] updates/difference 失败:', e); }
     }
 
     // 静默补拉：拉取某会话最新一页并落入后台缓存（不渲染 DOM），用于断线/启动后的后台 catch-up。
@@ -6069,8 +6209,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             };
             ws.onmessage = async (event) => {
                 try {
-                    // 所有 WS 推送都是加密信封，先解密
-                    const plain = await decryptEnvelope(event.data);
+                    // WS 帧可能是加密信封，也可能是明文 JSON（§30.1：服务端两种都可能下发）
+                    let plain = await decryptEnvelope(event.data);
+                    if (plain === null) {
+                        // 解密失败（无 iv/data/mac 或非信封）：当作明文 JSON 尝试
+                        plain = event.data;
+                    }
                     if (!plain) return;
                     const msg = JSON.parse(plain);
                     handleWsMessage(msg);
@@ -6607,7 +6751,84 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 name: fromName,
                 avatar: fromAvatar
             }, 5000);
+        } else if (msg.type === 'account_event') {
+            // 账号级事件差量包装（§30.4.2）：data 内嵌 {type, payload}
+            if (typeof msg.pts === 'number') { wsPts = msg.pts; saveWsPts(); }
+            const inner = msg.data || msg.payload || {};
+            const innerType = inner.type || inner.event_type || '';
+            if (innerType === 'DIRECT_MESSAGE_NEW') {
+                let m = inner.message;
+                if (!m && inner.payload) m = inner.payload.message || inner.payload;
+                if (!m) m = inner;
+                handleWsMessage({ type: 'direct_message', data: m });
+            } else if (innerType === 'DIRECT_MESSAGE_RECALL') {
+                handleWsMessage({ type: 'direct_recall', data: { message_id: inner.message_id, thread_id: inner.thread_peer_uid, from_uid: inner.from_ncuid || inner.from_uid } });
+            } else if (innerType === 'DIRECT_READ') {
+                handleWsMessage({ type: 'direct_read', data: { thread_id: inner.peer_uid, reader_uid: inner.peer_uid, read_at: inner.read_at } });
+            } else if (innerType === 'GROUP_POINTER_UPDATE') {
+                if (inner.group_id && currentConv && currentConv.key === `group:${inner.group_id}`) {
+                    fetchLatestMessages('group', inner.group_id, currentConv.key, false, 'ws-pointer').catch(() => {});
+                }
+            } else if (innerType === 'GROUP_MEMBERSHIP_CHANGE') {
+                if (inner.group_id) refreshGroupMembersCache(inner.group_id);
+            }
+        } else if (msg.type === 'system_notification') {
+            const d = msg.data || {};
+            notifyNewMessage(d.title || '系统通知', d.body || '');
+        } else if (msg.type === 'presence') {
+            const d = msg.data || {};
+            updatePresence(d.uid, d.is_online, d.presence_status);
+        } else if (msg.type === 'channel_update') {
+            const d = msg.data || {};
+            try { window.dispatchEvent(new CustomEvent('oc:channel-update', { detail: { channelId: d.channel_id } })); } catch (e) {}
+            if (currentConv && currentConv.type === 'channel' && typeof window.refreshChannelView === 'function') {
+                window.refreshChannelView(d.channel_id);
+            }
         }
+    }
+
+    // ===== 在线状态（presence）=====
+    // uid(大写) -> { isOnline, status: online|offline|busy|away }
+    const presenceMap = new Map();
+    function updatePresence(uid, isOnline, status) {
+        if (!uid) return;
+        const up = String(uid).toUpperCase();
+        presenceMap.set(up, {
+            isOnline: isOnline === true || isOnline === 'true' || status === 'online',
+            status: status || (isOnline ? 'online' : 'offline')
+        });
+        renderPresenceIndicators();
+    }
+    function ensureChatPresenceDot() {
+        if (document.getElementById('chatPresenceDot')) return;
+        const title = chatHeader.querySelector('.chat-title');
+        if (!title) return;
+        const dot = document.createElement('span');
+        dot.id = 'chatPresenceDot';
+        dot.style.cssText = 'display:none;width:8px;height:8px;border-radius:50%;margin-left:8px;vertical-align:middle;flex-shrink:0;';
+        title.insertAdjacentElement('afterend', dot);
+    }
+    function renderPresenceIndicators() {
+        try {
+            // 会话列表头像（img[data-uid]）：用 box-shadow 圆环表示在线（兼容被替换元素不渲染 ::after 的限制）
+            document.querySelectorAll('img[data-uid]').forEach(img => {
+                const st = presenceMap.get(String(img.dataset.uid || '').toUpperCase());
+                if (!st || !st.isOnline) { img.style.boxShadow = ''; return; }
+                const color = st.status === 'busy' ? '#ef4444' : st.status === 'away' ? '#f59e0b' : '#22c55e';
+                img.style.boxShadow = '0 0 0 2px ' + color;
+            });
+            // 当前私聊头部在线点
+            const dot = document.getElementById('chatPresenceDot');
+            if (dot && currentConv && currentConv.type === 'direct') {
+                const st = presenceMap.get(String(currentConv.id || '').toUpperCase());
+                if (st && st.isOnline) {
+                    const color = st.status === 'busy' ? '#ef4444' : st.status === 'away' ? '#f59e0b' : '#22c55e';
+                    dot.style.display = 'inline-block';
+                    dot.style.background = color;
+                    dot.title = st.status === 'busy' ? '忙碌' : st.status === 'away' ? '离开' : '在线';
+                } else { dot.style.display = 'none'; }
+            } else if (dot) { dot.style.display = 'none'; }
+        } catch (e) {}
     }
 
     // ===== Typing 指示器 =====
@@ -8015,6 +8236,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         } catch (e) {}
     
         chatHeader.querySelector('.chat-title').textContent = name;
+        // 在线状态点（presence）：私聊会话显示对端在线状态
+        ensureChatPresenceDot();
+        renderPresenceIndicators();
 
         pendingQuote = null;
         quotePreview.style.display = 'none';
@@ -8508,14 +8732,21 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             } catch (e) {}
             if (packetData && packetData.packet_id) {
                 const packetId = packetData.packet_id;
-                const totalAmount = packetData.total_amount || '?';
-                const totalCount = packetData.total_count || '?';
+                const totalAmount = packetData.total_amount != null ? packetData.total_amount : '?';
+                const totalCount = packetData.total_count != null ? packetData.total_count : '?';
+                // 「红包」改为具体文本（祝福语/标题）；无标题时回退通用祝福
+                const title = packetData.title || packetData.blessing || '恭喜发财';
+                // 有封面则用小圆角封面替换 Emoji；无封面保持 Emoji 现状
+                const cover = packetData.cover_url || packetData.cover || '';
+                const iconHtml = cover
+                    ? `<img class="rp-cover" src="${escapeHtml(cachedResolveMediaUrl(cover))}" onerror="window.rpCoverOnError(this)">`
+                    : `<div class="rp-icon">🧧</div>`;
                 content = `
-                    <div class="red-packet-card" data-packet-id="${escapeHtml(packetId)}" data-claimed="false">
-                        <div class="rp-icon">🧧</div>
+                    <div class="red-packet-card" data-packet-id="${escapeHtml(packetId)}" data-claimed="false" data-title="${escapeHtml(title)}" data-cover="${escapeHtml(cover)}">
+                        ${iconHtml}
                         <div class="rp-info">
-                            <div class="rp-title">红包</div>
-                            <div class="rp-desc">总额 ${totalAmount} · ${totalCount}个</div>
+                            <div class="rp-title">${escapeHtml(title)}</div>
+                            <div class="rp-desc">总额 ${escapeHtml(String(totalAmount))} · ${escapeHtml(String(totalCount))}个</div>
                         </div>
                         <div class="rp-status">点击领取</div>
                     </div>`;
@@ -9713,6 +9944,117 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         });
     }
 
+    // 红包封面加载失败 → 回退为 Emoji（保持原现状）
+    window.rpCoverOnError = function (img) {
+        const d = document.createElement('div');
+        d.className = 'rp-icon';
+        d.textContent = '🧧';
+        if (img && img.parentNode) img.replaceWith(d);
+    };
+
+    // 红包详情弹窗（领取后再次点击 / 右键「查看详细」均打开）
+    async function openRedPacketDetail(packetId, cardEl) {
+        if (!packetId) return;
+        const overlay = document.createElement('div');
+        overlay.className = 'rp-detail-overlay';
+        overlay.innerHTML = `
+            <div class="rp-detail-card">
+                <div class="rp-detail-head">
+                    <i class="fa-solid fa-xmark rp-detail-close" title="关闭"></i>
+                </div>
+                <div class="rp-detail-body" id="rpDetailBody"><div class="court-loading">加载中...</div></div>
+            </div>`;
+        document.body.appendChild(overlay);
+        requestAnimationFrame(() => overlay.classList.add('show'));
+        const close = () => { overlay.classList.remove('show'); setTimeout(() => overlay.remove(), 180); };
+        overlay.querySelector('.rp-detail-close').addEventListener('click', close);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+        async function loadDetail() {
+            const body = overlay.querySelector('#rpDetailBody');
+            try {
+                const res = await apiFetch('/v1/redpackets/' + encodeURIComponent(packetId));
+                const d = await res.json();
+                if (d.error) { body.innerHTML = '<div class="court-error">' + escapeHtml(d.error) + '</div>'; return; }
+
+                const cover = d.cover_url || d.cover || (cardEl && cardEl.dataset.cover) || '';
+                const title = d.title || d.blessing || (cardEl && cardEl.dataset.title) || '恭喜发财';
+                const iconHtml = cover
+                    ? `<img class="rp-cover-lg" src="${escapeHtml(cachedResolveMediaUrl(cover))}" onerror="window.rpCoverOnError(this)">`
+                    : `<div class="rp-icon-lg">🧧</div>`;
+                const creator = d.creator_uid ? (lookupName(d.creator_uid) || d.creator_uid) : '未知';
+                const statusMap = { expired: '已过期', open: '进行中', active: '进行中', full: '已抢光', finished: '已抢光', closed: '已结束' };
+                const statusText = statusMap[String(d.status).toLowerCase()] || d.status || '';
+                const myAmt = d.my_claim_amount != null ? d.my_claim_amount : null;
+                const claims = Array.isArray(d.claims) ? d.claims : [];
+
+                let html = `<div class="rp-detail-top">${iconHtml}<div class="rp-detail-title">${escapeHtml(title)}</div>` +
+                    `<div class="rp-detail-sub">来自 ${escapeHtml(creator)}</div></div>`;
+
+                html += `<div class="rp-detail-stats">` +
+                    `<div><b>${escapeHtml(String(d.total_amount != null ? d.total_amount : '?'))}</b><span>总金额</span></div>` +
+                    `<div><b>${escapeHtml(String(d.total_count != null ? d.total_count : '?'))}</b><span>红包个数</span></div>` +
+                    `<div><b>${escapeHtml(String(d.claimed_count != null ? d.claimed_count : claims.length))}</b><span>已领取</span></div>` +
+                    `</div>`;
+
+                if (statusText) html += `<div class="rp-detail-status">状态：${escapeHtml(statusText)}</div>`;
+
+                if (myAmt != null && myAmt !== 0) {
+                    html += `<div class="rp-detail-mine">你领取了 <b>${escapeHtml(String(myAmt))}</b></div>`;
+                } else if (d.can_claim) {
+                    html += `<button class="btn rp-detail-claim" id="rpDetailClaim">领取红包</button>`;
+                } else if (d.my_claim_amount === 0) {
+                    html += `<div class="rp-detail-mine">你还没有领取</div>`;
+                }
+
+                if (claims.length) {
+                    html += `<div class="rp-detail-claims-title">领取记录（${claims.length}）</div><div class="rp-detail-claims">`;
+                    claims.forEach(c => {
+                        const nm = c.display_name || c.username || c.uid || '匿名';
+                        const av = c.avatar_url ? cachedResolveMediaUrl(c.avatar_url) : 'assets/default-avatar.png';
+                        const amt = c.amount != null ? c.amount : '';
+                        const tm = c.created_at ? new Date(c.created_at * 1000).toLocaleString() : '';
+                        html += `<div class="rp-claim-item">` +
+                            `<img src="${av}" onerror="this.src='assets/default-avatar.png'">` +
+                            `<div class="rp-claim-info"><div class="rp-claim-name">${escapeHtml(nm)}</div><div class="rp-claim-time">${escapeHtml(tm)}</div></div>` +
+                            `<div class="rp-claim-amt">${escapeHtml(String(amt))}</div></div>`;
+                    });
+                    html += `</div>`;
+                }
+
+                body.innerHTML = html;
+
+                const claimBtn = body.querySelector('#rpDetailClaim');
+                if (claimBtn) {
+                    claimBtn.addEventListener('click', async () => {
+                        claimBtn.disabled = true;
+                        claimBtn.textContent = '领取中...';
+                        try {
+                            const r2 = await apiFetch('/v1/redpackets/claim', {
+                                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ packet_id: packetId })
+                            });
+                            const d2 = await r2.json();
+                            if (d2.error) { showAlert(d2.error); claimBtn.disabled = false; claimBtn.textContent = '领取红包'; return; }
+                            if (cardEl) {
+                                cardEl.dataset.claimed = 'true';
+                                cardEl.style.pointerEvents = 'none';
+                                const st = cardEl.querySelector('.rp-status');
+                                const amt = d2.amount != null ? d2.amount : '';
+                                if (st) st.textContent = amt ? `已领取 ${amt}` : '已领取';
+                                cardEl.style.opacity = '0.7';
+                            }
+                            loadDetail();
+                        } catch (e) { showAlert('领取失败'); claimBtn.disabled = false; claimBtn.textContent = '领取红包'; }
+                    });
+                }
+            } catch (e) {
+                overlay.querySelector('#rpDetailBody').innerHTML = '<div class="court-error">加载失败</div>';
+            }
+        }
+        loadDetail();
+    }
+
     // 红包弹窗
     const sendRedPacketBtn = document.getElementById('sendRedPacketBtn');
     const rpDialogOverlay = document.getElementById('redPacketDialogOverlay');
@@ -10149,6 +10491,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 <div class="context-menu-item" data-action="copy-raw">复制原始消息</div>
                 <div class="context-menu-divider"></div>
                 <div class="context-menu-item" data-action="quote">引用</div>
+                <div class="context-menu-item" data-action="favorite">收藏</div>
             `;
             // 图片消息额外增加"查看原图 / 另存为 / 收藏为表情"
             const msgType = msgDiv.dataset.msgType;
@@ -10295,6 +10638,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     } else {
                         showAlert('已收藏为表情');
                     }
+                } else if (action === 'favorite') {
+                    // 收藏到收藏夹（§37）
+                    addMessageToFavorites(msgDiv);
                 }
                 hideContextMenu();
             });
@@ -10583,7 +10929,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const card = e.target.closest('.red-packet-card');
         if (!card) return;
         const claimed = card.dataset.claimed === 'true';
-        if (claimed) return; // 已领取不再请求
+        // 已领取：再次点击打开详情（领取后查看详细）
+        if (claimed) { openRedPacketDetail(card.dataset.packetId, card); return; }
 
         const packetId = card.dataset.packetId;
         if (!packetId) return;
@@ -10601,19 +10948,37 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             });
             const data = await res.json();
             if (data.error) {
+                // 已领过 → 直接进入详情（而非报错）
+                if (String(data.error).toLowerCase().includes('already')) {
+                    openRedPacketDetail(packetId, card);
+                    return;
+                }
+                card.dataset.claimed = 'false';
+                card.style.pointerEvents = '';
                 card.querySelector('.rp-status').textContent = data.error;
                 card.style.opacity = '0.7';
             } else {
                 // 领取成功，显示金额（如果接口返回 amount 字段）
                 const amount = data.amount !== undefined ? data.amount : '';
                 card.querySelector('.rp-status').textContent = amount ? `已领取 ${amount}` : '已领取';
+                card.dataset.amount = amount;
                 card.style.opacity = '0.7';
                 card.style.cursor = 'default';
             }
         } catch (err) {
+            card.dataset.claimed = 'false';
+            card.style.pointerEvents = '';
             card.querySelector('.rp-status').textContent = '网络错误';
             card.style.opacity = '0.7';
         }
+    });
+
+    // 右键红包 → 查看详细
+    document.addEventListener('contextmenu', (e) => {
+        const card = e.target.closest('.red-packet-card');
+        if (!card) return;
+        e.preventDefault();
+        openRedPacketDetail(card.dataset.packetId, card);
     });
 
     // ===== 收藏表情（我的收藏）=====
@@ -10922,6 +11287,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     <span class="label">我的收藏</span>
                     <span class="value"><i class="fa-solid fa-chevron-right"></i></span>
                 </div>
+                <div class="settings-item" id="settingsMyFavFolder">
+                    <span class="label">收藏夹</span>
+                    <span class="value"><i class="fa-solid fa-chevron-right"></i></span>
+                </div>
                 <div class="settings-item" id="settingsMyMusic">
                     <span class="label">我的音乐</span>
                     <span class="value"><i class="fa-solid fa-chevron-right"></i></span>
@@ -10939,6 +11308,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         document.getElementById('settingsMyMoments')?.addEventListener('click', () => openSpacePanel(myUid));
         document.getElementById('settingsMyFavorites')?.addEventListener('click', () => {
             renderSettingsFavorites();
+        });
+        document.getElementById('settingsMyFavFolder')?.addEventListener('click', () => {
+            renderSettingsFavoritesList();
         });
         document.getElementById('settingsMyMusic')?.addEventListener('click', () => {
             switchTab('music');
@@ -12181,6 +12553,74 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         document.getElementById('favBack')?.addEventListener('click', () => renderSettingsPage('profile'));
     }
 
+    // 设置 → 收藏夹（§37 服务端收藏，区别于「我的收藏」表情）
+    async function renderSettingsFavoritesList() {
+        currentSettingsTab = 'favfolder';
+        settingsContent.innerHTML = `
+            <h3 style="display:flex;align-items:center;gap:10px;">
+                <button class="btn" id="favFolderBack" title="返回我的">返回</button>
+                收藏夹
+                <span id="favFolderCount" style="font-size:12px;color:var(--secondary-text);font-weight:normal;"></span>
+            </h3>
+            <div id="favFolderList" class="fav-folder-list"><div class="court-loading">加载中...</div></div>
+        `;
+        document.getElementById('favFolderBack')?.addEventListener('click', () => renderSettingsPage('profile'));
+
+        const listEl = document.getElementById('favFolderList');
+        const typeIcon = { text: 'fa-comment', image: 'fa-image', voice: 'fa-microphone', audio: 'fa-music', video: 'fa-video', resource: 'fa-file', file: 'fa-file', music: 'fa-music', red_packet: 'fa-envelope-open-text' };
+
+        async function loadFavs() {
+            listEl.innerHTML = '<div class="court-loading">加载中...</div>';
+            try {
+                const res = await apiFetch('/v1/favorites?limit=100');
+                const data = await res.json();
+                const items = data.items || (data.data && data.data.items) || [];
+                const countEl = document.getElementById('favFolderCount');
+                if (countEl) countEl.textContent = '共 ' + items.length + ' 项';
+                if (!items.length) {
+                    listEl.innerHTML = '<div class="court-detail-empty"><i class="fa-solid fa-folder-open" style="font-size:48px;color:var(--secondary-text);margin-bottom:16px;"></i><p style="color:var(--secondary-text);">收藏夹还是空的<br>在聊天中右键消息选择「收藏」即可加入</p></div>';
+                    return;
+                }
+                listEl.innerHTML = items.map(it => {
+                    const ic = typeIcon[it.type] || 'fa-bookmark';
+                    const tm = it.created_at ? new Date(it.created_at * 1000).toLocaleString() : '';
+                    const thumb = (it.type === 'image' && it.media_url) ? `<img class="fav-folder-thumb" src="${escapeHtml(cachedResolveMediaUrl(it.media_url))}" onerror="this.style.display='none'">` : '';
+                    return `<div class="fav-folder-item" data-id="${escapeHtml(it.id)}" data-type="${escapeHtml(it.type || '')}" data-media="${escapeHtml(it.media_url || '')}">` +
+                        `<div class="fav-folder-icon"><i class="fa-solid ${ic}"></i></div>` +
+                        (thumb ? thumb : '') +
+                        `<div class="fav-folder-info"><div class="fav-folder-title">${escapeHtml(it.title || '未命名')}</div>` +
+                        `<div class="fav-folder-sub">${escapeHtml(it.subtitle || '')}${tm ? ' · ' + escapeHtml(tm) : ''}</div></div>` +
+                        `<button class="fav-folder-del" title="移除"><i class="fa-solid fa-trash"></i></button>` +
+                        `</div>`;
+                }).join('');
+
+                listEl.querySelectorAll('.fav-folder-item').forEach(item => {
+                    item.querySelector('.fav-folder-del').addEventListener('click', async (e) => {
+                        e.stopPropagation();
+                        if (!await showConfirm('从收藏夹移除该项？')) return;
+                        try {
+                            const r = await apiFetch('/v1/favorites/remove', {
+                                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ id: item.dataset.id })
+                            });
+                            const d = await r.json();
+                            if (d.error) { showAlert(d.error); return; }
+                            loadFavs();
+                        } catch (err) { showAlert('移除失败'); }
+                    });
+                    item.addEventListener('click', () => {
+                        const media = item.dataset.media;
+                        const type = item.dataset.type;
+                        if (type === 'image' && media) openImageViewer(cachedResolveMediaUrl(media));
+                    });
+                });
+            } catch (e) {
+                listEl.innerHTML = '<div class="court-error">加载失败，请稍后重试</div>';
+            }
+        }
+        loadFavs();
+    }
+
     // ===== 主题设置页 =====
     function parseThemeMeta(css) {
         const meta = { id: '', name: '', description: '', author: '', version: '', framework: '', showDayNightToggle: '' };
@@ -12724,6 +13164,84 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         return apiJson('/v2/channels/reactions/toggle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channel_id: channelId, post_id: postId, emoji }) });
     }
 
+    // §14.11 频道媒体上传（multipart: file + channel_id）
+    async function uploadChannelMedia(channelId, file) {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('channel_id', channelId);
+        const res = await apiFetch('/v1/channels/media/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.error || !data.url) throw new Error(data.error || '上传失败');
+        return data; // { url, msg_type, media_ref }
+    }
+
+    // §14.8 发送频道帖子
+    async function sendChannelPost(channelId, body, msgType, mediaUrl) {
+        const payload = { channel_id: channelId, body: body || '', msg_type: msgType || 'text' };
+        if (mediaUrl) payload.media_url = mediaUrl;
+        return apiJson('/v2/channels/posts/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    }
+
+    // §14.5 频道状态（订阅/未读/通知级别）
+    async function getChannelStates() {
+        try {
+            const data = await apiJson('/v2/channels/states');
+            return data.channels || data.data || data || [];
+        } catch (e) { return []; }
+    }
+
+    // §14.9 频道已读
+    async function markChannelRead(channelId, readSeq) {
+        try { await apiJson('/v2/channels/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channel_id: channelId, read_seq: readSeq || 0 }) }); } catch (e) {}
+    }
+
+    // §14.4 频道通知设置（all / none）
+    async function setChannelNotifications(channelId, level) {
+        try { return await apiJson('/v2/channels/notifications', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ channel_id: channelId, notification_level: level }) }); } catch (e) { return null; }
+    }
+
+    async function doSendChannelPost(channelId, body, msgType, mediaUrl, container) {
+        try {
+            const res = await sendChannelPost(channelId, body, msgType, mediaUrl);
+            if (res && res.error) { showAlert('发送失败：' + res.error); return; }
+            if (!container) return;
+            // 乐观追加：构造本地 post（与 parsePostBody 兼容 v2 结构）
+            const post = {
+                id: (res && res.id) || ('local_' + Date.now()),
+                from_name: myName,
+                from_avatar: myAvatar || '',
+                created_at: Math.floor(Date.now() / 1000),
+                body: JSON.stringify({ v: 2, text: body || '', media_url: mediaUrl || null, msg_type: msgType || 'text' }),
+                media_url: mediaUrl || null,
+                msg_type: msgType || 'text'
+            };
+            const allowed = CHANNEL_DEFAULT_EMOJIS;
+            container.appendChild(renderChannelPost(post, allowed, channelId));
+            container.scrollTop = container.scrollHeight;
+        } catch (e) { showAlert('发送失败：' + (e && e.message || e)); }
+    }
+
+    async function channelSendText(channelId, input, container) {
+        const text = input.value.trim();
+        if (!text) return;
+        input.value = '';
+        await doSendChannelPost(channelId, text, 'text', null, container);
+    }
+
+    async function channelUploadAndSend(channelId, file, container) {
+        try {
+            const up = await uploadChannelMedia(channelId, file);
+            const ext = (file.name || '').toLowerCase();
+            let msgType = up.msg_type || 'resource';
+            if (!up.msg_type) {
+                if (/\.(jpg|jpeg|png|gif|webp)$/.test(ext)) msgType = 'image';
+                else if (/\.(mp4|3gp|webm)$/.test(ext)) msgType = 'video';
+                else msgType = 'resource';
+            }
+            await doSendChannelPost(channelId, '', msgType, up.url, container);
+        } catch (e) { showAlert('发送失败：' + (e && e.message || e)); }
+    }
+
     async function doSubscribe(ch) {
         try { await subscribeChannel(ch.id); } catch (e) { showAlert('订阅失败：' + (e && e.message || e)); return; }
         addSubscribedChannel(ch);
@@ -12819,6 +13337,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const authorAvatar = post.from_avatar || (post.author && post.author.avatar) || '';
         const time = fmtChannelTime(post.created_at || post.created_at_ts);
         const pb = parsePostBody(post.body);
+        // §14 帖子媒体可能以顶层 media_url/thumb_url 返回（独立于 body 文本），parsePostBody 只解析 body，这里兜底
+        if (!pb.media && (post.media_url || post.thumb_url)) {
+            pb.media = post.media_url || post.thumb_url;
+            if (post.msg_type) pb.mediaType = post.msg_type;
+        }
         let contentHtml = '';
         if (pb.media) {
             const src = cachedResolveMediaUrl(pb.media);
@@ -12860,6 +13383,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         openChannelView(ch);
     }
 
+    let channelUpdateHandler = null;
     async function openChannelView(meta) {
         switchTab('discover');
         const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
@@ -12876,15 +13400,58 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         (meta.description ? '<div class="desc">' + escapeHtml(meta.description) + '</div>' : '') +
                     '</div>' +
                     '<button class="btn ' + (sub ? '' : 'primary') + '" id="channelSubBtn">' + (sub ? '取消订阅' : '订阅') + '</button>' +
+                    '<button class="btn small" id="channelNotifBtn" title="通知设置">通知</button>' +
                 '</div>' +
                 '<div class="channel-view-posts" id="channelPosts"></div>' +
+                '<div class="channel-composer">' +
+                    '<textarea id="channelComposerInput" placeholder="发帖…（Enter 发送，Shift+Enter 换行）"></textarea>' +
+                    '<div class="channel-composer-actions">' +
+                        '<button id="channelAttachBtn" class="btn small">附件</button>' +
+                        '<input type="file" id="channelFileInput" style="display:none">' +
+                        '<button id="channelSendBtn" class="btn small primary">发送</button>' +
+                    '</div>' +
+                '</div>' +
             '</div>';
         const subBtn = main.querySelector('#channelSubBtn');
         subBtn.addEventListener('click', async () => {
             if (isSubscribedChannel(meta.id)) { await doUnsubscribe(meta); subBtn.textContent = '订阅'; subBtn.classList.add('primary'); }
             else { await doSubscribe(meta); subBtn.textContent = '取消订阅'; subBtn.classList.remove('primary'); }
         });
-        loadChannelPosts(main.querySelector('#channelPosts'), meta);
+        const notifBtn = main.querySelector('#channelNotifBtn');
+        notifBtn.addEventListener('click', async () => {
+            const cur = notifBtn.dataset.level || 'all';
+            const next = cur === 'all' ? 'none' : 'all';
+            const r = await setChannelNotifications(meta.id, next);
+            if (r && !r.error) { notifBtn.dataset.level = next; notifBtn.textContent = next === 'all' ? '通知' : '已静音'; notifBtn.classList.toggle('primary', next === 'all'); }
+            else showAlert('设置失败');
+        });
+        const postsEl = main.querySelector('#channelPosts');
+        loadChannelPosts(postsEl, meta);
+        // §14.9 打开即标记已读
+        markChannelRead(meta.id, meta.last_read_post_seq || meta.joined_post_seq || 0);
+        // §30.4 channel_update 实时刷新（避免重复监听）
+        if (channelUpdateHandler) window.removeEventListener('oc:channel-update', channelUpdateHandler);
+        channelUpdateHandler = (e) => {
+            const detail = e && e.detail;
+            if (!detail || !detail.channelId || detail.channelId === meta.id) {
+                loadChannelPosts(postsEl, meta);
+            }
+        };
+        window.addEventListener('oc:channel-update', channelUpdateHandler);
+        // composer 接线
+        const composerInput = main.querySelector('#channelComposerInput');
+        const fileInput = main.querySelector('#channelFileInput');
+        main.querySelector('#channelAttachBtn').addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', async (e) => {
+            const f = e.target.files && e.target.files[0];
+            if (!f) return;
+            await channelUploadAndSend(meta.id, f, postsEl);
+            fileInput.value = '';
+        });
+        main.querySelector('#channelSendBtn').addEventListener('click', () => channelSendText(meta.id, composerInput, postsEl));
+        composerInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); channelSendText(meta.id, composerInput, postsEl); }
+        });
     }
 
     function channelCard(ch, subscribed, onView, onToggle) {
@@ -12893,7 +13460,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         div.innerHTML =
             '<img class="channel-card-avatar" src="' + cachedResolveMediaUrl(ch.avatar_url || '') + '" onerror="this.src=\'assets/default-avatar.png\'">' +
             '<div class="channel-card-info">' +
-                '<div class="name">' + escapeHtml(ch.name || '') + '</div>' +
+                '<div class="name">' + escapeHtml(ch.name || '') + '<span class="channel-unread-badge" id="chUnread-' + escapeHtml(ch.id || '') + '" style="display:none;"></span></div>' +
                 '<div class="meta">' + (ch.handle ? ('@' + escapeHtml(ch.handle) + ' · ') : '') + (ch.subscriber_count != null ? escapeHtml(String(ch.subscriber_count)) + ' 订阅' : '') + '</div>' +
                 (ch.description ? '<div class="desc">' + escapeHtml(ch.description) + '</div>' : '') +
             '</div>' +
@@ -12947,6 +13514,18 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 async () => { await doUnsubscribe(ch); renderSubscribedList(); loadChannelDiscover(document.getElementById('channelSearchInput') ? document.getElementById('channelSearchInput').value.trim() : ''); }
             ));
         });
+        // §14.5 拉取各频道未读/状态，填充角标
+        getChannelStates().then(states => {
+            if (!Array.isArray(states)) return;
+            states.forEach(s => {
+                const badge = document.getElementById('chUnread-' + (s.channel_id || ''));
+                const n = s.unread_count || 0;
+                if (badge) {
+                    if (n > 0) { badge.style.display = 'inline-block'; badge.textContent = n > 99 ? '99+' : String(n); }
+                    else badge.style.display = 'none';
+                }
+            });
+        }).catch(() => {});
     }
 
     async function loadChannelDiscover(q) {
@@ -13345,8 +13924,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             else if (data && data.data && Array.isArray(data.data.sections)) sections = data.data.sections;
             else if (Array.isArray(data)) sections = data;
             plazaSectionList.innerHTML = '';
+            plazaSectionList.appendChild(createPlazaSectionAddBtn());
             if (!sections.length) {
-                plazaSectionList.innerHTML = '<div class="court-loading">暂无分区</div>';
+                const empty = document.createElement('div');
+                empty.className = 'court-loading';
+                empty.textContent = '暂无分区';
+                plazaSectionList.appendChild(empty);
             } else {
                 sections.forEach(s => plazaSectionList.appendChild(createPlazaSectionItem(s)));
             }
@@ -13369,6 +13952,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             div.classList.add('active');
             loadPlazaItems(s.id);
         });
+        bindSectionDelete(div, s);
         return div;
     }
 
@@ -13410,7 +13994,284 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 '<div class="plaza-file-meta">' + size + (uploader ? ' · ' + uploader : '') + (time ? ' · ' + time : '') + '</div>' +
             '</div>' +
             '<button class="btn plaza-file-dl file-download-btn" title="下载" data-dl-url="' + escapeHtml(it.url || '') + '" data-dl-name="' + escapeHtml(name) + '"><i class="fa-solid fa-download"></i></button>';
+        // 点击条目打开详情（下载按钮因冒泡已被全局 handler 拦截，这里再排除一次避免误开）
+        div.addEventListener('click', (e) => {
+            if (e.target.closest('.file-download-btn')) return;
+            openPlazaFileDetail(it);
+        });
         return div;
+    }
+
+    // ===== 资源广场补全：分区管理 / 搜索 / 上传 / 文件详情 =====
+
+    // 「新建分区」入口（每人 ≤5 个）
+    function createPlazaSectionAddBtn() {
+        const div = document.createElement('div');
+        div.className = 'contact-item plaza-section-item plaza-section-add';
+        div.innerHTML = '<div class="contact-info"><div class="name" style="color:var(--accent);"><i class="fa-solid fa-plus"></i> 新建分区</div></div>';
+        div.addEventListener('click', async () => {
+            const name = (window.prompt('新建分区', '请输入分区名称：') || '').trim();
+            if (!name) return;
+            try {
+                const res = await apiFetch('/v2/resources/sections', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: name })
+                });
+                const data = await res.json();
+                if (data.error) { showAlert(data.error); return; }
+                loadPlazaSections();
+                if (data.id) { loadPlazaItems(data.id); }
+            } catch (e) { showAlert('创建分区失败'); }
+        });
+        return div;
+    }
+
+    // 在分区条目上挂一个删除「×」（分区均为本人创建，可直接删）
+    function bindSectionDelete(itemEl, s) {
+        const del = document.createElement('span');
+        del.className = 'plaza-section-del';
+        del.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+        del.title = '删除分区';
+        del.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (!await showConfirm('确定删除分区「' + (s.name || '') + '」吗？分区内文件不会被自动删除。')) return;
+            try {
+                const res = await apiFetch('/v2/resources/sections/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ section_id: s.id })
+                });
+                const data = await res.json();
+                if (data.error) { showAlert(data.error); return; }
+                if (plazaCurrentSection === s.id) { plazaCurrentSection = null; plazaFileList.innerHTML = '<div class="court-detail-empty"><i class="fa-solid fa-folder-open" style="font-size:48px;color:var(--secondary-text);margin-bottom:16px;"></i><p style="color:var(--secondary-text);">从左侧选择一个分区查看文件</p></div>'; }
+                loadPlazaSections();
+            } catch (e) { showAlert('删除分区失败'); }
+        });
+        itemEl.appendChild(del);
+    }
+
+    // 搜索（限定当前分区）
+    let plazaSearchTimer = null;
+    async function loadPlazaSearch(q) {
+        if (!plazaFileList || !plazaCurrentSection) return;
+        plazaFileList.innerHTML = '<div class="court-loading">搜索中...</div>';
+        try {
+            const res = await apiFetch('/v1/resources/search?q=' + encodeURIComponent(q) + '&section_id=' + encodeURIComponent(plazaCurrentSection));
+            const data = await res.json();
+            let items = [];
+            if (data && Array.isArray(data.items)) items = data.items;
+            else if (data && data.data && Array.isArray(data.data.items)) items = data.data.items;
+            else if (Array.isArray(data)) items = data;
+            plazaFileList.innerHTML = '';
+            if (!items.length) {
+                plazaFileList.innerHTML = '<div class="court-detail-empty"><i class="fa-solid fa-magnifying-glass" style="font-size:48px;color:var(--secondary-text);margin-bottom:16px;"></i><p style="color:var(--secondary-text);">未找到匹配的资源</p></div>';
+            } else {
+                items.forEach(it => plazaFileList.appendChild(createPlazaFileItem(it)));
+            }
+        } catch (e) {
+            console.error('[plaza] search failed:', e);
+            plazaFileList.innerHTML = '<div class="court-error">搜索失败，请稍后重试</div>';
+        }
+    }
+
+    // 上传文件到当前分区（multipart: file + section_id）
+    async function uploadToPlaza(sectionId, file) {
+        if (!sectionId) { showAlert('请先在左侧选择一个分区'); return; }
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('section_id', sectionId);
+            const res = await apiFetch('/v2/resources/upload', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (data.error) { showAlert(data.error); return; }
+            showAlert('上传成功');
+            loadPlazaItems(sectionId);
+        } catch (e) { showAlert('上传失败'); }
+    }
+
+    // ===== 资源详情弹窗（点赞 / 评论 / 删除 / 举报） =====
+    async function openPlazaFileDetail(it) {
+        const overlay = document.createElement('div');
+        overlay.className = 'plaza-detail-overlay';
+        const name = it.name || '未命名文件';
+        const size = formatSize(it.size_bytes);
+        const uploader = it.uploader_name || '';
+        const time = it.created_at ? new Date(it.created_at * 1000).toLocaleString() : '';
+        const isMine = it.uploader_uid ? isSelfUid(it.uploader_uid) : false;
+        overlay.innerHTML = `
+            <div class="plaza-detail-card">
+                <div class="plaza-detail-head">
+                    <i class="fa-solid fa-xmark plaza-detail-close" title="关闭"></i>
+                </div>
+                <div class="plaza-detail-main">
+                    <div class="plaza-file-icon" style="width:56px;height:56px;font-size:24px;"><i class="fa-solid fa-file"></i></div>
+                    <div class="plaza-detail-title">${escapeHtml(name)}</div>
+                    <div class="plaza-file-meta">${size}${uploader ? ' · ' + escapeHtml(uploader) : ''}${time ? ' · ' + escapeHtml(time) : ''}</div>
+                    <div class="plaza-detail-actions">
+                        <button class="btn plaza-file-dl file-download-btn" data-dl-url="${escapeHtml(it.url || '')}" data-dl-name="${escapeHtml(name)}"><i class="fa-solid fa-download"></i> 下载</button>
+                        <button class="btn plaza-like-btn" data-liked="${it.liked ? '1' : '0'}"><i class="fa-${it.liked ? 'solid' : 'regular'} fa-heart"></i> <span>${it.liked ? '已赞' : '点赞'}</span> <b>${it.likes || 0}</b></button>
+                        ${isMine ? '<button class="btn plaza-del-btn" style="color:#ff6b6b;"><i class="fa-solid fa-trash"></i> 删除</button>' : ''}
+                        <button class="btn plaza-report-btn"><i class="fa-solid fa-flag"></i> 举报</button>
+                    </div>
+                </div>
+                <div class="plaza-detail-comments">
+                    <div class="plaza-comments-title">评论 (${it.comments || 0})</div>
+                    <div class="plaza-comments-list" id="plazaCommentsList"><div class="court-loading">加载中...</div></div>
+                    <div class="plaza-comment-input">
+                        <input type="text" id="plazaCommentInput" placeholder="说点什么...">
+                        <button class="btn" id="plazaCommentSend">发送</button>
+                    </div>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+        requestAnimationFrame(() => overlay.classList.add('show'));
+
+        const close = () => { overlay.classList.remove('show'); setTimeout(() => overlay.remove(), 180); };
+        overlay.querySelector('.plaza-detail-close').addEventListener('click', close);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+        // 删除
+        const delBtn = overlay.querySelector('.plaza-del-btn');
+        if (delBtn) delBtn.addEventListener('click', async () => {
+            if (!await showConfirm('确定删除该资源吗？')) return;
+            try {
+                const res = await apiFetch('/v1/resources/items/delete', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ item_id: it.id })
+                });
+                const data = await res.json();
+                if (data.error) { showAlert(data.error); return; }
+                close();
+                if (plazaCurrentSection) loadPlazaItems(plazaCurrentSection);
+            } catch (e) { showAlert('删除失败'); }
+        });
+
+        // 举报
+        overlay.querySelector('.plaza-report-btn').addEventListener('click', async () => {
+            const reason = (window.prompt('举报理由：', '') || '').trim();
+            if (!reason) return;
+            try {
+                const res = await apiFetch('/v1/resources/report', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ item_id: it.id, reason: reason })
+                });
+                const data = await res.json();
+                if (data.error) { showAlert(data.error); return; }
+                showAlert('举报已提交，感谢反馈');
+            } catch (e) { showAlert('举报失败'); }
+        });
+
+        // 点赞 / 取消
+        const likeBtn = overlay.querySelector('.plaza-like-btn');
+        likeBtn.addEventListener('click', async () => {
+            const liked = likeBtn.dataset.liked === '1';
+            try {
+                const res = await apiFetch(liked ? '/v1/resources/unlike' : '/v1/resources/like', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ item_id: it.id })
+                });
+                const data = await res.json();
+                if (data.error) { showAlert(data.error); return; }
+                it.liked = !liked;
+                it.likes = (it.likes || 0) + (liked ? -1 : 1);
+                likeBtn.dataset.liked = it.liked ? '1' : '0';
+                likeBtn.querySelector('span').textContent = it.liked ? '已赞' : '点赞';
+                likeBtn.querySelector('b').textContent = it.likes;
+                likeBtn.querySelector('i').className = 'fa-' + (it.liked ? 'solid' : 'regular') + ' fa-heart';
+            } catch (e) { showAlert('操作失败'); }
+        });
+
+        // 评论列表
+        const commentsList = overlay.querySelector('#plazaCommentsList');
+        async function loadComments() {
+            commentsList.innerHTML = '<div class="court-loading">加载中...</div>';
+            try {
+                const res = await apiFetch('/v1/resources/comments?item_id=' + encodeURIComponent(it.id));
+                const data = await res.json();
+                const list = data.comments || [];
+                if (!list.length) { commentsList.innerHTML = '<div class="plaza-comments-empty">还没有评论</div>'; return; }
+                commentsList.innerHTML = list.map(c => {
+                    const cu = c.user || {};
+                    const cid = getUid(cu) || cu.uid || cu.ncuid || c.uploader_uid || c.uid || '';
+                    const cname = cu.display_name || cu.username || c.uploader_name || cid || '匿名';
+                    const cavatar = cu.avatar_url || '';
+                    const ctext = c.content || c.text || c.body || '';
+                    const ctime = c.created_at ? new Date(c.created_at * 1000).toLocaleString() : '';
+                    const canDel = isSelfUid(cid);
+                    return '<div class="plaza-comment-item" data-cid="' + escapeHtml(c.id || '') + '">' +
+                        '<img class="plaza-comment-avatar" src="' + (cavatar ? cachedResolveMediaUrl(cavatar) : 'assets/default-avatar.png') + '" onerror="this.src=\'assets/default-avatar.png\'">' +
+                        '<div class="plaza-comment-body"><div class="plaza-comment-name">' + escapeHtml(cname) + '</div>' +
+                        '<div class="plaza-comment-text">' + escapeHtml(ctext) + '</div>' +
+                        '<div class="plaza-comment-time">' + escapeHtml(ctime) + (canDel ? ' · <span class="plaza-comment-del" data-cid="' + escapeHtml(c.id || '') + '">删除</span>' : '') + '</div></div>' +
+                        '</div>';
+                }).join('');
+                commentsList.querySelectorAll('.plaza-comment-del').forEach(d => {
+                    d.addEventListener('click', async () => {
+                        if (!await showConfirm('删除这条评论？')) return;
+                        try {
+                            const res = await apiFetch('/v1/resources/comment/delete', {
+                                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ comment_id: d.dataset.cid })
+                            });
+                            const data = await res.json();
+                            if (data.error) { showAlert(data.error); return; }
+                            loadComments();
+                        } catch (e) { showAlert('删除失败'); }
+                    });
+                });
+            } catch (e) { commentsList.innerHTML = '<div class="court-error">评论加载失败</div>'; }
+        }
+        loadComments();
+
+        // 发评论
+        const commentInput = overlay.querySelector('#plazaCommentInput');
+        const commentSend = overlay.querySelector('#plazaCommentSend');
+        async function sendComment() {
+            const text = commentInput.value.trim();
+            if (!text) return;
+            commentSend.disabled = true;
+            try {
+                const res = await apiFetch('/v1/resources/comment', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ item_id: it.id, content: text })
+                });
+                const data = await res.json();
+                if (data.error) { showAlert(data.error); return; }
+                commentInput.value = '';
+                it.comments = (it.comments || 0) + 1;
+                overlay.querySelector('.plaza-comments-title').textContent = '评论 (' + it.comments + ')';
+                loadComments();
+            } catch (e) { showAlert('发送失败'); }
+            finally { commentSend.disabled = false; }
+        }
+        commentSend.addEventListener('click', sendComment);
+        commentInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendComment(); } });
+    }
+
+    // 资源广场工具栏：搜索 / 上传
+    const plazaSearchInput = document.getElementById('plazaSearchInput');
+    const plazaUploadBtn = document.getElementById('plazaUploadBtn');
+    const plazaFileInput = document.getElementById('plazaFileInput');
+    if (plazaSearchInput) {
+        plazaSearchInput.addEventListener('input', () => {
+            const q = plazaSearchInput.value.trim();
+            clearTimeout(plazaSearchTimer);
+            if (!plazaCurrentSection) return;
+            if (!q) { loadPlazaItems(plazaCurrentSection); return; }
+            plazaSearchTimer = setTimeout(() => loadPlazaSearch(q), 350);
+        });
+    }
+    if (plazaUploadBtn && plazaFileInput) {
+        plazaUploadBtn.addEventListener('click', () => {
+            if (!plazaCurrentSection) { showAlert('请先在左侧选择一个分区'); return; }
+            plazaFileInput.click();
+        });
+        plazaFileInput.addEventListener('change', () => {
+            const file = plazaFileInput.files && plazaFileInput.files[0];
+            plazaFileInput.value = '';
+            if (file) uploadToPlaza(plazaCurrentSection, file);
+        });
     }
 
     // ===== @ 提及点击跳转 =====

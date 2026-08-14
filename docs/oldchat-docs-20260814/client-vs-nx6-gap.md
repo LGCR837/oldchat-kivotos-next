@@ -19,12 +19,10 @@
 
 ## P0 — 实时协议（高危）
 
-### P0-1 · WS 帧字段名 `data` vs `payload`（最高危，已暂缓实测）
-- nx6 §30.2 信封：`{ pts, pts_count, type, payload }`，所有事件载荷都在 `payload` 里。
-- 客户端 `handleWsMessage`（`src/app.js` ~6454）读的是 **`msg.data`**（外加一个"裸消息对象"兜底），**不读 `payload`**。
-- 风险：若线上后端按文档发 `{type, payload}`，客户端 `msg.data` 为 `undefined` → 实时收消息全断。
-- 处置：**暂缓**（需真机/真后端实测后端帧格式才能定）。已记入本地日记 `2026-08-14.md`。
-- 一旦实测确认，需让 `handleWsMessage` 同时兼容 `payload`（优先 `payload`，回退 `data`）。
+### P0-1 · WS 帧字段名 `data` vs `payload`（已复核：风险不成立，已修明文帧丢消息 bug）
+- 复核 nx6 §30.2 后确认：**WS 帧信封是 `{type, data}`（用 `data`）**，`payload` 仅用于 `/v2/updates/difference` 差量响应信封（§30.3）。客户端 `handleWsMessage` 读 `msg.data` 是**正确的**。
+- 真正修掉的 P0 bug：`decryptEnvelope` 在收到**明文** WS 帧时返回 null → 原 `ws.onmessage` 直接 return 丢消息（§30.1：WS 可能明文）。已改为解密失败回退明文 JSON。
+- 结论：**无 `data`/`payload` 风险**，P0-1 关闭。
 
 ### P0-2 · WS 事件类型覆盖不全
 - 客户端已处理：`direct_message` / `group_message` / `direct_recall` / `group_recall` / `direct_read` / `typing`。
