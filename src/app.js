@@ -1794,8 +1794,10 @@ const _inflightGet = new Map();
 //      + 12-v2签名机制与响应结构补充.md §5（direct/messages、direct/unread、群消息 v2）
 //      + 02-网络层与API通信机制.md（channels/buttons/files/群 members-lookup）
 // 说明：
-//  - 私聊历史 v1=/v1/direct/messages/v2 → v2=/v2/direct/messages（v2 去掉 /v2 后缀，12 文档 §5.1）
-//  - 群历史 v1=/v1/groups/messages/v2 → v2=/v2/groups/messages/v2（02 §2.13.2 保留后缀）
+//  - 私聊历史 / 群历史列表：原本 v1=/v1/{direct,groups}/messages/v2 → v2=/v2/{direct,groups}/messages/v2，
+//    但服务端对这两个端点回 bad_signature（HTTP 会话 v2 签名链不通过，自愈不覆盖 bad_signature）。
+//    已临时移出映射，强制走 v1（2026-08-15，待 v2 签名专项排查后恢复）。
+//  - 注意：仅消息「列表/历史」端点回退 v1；发送(/v1/{direct,groups}/send)、已读、撤回等仍走 v2。
 //  - 未列入的端点保持 /v1（auth/login|refresh|handshake|web/register、music/*、emoji/plaza、
 //    checkin/wall、public-court、media 上传、messages/search、messages/after、direct|groups/unread、
 //    groups/message/send —— 这些文档未确认 v2 路径或响应结构不兼容，保守保留 v1）
@@ -1804,9 +1806,13 @@ const V1_TO_V2 = {
     '/v1/direct/send': '/v2/direct/send',
     '/v1/direct/read': '/v2/direct/read',
     '/v1/direct/burn/open': '/v2/direct/burn/open',
-    '/v1/direct/messages/v2': '/v2/direct/messages/v2',
+    // 私聊历史列表：v2 签名对 /v2/direct/messages/v2 服务端回 bad_signature（HTTP 会话签名链不通过），
+    // 自愈仅在 invalid/missing_session 时触发，bad_signature 不重握手 → 每次带坏会话重试失败。
+    // 临时回退为始终走 v1（迁移 v2 前一直工作的路径），待 v2 签名专项排查后再恢复。
+    // '/v1/direct/messages/v2': '/v2/direct/messages/v2',
     // 群组
-    '/v1/groups/messages/v2': '/v2/groups/messages/v2',
+    // 群历史列表：同上，/v2/groups/messages/v2 服务端回 bad_signature。临时强制 v1（用户确认「先用 v1」）。
+    // '/v1/groups/messages/v2': '/v2/groups/messages/v2',
     '/v1/groups/read': '/v2/groups/read',
     '/v1/groups/burn/open': '/v2/groups/burn/open',
     '/v1/groups/typing': '/v2/groups/typing',
