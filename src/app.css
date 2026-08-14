@@ -4501,19 +4501,7 @@ body::-webkit-scrollbar {
 .plaza-toolbar-btn:hover { opacity: 0.88; }
 /* 新建分区入口 */
 .plaza-section-add { color: var(--accent); }
-.plaza-section-del {
-    flex: none;
-    margin-left: 6px;
-    width: 20px; height: 20px;
-    display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 50%;
-    color: var(--secondary-text);
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.15s;
-}
-.plaza-section-item:hover .plaza-section-del { opacity: 1; }
-.plaza-section-del:hover { color: #ff6b6b; background: rgba(255,107,107,0.12); }
+/* 分区删除入口已移到右键菜单，条目内不再有内联「×」按钮 */
 /* 资源详情弹窗 */
 .plaza-detail-overlay {
     position: fixed; inset: 0; z-index: 12000;

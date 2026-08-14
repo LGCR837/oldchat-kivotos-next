@@ -1914,6 +1914,10 @@ function v2ToV1(url) {
     return url;
 }
 
+// 文档 §4.5 签名豁免端点：大文件上传/下载不加密、不签名，仅 Bearer JWT 鉴权。
+// 对这些路径强行套签名链反而可能被服务端拒绝，故 apiFetch 里直接跳过 v2 签名头。
+const V2_UNSIGNED_PATHS = /^\/v2\/(files|resources)\/(upload|download)(\/|$)/;
+
 // v2 熔断（按端点）：v2 请求 401（该端点服务器实际未迁 v2 / 签名问题）后，仅该 v2 路径回退 v1。
 // 避免「主界面 401 → 跳登录页 → 自动登录 → 又 401」的死循环，且不影响其它已支持 v2 的端点。
 const v2FailedPaths = new Set();
@@ -1958,10 +1962,16 @@ function ocUserAgent() {
 // signingString = METHOD + "\n" + PATH + "\n" + TS + "\n" + NONCE
 // 且 v2SignMiddleware 强制 X-Session 有效 → 必须带上 handshake 返回的 session_id
 // PATH 不含查询参数；nonce = 16 字节随机 → base64 无填充；X-Device-Id = oldchat_device_id（可选，灰度绑定）
+// v2 HTTP 请求一律使用「HTTP 专用会话」(__httpSession)，绝不使用 WS 会话(__wsSession)：
+// HTTP 侧 401 会清会话重新握手，若共用 WS 那套密钥会把活着的 WS 连接搞聋（详见 __httpSession 注释）。
+function v2Session() {
+    return window.__httpSession || null;
+}
+
 async function v2SignHeaders(path, method) {
     const cleanPath = String(path || '').split('?')[0];
     if (!/^\/v2\//.test(cleanPath)) return {};
-    const sess = window.__wsSession;
+    const sess = v2Session();
     if (!sess) return {};
     try {
         await sess.ensure();
@@ -1994,7 +2004,7 @@ async function v2SignHeaders(path, method) {
     // 对任意路径生成 v2 会话签名头（突破 v2SignHeaders 的 /v2/ 守卫，用于 /channel-media/ 等也需会话鉴权的端点）
     async function signV2ForAnyPath(path, method) {
         const cleanPath = String(path || '').split('?')[0];
-        const sess = window.__wsSession;
+        const sess = v2Session();
         if (!sess) return {};
         try { await sess.ensure(); } catch (e) { return {}; }
         const macKey = sess.getMacKey();
@@ -2019,7 +2029,7 @@ async function v2SignHeaders(path, method) {
 // 信封 JSON：{iv, data, mac}，base64(NO_WRAP)；mac = HMAC-SHA256(macKey, iv字节 || data字节)
 // 返回加密后的信封 JSON 字符串；密钥/会话缺失或加密失败返回 null（调用方降级明文）
 async function v2EncryptBody(plainJson) {
-    const sess = window.__wsSession;
+    const sess = v2Session();
     if (!sess) return null;
     const encKey = sess.getEncKey();
     const macKey = sess.getMacKey();
@@ -2047,7 +2057,7 @@ async function v2DecryptBody(text) {
     let env;
     try { env = JSON.parse(text); } catch (e) { return null; }
     if (!env || typeof env !== 'object' || !env.iv || !env.data || !env.mac) return null;
-    const sess = window.__wsSession;
+    const sess = v2Session();
     if (!sess) return null;
     const macKey = sess.getMacKey();
     const encKey = sess.getEncKey();
@@ -2115,8 +2125,16 @@ async function apiFetch(url, options = {}) {
     for (let i = 0; i < plan.length; i++) {
         const ver = plan[i];
         const isLast = i === plan.length - 1;
-        const targetUrl = ver === 'v2' ? mapToV2(url) : url;
+        // v1 尝试必须把 /v2/ 直连路径反向映射回 v1。
+        // 否则（如调用方直接写 /v2/resources/sections）v1 尝试会把 /v2/ 路径裸发出去、
+        // 不带 X-Session/X-Sign → 服务端 v2 中间件必回 401 {"error":"missing session"}。
+        const targetUrl = ver === 'v2' ? mapToV2(url) : v2ToV1(url);
         const strictV2 = (ver === 'v2' && mode === '仅v2');
+        // 该端点没有 v1 版本（反向映射后仍是 /v2/）→ 跳过无意义的 v1 尝试
+        if (ver === 'v1' && targetUrl.indexOf('/v2/') === 0) {
+            if (isLast) break;
+            continue;
+        }
 
         // 每次尝试用独立 headers 副本，避免 v2 专属头泄漏到 v1 尝试
         const attemptOptions = Object.assign({}, options);
@@ -2125,12 +2143,16 @@ async function apiFetch(url, options = {}) {
         const token = localStorage.getItem('oc_access_token');
         if (token) attemptOptions.headers['Authorization'] = 'Bearer ' + token;
 
-        if (ver === 'v2') {
+        if (ver === 'v2' && V2_UNSIGNED_PATHS.test(targetUrl.split('?')[0])) {
+            // 文档 §4.5：/v2/{files,resources}/{upload,download} 不加密、不签名，仅 Bearer JWT。
+            // 这里刻意不带 X-Session/X-Sign，避免服务端按签名链校验反而 401。
+        } else if (ver === 'v2') {
             let signHdrs = {};
             try { signHdrs = await v2SignHeaders(targetUrl, method); } catch (e) {
                 console.warn('[apiFetch] v2 签名失败：', targetUrl, e);
             }
-            const sessReady = !!(window.__wsSession && window.__wsSession.getSessionId && window.__wsSession.getSessionId());
+            const _s = v2Session();
+            const sessReady = !!(_s && _s.getSessionId && _s.getSessionId());
             if (signHdrs['X-Sign'] && sessReady) {
                 Object.assign(attemptOptions.headers, signHdrs);
             } else if (strictV2) {
@@ -2153,6 +2175,9 @@ async function apiFetch(url, options = {}) {
         }
     }
     if (lastErr && !lastRes) throw lastErr;
+    // 所有版本尝试都被跳过（v2 会话未就绪且该端点无 v1 版本）→ 抛明确错误，
+    // 不要返回 null，否则调用方 res.json() 会炸出难懂的 "Cannot read properties of null"
+    if (!lastRes) throw new Error('无可用请求版本（v2 会话未就绪且无 v1 回退）：' + url);
     return lastRes;
 }
 
@@ -2239,9 +2264,29 @@ async function _fetchWithCandidates(url, options, strictV2) {
                         } catch (e) {}
                     }
                     console.warn('[apiFetch] v2 401 响应体：' + base + url + ' → ' + String(shown).slice(0, 300));
-                    // 服务端重启导致会话失效：清本地会话，下次 v2 请求自动重新握手
-                    if (/invalid_session|missing_session/.test(bodyText) && window.__wsSession && window.__wsSession.clear) {
-                        window.__wsSession.clear();
+                }
+                // 会话失效（服务端重启 / 会话 TTL 到期）→ 就地自愈：
+                // 清 HTTP 会话 → 重新握手 → 用新会话签名重试一次；成功就当没事发生。
+                // 只动 __httpSession，绝不碰 __wsSession（否则活着的 WS 会静默变聋）。
+                if (bodyText && /invalid_session|missing_session/.test(bodyText) && !options._v2SessionRetried) {
+                    const sess = window.__httpSession;
+                    if (sess && sess.clear) {
+                        sess.clear();
+                        try {
+                            const fresh = await signV2ForAnyPath(url, options.method || 'GET');
+                            if (fresh && fresh['X-Sign']) {
+                                console.log('[apiFetch] v2 会话已失效，重新握手后重试：' + url);
+                                const retryOpts = Object.assign({}, options, {
+                                    headers: Object.assign({}, options.headers || {}, fresh),
+                                    _v2SessionRetried: true
+                                });
+                                const r3 = await tauriHttpFetch(base + url, retryOpts);
+                                if (r3.status !== 401) return r3; // 自愈成功
+                                try { if (r3.body) r3.body.cancel(); } catch (e) {}
+                            }
+                        } catch (e) {
+                            console.warn('[apiFetch] v2 会话自愈失败:', e);
+                        }
                     }
                 }
                 const cleanPath = url.split('?')[0];
@@ -6163,13 +6208,57 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         return wsHandshakePromise;
     }
 
-    // 暴露给顶层 v2 签名/加密使用（apiFetch 在 IIFE 外，取不到闭包变量）
+    // WS 专用会话。注意：clear() 只允许 ws.onclose 调用 —— 见下方 __httpSession 的说明。
     window.__wsSession = {
         ensure: ensureWsSession,
         getMacKey: () => wsMacKey,
         getEncKey: () => wsEncKey,
         getSessionId: () => wsSessionId,
         clear: () => { wsSessionId = null; wsEncKey = null; wsMacKey = null; }
+    };
+
+    // ===== HTTP v2 会话（与 WS 会话完全隔离，独立握手）=====
+    // 为什么必须拆成两套会话：
+    //   v2 HTTP 请求收到 401 missing_session 时要「清会话 → 重新握手 → 重试」来自愈，
+    //   但如果清掉的是 WS 正在服役的那套密钥，WS 连接本身还活着（不触发 onclose、不重连），
+    //   而 decryptEnvelope() 首行 `if (!wsEncKey || !wsMacKey) return null` 会让之后
+    //   每一个加密帧都被静默丢弃 —— 现象就是「WS 显示 connected 却收不到任何实时推送」。
+    //   （历史事故：任意一个 v2 端点 401，如资源广场 /v2/resources/sections 或
+    //    重连后 syncAfterReconnect 里的 /v2/updates/difference，都会顺手把 WS 搞聋。）
+    // 拆开之后：WS 会话只由 initWebSocket/ws.onclose 管理，HTTP 会话由 apiFetch 自愈，互不影响。
+    let httpSessionId = null, httpEncKey = null, httpMacKey = null;
+    let httpHandshakePromise = null;
+
+    async function ensureHttpSession() {
+        if (httpSessionId && httpEncKey && httpMacKey) return;
+        if (httpHandshakePromise) return httpHandshakePromise;
+        httpHandshakePromise = (async () => {
+            if (httpSessionId && httpEncKey && httpMacKey) return;
+            if (!window.crypto || !crypto.subtle) throw new Error('Crypto not supported');
+            const keys = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+            const spki = await crypto.subtle.exportKey('spki', keys.publicKey);
+            const res = await apiFetch('/v1/auth/handshake', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ client_pub: Crypto.bytesToBase64(new Uint8Array(spki)) })
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            const serverPub = await crypto.subtle.importKey('spki', Crypto.base64ToBytes(data.server_pub), { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+            const secretBytes = new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: serverPub }, keys.privateKey, 256));
+            httpEncKey = await Crypto.sha256(Crypto.concatBytes(secretBytes, new TextEncoder().encode('enc')));
+            httpMacKey = await Crypto.sha256(Crypto.concatBytes(secretBytes, new TextEncoder().encode('mac')));
+            httpSessionId = data.session_id;
+        })().finally(() => { httpHandshakePromise = null; });
+        return httpHandshakePromise;
+    }
+
+    window.__httpSession = {
+        ensure: ensureHttpSession,
+        getMacKey: () => httpMacKey,
+        getEncKey: () => httpEncKey,
+        getSessionId: () => httpSessionId,
+        clear: () => { httpSessionId = null; httpEncKey = null; httpMacKey = null; }
     };
 
     // 解密 WS 加密信封 {iv, data, mac}
@@ -6187,6 +6276,24 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const plainBuf = await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, ciphertext);
         const plainBytes = Crypto.pkcs7Unpad(new Uint8Array(plainBuf));
         return new TextDecoder().decode(plainBytes);
+    }
+
+    // 该帧是否为加密信封（用于区分「服务端下发明文」和「是密文但我们解不开」）
+    function looksLikeEnvelope(payload) {
+        try {
+            const o = JSON.parse(payload);
+            return !!(o && typeof o === 'object' && o.iv && o.data && o.mac);
+        } catch (e) { return false; }
+    }
+
+    // WS 密钥与服务端会话不一致时的自愈：主动关连接 → onclose 清会话 → 重连时重新握手。
+    // 没有这道兜底，一旦密钥失配，WS 会「连着但永远收不到消息」，且完全静默无报错。
+    let wsRepairing = false;
+    function repairWsSession() {
+        if (wsRepairing) return;
+        wsRepairing = true;
+        setTimeout(() => { wsRepairing = false; }, 10000); // 10s 内不重复重建，避免抖动
+        try { if (ws) ws.close(); } catch (e) {}
     }
 
     async function initWebSocket() {
@@ -6212,7 +6319,14 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     // WS 帧可能是加密信封，也可能是明文 JSON（§30.1：服务端两种都可能下发）
                     let plain = await decryptEnvelope(event.data);
                     if (plain === null) {
-                        // 解密失败（无 iv/data/mac 或非信封）：当作明文 JSON 尝试
+                        if (looksLikeEnvelope(event.data)) {
+                            // 是加密信封但解不开 → 会话密钥缺失/失配。绝不能静默丢弃
+                            // （历史上就是这里静默吞掉了所有推送），直接重建连接重新握手。
+                            console.warn('[WS] 加密帧无法解密（会话密钥缺失或失配）→ 重建连接重新握手');
+                            repairWsSession();
+                            return;
+                        }
+                        // 非信封：当作明文 JSON 尝试
                         plain = event.data;
                     }
                     if (!plain) return;
@@ -10278,6 +10392,21 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             // 设置 / 发现面板：导航项，无右键菜单
             if (panelName === 'settings' || panelName === 'discover') { return; }
 
+            // 资源广场：分区项有独立菜单（删除分区）。
+            // 注意分区项复用了 .contact-item 样式类，若不在此拦截会掉进下面的 else
+            // 分支 → 弹出聊天会话菜单（置顶/折叠/全部已读），即「资源广场右键是聊天侧边栏的右键」。
+            if (panelName === 'plaza') {
+                if (contactItem.classList.contains('plaza-section-add')) return; // 「新建分区」按钮无菜单
+                const sid = contactItem.dataset.sectionId || '';
+                if (!sid) return;
+                const sname = ((contactItem.querySelector('.name') || {}).textContent || '').trim();
+                showPlazaSectionMenu(e.clientX, e.clientY, sid, sname);
+                return;
+            }
+
+            // 其它面板（court/cip 等）：不复用聊天菜单，直接隔离
+            if (panelName !== 'chat' && panelName !== 'contacts' && panelName !== 'music') return;
+
             const menu = document.createElement('div');
             menu.className = 'custom-context-menu';
             menu.style.left = e.clientX + 'px';
@@ -13944,6 +14073,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const div = document.createElement('div');
         div.className = 'contact-item plaza-section-item';
         div.dataset.sectionId = s.id || '';
+        div.dataset.sectionName = s.name || '';
         const count = (s.count != null) ? '（' + s.count + '）' : '';
         div.innerHTML = '<div class="contact-info"><div class="name">' + escapeHtml(s.name || '未命名分区') + '</div></div>' +
             '<span class="plaza-count">' + count + '</span>';
@@ -13952,7 +14082,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             div.classList.add('active');
             loadPlazaItems(s.id);
         });
-        bindSectionDelete(div, s);
+        // 删除入口在右键菜单里（见 showPlazaSectionMenu），条目内不再放「×」按钮
         return div;
     }
 
@@ -14013,7 +14143,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const name = (window.prompt('新建分区', '请输入分区名称：') || '').trim();
             if (!name) return;
             try {
-                const res = await apiFetch('/v2/resources/sections', {
+                // 分区增删只有 v1（官方文档 §18：POST /v1/resources/sections），
+                // 写成 /v2/ 会被 v2 签名中间件拦下返回 401 missing session
+                const res = await apiFetch('/v1/resources/sections', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name: name })
@@ -14027,28 +14159,66 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         return div;
     }
 
-    // 在分区条目上挂一个删除「×」（分区均为本人创建，可直接删）
-    function bindSectionDelete(itemEl, s) {
-        const del = document.createElement('span');
-        del.className = 'plaza-section-del';
-        del.innerHTML = '<i class="fa-solid fa-xmark"></i>';
-        del.title = '删除分区';
-        del.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            if (!await showConfirm('确定删除分区「' + (s.name || '') + '」吗？分区内文件不会被自动删除。')) return;
-            try {
-                const res = await apiFetch('/v2/resources/sections/delete', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ section_id: s.id })
-                });
-                const data = await res.json();
-                if (data.error) { showAlert(data.error); return; }
-                if (plazaCurrentSection === s.id) { plazaCurrentSection = null; plazaFileList.innerHTML = '<div class="court-detail-empty"><i class="fa-solid fa-folder-open" style="font-size:48px;color:var(--secondary-text);margin-bottom:16px;"></i><p style="color:var(--secondary-text);">从左侧选择一个分区查看文件</p></div>'; }
-                loadPlazaSections();
-            } catch (e) { showAlert('删除分区失败'); }
+    // 分区右键菜单（分区均为本人创建，可直接删）
+    function showPlazaSectionMenu(x, y, sectionId, sectionName) {
+        hideContextMenu();
+        const menu = document.createElement('div');
+        menu.className = 'custom-context-menu';
+        menu.style.left = x + 'px';
+        menu.style.top = y + 'px';
+        menu.innerHTML = '<div class="context-menu-item" data-action="plaza-upload">上传文件</div>' +
+            '<div class="context-menu-divider"></div>' +
+            '<div class="context-menu-item danger" data-action="plaza-del-section">删除分区</div>';
+        document.body.appendChild(menu);
+        requestAnimationFrame(() => menu.classList.add('show'));
+        contextMenu = menu;
+        menu.addEventListener('click', (ev) => {
+            const action = ev.target.dataset.action;
+            hideContextMenu();
+            if (action === 'plaza-del-section') deletePlazaSection(sectionId, sectionName);
+            else if (action === 'plaza-upload') triggerPlazaUpload(sectionId);
         });
-        itemEl.appendChild(del);
+        const closeHandler = (ev) => {
+            if (!menu.contains(ev.target)) {
+                hideContextMenu();
+                document.removeEventListener('click', closeHandler);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', closeHandler), 0);
+    }
+
+    async function deletePlazaSection(sectionId, sectionName) {
+        if (!await showConfirm('确定删除分区「' + (sectionName || '') + '」吗？分区内文件不会被自动删除。')) return;
+        try {
+            // 分区增删只有 v1（官方文档 §18：POST /v1/resources/sections[/delete]），
+            // 写成 /v2/ 会被 v2 签名中间件拦下返回 401 missing session
+            const res = await apiFetch('/v1/resources/sections/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ section_id: sectionId })
+            });
+            const data = await res.json();
+            if (data.error) { showAlert(data.error); return; }
+            if (plazaCurrentSection === sectionId) {
+                plazaCurrentSection = null;
+                plazaFileList.innerHTML = '<div class="court-detail-empty"><i class="fa-solid fa-folder-open" style="font-size:48px;color:var(--secondary-text);margin-bottom:16px;"></i><p style="color:var(--secondary-text);">从左侧选择一个分区查看文件</p></div>';
+            }
+            loadPlazaSections();
+        } catch (e) { showAlert('删除分区失败'); }
+    }
+
+    // 右键菜单「上传文件」：先激活该分区（与左键点击一致），再复用工具栏那个隐藏的 file input
+    function triggerPlazaUpload(sectionId) {
+        if (!sectionId) return;
+        if (plazaSectionList) {
+            plazaSectionList.querySelectorAll('.plaza-section-item').forEach(i => {
+                i.classList.toggle('active', i.dataset.sectionId === sectionId);
+            });
+        }
+        if (plazaCurrentSection !== sectionId) loadPlazaItems(sectionId);
+        plazaCurrentSection = sectionId;
+        const inp = document.getElementById('plazaFileInput');
+        if (inp) inp.click();
     }
 
     // 搜索（限定当前分区）
