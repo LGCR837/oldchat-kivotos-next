@@ -8661,13 +8661,16 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 msgDiv.classList.add('has-quote');
             }
 
-            msgDiv.appendChild(imgWrap);
-
-            // imgWrap 已是 position:relative，把时间挂进图片包裹层，时间锚定到图片而非整条消息盒
+            // 用 .message-body 包裹图片与时间：position:relative 但不裁切，
+            // 时间锚定到图片而非整条消息盒，避免被 imgWrap 的 overflow:hidden 裁掉
+            const bodyWrap = document.createElement('div');
+            bodyWrap.className = 'message-body';
+            bodyWrap.appendChild(imgWrap);
             const timeDiv = document.createElement('div');
             timeDiv.className = 'message-time';
             timeDiv.textContent = time;
-            imgWrap.appendChild(timeDiv);
+            bodyWrap.appendChild(timeDiv);
+            msgDiv.appendChild(bodyWrap);
 
             msgDiv.dataset.rawBody = JSON.stringify(msg) || '';
             return msgDiv;
