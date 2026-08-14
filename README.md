@@ -1,6 +1,6 @@
 <div align="center">
 
-![OldChat For Kivotos Next](assets/readme-banner.svg)
+<span style="font-size:34px;font-weight:800;color:#fa94a6;">OldChat For Kivotos Next</span>
 
 **桃信旧聊** —— 为《蔚蓝档案》基沃托斯的 Sensei 量身打造的第三方 OldChat 桌面客户端
 
