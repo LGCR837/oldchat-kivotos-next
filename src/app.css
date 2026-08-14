@@ -639,6 +639,10 @@ body::-webkit-scrollbar {
 :root:not([data-custom-theme])[data-theme-mode="dark"] .sidebar.collapsed ~ .chat-area::before {
     display: none;
 }
+/* 音乐广场（.main-panel[data-panel="music"]）为全屏渐变背景，交界圆角补丁会显得突兀，故该面板激活时不显示 */
+:root:not([data-custom-theme])[data-theme-mode="dark"] .chat-area:has(.main-panel[data-panel="music"].active)::before {
+    display: none;
+}
 
 .message {
 	display: flex;
