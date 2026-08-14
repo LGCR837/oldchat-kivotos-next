@@ -8507,12 +8507,17 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     <div class="ufc-name">${escapeHtml(msg._fileName || '文件')}</div>
                     <div class="ufc-progress"><div class="ufc-progress-fill"></div></div>
                 </div>`;
-            wrap.appendChild(contentDiv);
 
             const timeDiv = document.createElement('div');
             timeDiv.className = 'message-time';
             timeDiv.textContent = time;
-            wrap.appendChild(timeDiv);
+
+            // 气泡+时间包进 message-body，让时间锚定到气泡而非整条消息盒（避免长昵称撑宽后时间被推远）
+            const bodyWrap = document.createElement('div');
+            bodyWrap.className = 'message-body';
+            bodyWrap.appendChild(contentDiv);
+            bodyWrap.appendChild(timeDiv);
+            wrap.appendChild(bodyWrap);
 
             wrap.dataset.rawBody = JSON.stringify(msg) || '';
             return wrap;
@@ -8658,10 +8663,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
             msgDiv.appendChild(imgWrap);
 
+            // imgWrap 已是 position:relative，把时间挂进图片包裹层，时间锚定到图片而非整条消息盒
             const timeDiv = document.createElement('div');
             timeDiv.className = 'message-time';
             timeDiv.textContent = time;
-            msgDiv.appendChild(timeDiv);
+            imgWrap.appendChild(timeDiv);
 
             msgDiv.dataset.rawBody = JSON.stringify(msg) || '';
             return msgDiv;
@@ -9039,12 +9045,16 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 });
             });
         }
-        msgDiv.appendChild(bubble);
-
         const timeDiv = document.createElement('div');
         timeDiv.className = 'message-time';
         timeDiv.textContent = time;
-        msgDiv.appendChild(timeDiv);
+
+        // 气泡+时间包进 message-body，让时间锚定到气泡而非整条消息盒（避免长昵称撑宽后时间被推远）
+        const bodyWrap = document.createElement('div');
+        bodyWrap.className = 'message-body';
+        bodyWrap.appendChild(bubble);
+        bodyWrap.appendChild(timeDiv);
+        msgDiv.appendChild(bodyWrap);
 
         // 阅后即焚支持：默认在气泡内显示「阅后即焚」占位（带气泡框），点击后才显示真实内容并开始计时焚毁
         let burnSeconds = 0;

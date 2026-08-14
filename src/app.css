@@ -735,6 +735,26 @@ body::-webkit-scrollbar {
 }
 
 /* 图片消息 */
+/* 气泡+时间包裹层：时间锚定到气泡本身，避免长昵称撑宽消息盒后时间被推远 */
+.message-body {
+	position: relative;
+	display: flex;
+	align-items: flex-end;
+	gap: 6px;
+	width: fit-content;
+	max-width: 100%;
+	min-width: 0;
+}
+.message.other .message-body {
+	grid-row: 2;
+	grid-column: 2;
+	justify-self: start;
+}
+.message.self .message-body {
+	align-self: flex-end;
+	justify-content: flex-end;
+}
+
 .message.bare-image {
 	max-width: none;
 }
@@ -914,7 +934,6 @@ body::-webkit-scrollbar {
 
 .message.other .message-bubble {
 	background-color: var(--bubble-other);
-	justify-self: start;
 	width: fit-content;
 	max-width: 100%;
 }
@@ -3799,8 +3818,13 @@ body::-webkit-scrollbar {
 
 /* 每日刮刮乐（发现页右侧） */
 .scratch-card {
-    max-width: 480px;
+    max-width: 520px;
     margin: 8px 0;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 20px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
 .scratch-status {
     color: var(--secondary-text);
@@ -3809,6 +3833,7 @@ body::-webkit-scrollbar {
 }
 .scratch-balance {
     font-size: 14px;
+    color: var(--text);
     margin-bottom: 16px;
 }
 .scratch-balance b {
@@ -3836,29 +3861,34 @@ body::-webkit-scrollbar {
     position: relative;
     overflow: hidden;
     user-select: none;
-    transition: transform .15s ease;
+    transition: transform .15s ease, border-color .15s ease, background .2s ease;
 }
 .scratch-slot .scratch-prize {
     opacity: 0;
     transition: opacity .35s ease .12s;
     line-height: 1.25;
 }
+/* 已揭开 - 未中奖：中性卡片（跟随主题） */
 .scratch-slot.revealed {
-    background: linear-gradient(135deg, #ffe7a3, #ffb54d);
-    border-color: transparent;
-    color: #5a3b00;
+    background: var(--panel-bg);
+    border-color: var(--border);
+    color: var(--secondary-text);
 }
+/* 已揭开 - 中奖：主题强调色描边高亮 */
 .scratch-slot.revealed.win {
-    background: linear-gradient(135deg, #b6ffb0, #4ade80);
-    color: #064e2b;
+    background: var(--panel-bg);
+    border-color: var(--accent);
+    color: var(--accent);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
 }
 .scratch-slot.revealed .scratch-prize {
     opacity: 1;
 }
+/* 刮层（未刮开的箔面）：使用主题强调色 */
 .scratch-cover {
     position: absolute;
     inset: 0;
-    background: linear-gradient(135deg, #ffd76e, #ff9f43);
+    background: var(--accent);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3881,6 +3911,10 @@ body::-webkit-scrollbar {
     font-weight: 600;
     cursor: pointer;
     font-family: inherit;
+    transition: filter .15s ease, opacity .15s ease;
+}
+.scratch-btn:hover:not(:disabled) {
+    filter: brightness(1.06);
 }
 .scratch-btn:disabled {
     opacity: 0.5;
