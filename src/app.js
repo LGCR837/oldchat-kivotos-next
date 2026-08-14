@@ -3871,7 +3871,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                             .then(r => r.json())
                             .then(data => {
                                 const n = (data.comments || []).length;
-                                if (n > 0) btn.innerHTML = '<i class="fa-solid fa-comment"></i> ' + n;
+                                btn.innerHTML = '<i class="fa-solid fa-comment"></i> ' + n;
                             })
                             .catch(() => {});
                     });
