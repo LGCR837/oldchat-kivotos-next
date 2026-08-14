@@ -680,7 +680,7 @@ body::-webkit-scrollbar {
 	margin-right: 8px;
 	text-align: right;
 	font-size: 10px;
-	opacity: 1;
+	opacity: 0;
 	transition: opacity 0.2s ease;
 	pointer-events: none;
 	white-space: nowrap;
@@ -727,7 +727,7 @@ body::-webkit-scrollbar {
 	bottom: 2px;
 	text-align: right;
 	font-size: 10px;
-	opacity: 1;
+	opacity: 0;
 	transition: opacity 0.2s ease;
 	pointer-events: none;
 	white-space: nowrap;
@@ -780,7 +780,7 @@ body::-webkit-scrollbar {
 	bottom: 2px;
 	text-align: right;
 	font-size: 10px;
-	opacity: 1;
+	opacity: 0;
 	transition: opacity 0.2s ease;
 	pointer-events: none;
 	white-space: nowrap;
@@ -857,7 +857,7 @@ body::-webkit-scrollbar {
 	margin-right: 8px;
 	text-align: right;
 	font-size: 10px;
-	opacity: 1;
+	opacity: 0;
 	transition: opacity 0.2s ease;
 	pointer-events: none;
 	white-space: nowrap;
@@ -1059,7 +1059,7 @@ body::-webkit-scrollbar {
 	margin-top: 4px;
 	text-align: right;
 	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
-	opacity: 1;
+	opacity: 0;
 	transition: opacity 0.2s ease;
 }
 .message:hover .message-time {
@@ -1732,7 +1732,7 @@ body::-webkit-scrollbar {
 	bottom: 2px;
 	text-align: right;
 	font-size: 10px;
-	opacity: 1;
+	opacity: 0;
 	transition: opacity 0.2s ease;
 	pointer-events: none;
 	white-space: nowrap;
