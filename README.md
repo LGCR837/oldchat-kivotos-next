@@ -1,45 +1,71 @@
-# OldChat For Kivotos Next
+<div align="center">
 
-为基沃托斯打造的第三方 **OldChat** 桌面客户端，俗称「桃信旧聊」。界面大幅参考《蔚蓝档案》中 MomoTalk 的风格，底层基于 Rust + Tauri v2 + Web 构建，直连后端、免安装即可运行。
+![OldChat For Kivotos Next](assets/readme-banner.svg)
 
-本作是初代 Python + Flask 网页版的全新一代重写：界面风格得以延续，底层则从 Web 应用彻底重构为原生桌面客户端。
+**桃信旧聊** —— 为《蔚蓝档案》基沃托斯的 Sensei 量身打造的第三方 OldChat 桌面客户端
 
-- 官网 / 下载：<https://oldchatkivotos.l2.ink>
-- 发行版：[GitHub Releases](https://github.com/LGCR837/oldchat-kivotos-next/releases)
-- OldChat 官方站点：<http://oc.mcl0.dpdns.org/>
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-2ea44f.svg)](https://github.com/LGCR837/oldchat-kivotos-next/releases)
+[![Built with Tauri](https://img.shields.io/badge/Built%20with-Tauri%20v2-24c8db.svg)](https://v2.tauri.app)
+[![Language](https://img.shields.io/badge/Language-Rust%20%26%20JavaScript-orange.svg)](https://github.com/LGCR837/oldchat-kivotos-next)
 
-当前版本：**v9**
+[官网](https://ockn.reverie.dpdns.org) · [下载](https://ockn.reverie.dpdns.org/download) · [GitHub Releases](https://github.com/LGCR837/oldchat-kivotos-next/releases) · [OldChat 官网](http://oc.mcl0.dpdns.org/)
+
+</div>
 
 ---
+
+## 关于本项目
+
+**OldChat For Kivotos Next**（俗称「桃信旧聊」，即 OldChat 基沃托斯特供版）是一个非官方的第三方 [OldChat](http://oc.mcl0.dpdns.org/) 桌面客户端，专门为《蔚蓝档案》的基沃托斯量身定制，界面风格致敬 MomoTalk。
+
+本项目是初代 Python + Flask 网页版客户端的全新重写：在保留 MomoTalk 界面风格的同时，底层彻底重构为 Rust + Tauri v2 原生桌面客户端，直连后端、免安装运行，并在功能与稳定性上做了大量增强。
+
+> 「吾等所盼乃七之哀叹，吾等所忆乃杰里科的古法。」
+
+OldChat 由 MCL0 开发，是一个面向老安卓设备的聊天软件；本项目与其官方版本没有直接联系，仅作为其第三方客户端存在。
+
+## 目录
+
+- [特性](#特性)
+- [下载与安装](#下载与安装)
+- [从源码构建](#从源码构建)
+- [项目结构](#项目结构)
+- [自定义主题与插件](#自定义主题与插件)
+- [免责声明](#免责声明)
+- [致谢](#致谢)
+- [许可](#许可)
 
 ## 特性
 
-**聊天**
-- 私聊、群聊、频道，支持撤回、引用回复、@ 提醒、消息转发
-- 图片 / 语音 / 视频 / 文件 / 表情 / 红包 / 音乐分享卡片
-- 内置 ArtPlayer 视频播放、语音内联播放、图片查看与本地保存
-- 群管理：成员列表、设置管理员、踢出成员、群头像与群资料
+### 聊天
 
-**发现**
-- 朋友圈动态、用户主页 / 个人主页
+- 私聊 / 群聊 / 频道，支持撤回、引用回复、@ 提醒、消息转发
+- 图片、语音、视频、文件、表情、红包与音乐分享卡片
+- 内置 ArtPlayer 视频播放、语音内联播放、图片查看与本地保存
+- 群管理：成员列表、设置管理员、踢出成员、群头像与群资料编辑
+
+### 发现
+
+- 朋友圈动态、用户主页与个人主页
 - 音乐广场（广场 / 排行 / 搜索 / 我的），带封面、歌词与播放器
 - 表情广场、公开法庭、资源广场、小程序、签到墙
 
-**外观与扩展**
-- 明暗双主题，支持导入单文件 CSS 自定义主题
-- 用户插件系统：导入任意 `.js` 脚本，可单独启用 / 停用
+### 外观与扩展
+
+- 明 / 暗双主题，支持导入单文件 CSS 自定义主题
+- 用户插件系统：导入任意 `.js` 脚本，可单独启用或停用
 - 无边框自定义标题栏、系统托盘常驻、消息桌面通知
 
-**网络与稳定性**
-- 多候选服务器地址，遇网络错误或 5xx 自动降级到下一候选（可在设置中自行增删）
-- 接口版本可切换：v2 优先 / v1 优先 / 仅 v1 / 仅 v2（v2 走 ECDH 握手 + 请求签名）
-- 启动环境自检：缺少 WebView2 / WebKitGTK、图形环境异常时给出原生弹窗提示而非静默失败
+### 网络与稳定性
 
----
+- 多候选服务器地址，遇网络错误或 5xx 自动降级到下一候选（设置中可增删）
+- 接口版本可切换：v2 优先 / v1 优先 / 仅 v1 / 仅 v2（v2 走 ECDH 握手 + 请求签名）
+- 启动环境自检：缺少 WebView2 / WebKitGTK 或图形环境异常时给出原生弹窗提示，而非静默失败
 
 ## 下载与安装
 
-前往 [Releases](https://github.com/LGCR837/oldchat-kivotos-next/releases) 或[官网下载页](https://oldchatkivotos.l2.ink/download)获取。
+前往 [官网下载页](https://ockn.reverie.dpdns.org/download) 或 [GitHub Releases](https://github.com/LGCR837/oldchat-kivotos-next/releases) 获取对应版本。
 
 | 平台 | 架构 | 产物 |
 | --- | --- | --- |
@@ -59,13 +85,11 @@ Windows 免安装单文件约 12–15 MB，双击即用。
 
 ### macOS
 
-dmg 未签名，首次打开请**右键 → 打开**，或在终端执行：
+dmg 未签名，首次打开请**右键打开**（或终端执行以下命令）：
 
 ```bash
 xattr -cr "/Applications/OldChat For Kivotos.app"
 ```
-
----
 
 ## 从源码构建
 
@@ -90,8 +114,6 @@ npm run tauri build
 
 开发期按 `Ctrl+Alt+Shift+F12` 打开 DevTools。修改 `src-tauri/tauri.conf.json` 或 `src-tauri/capabilities/` 后需要重启开发进程。
 
----
-
 ## 项目结构
 
 ```
@@ -112,8 +134,6 @@ docs/                    开发文档、后端 API 文档、官网源码
 
 > 前端刻意保持单文件、零构建：所有逻辑集中在 `src/app.js`，全局函数挂在 `window` 上。这是有意的设计取舍，请勿引入打包工具。
 
----
-
 ## 自定义主题与插件
 
 两者都存放在应用配置目录（Windows 通常为 `%APPDATA%\aoharureverie.oldchat.kivotosnextapp\`），可在应用内「设置」中导入、启用、删除：
@@ -123,8 +143,6 @@ docs/                    开发文档、后端 API 文档、官网源码
 
 插件运行在应用同一上下文中，请只安装你信任的脚本。
 
----
-
 ## 免责声明
 
 本项目是**非官方**的第三方客户端，与 OldChat 官方无隶属关系，亦未获其背书。
@@ -133,13 +151,9 @@ docs/                    开发文档、后端 API 文档、官网源码
 
 软件按「现状」提供，使用风险自负。
 
----
-
 ## 致谢
 
 [Tauri](https://tauri.app/) · [Font Awesome](https://fontawesome.com/) · [ArtPlayer](https://artplayer.org/) · [Dumogu Scrollbar](https://github.com/dumogu/dumogu-scrollbar) · [Fengari](https://fengari.io/)
-
----
 
 ## 许可
 
