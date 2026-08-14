@@ -2296,7 +2296,7 @@ body::-webkit-scrollbar {
 	background: var(--active)
 }
 
-/* 收藏表情（我的收藏） */
+/* 收藏表情（本地收藏） */
 .collected-emoji-item {
 	position: relative
 }
@@ -2347,6 +2347,29 @@ body::-webkit-scrollbar {
 	margin-bottom: 8px;
 	font-size: 13px;
 	color: var(--secondary-text)
+}
+
+.collected-emoji-tabs {
+	display: flex;
+	gap: 4px
+}
+
+.collected-emoji-tab {
+	padding: 3px 10px;
+	border-radius: 4px;
+	cursor: pointer;
+	font-size: 13px;
+	color: var(--secondary-text);
+	user-select: none
+}
+
+.collected-emoji-tab:hover {
+	background: var(--hover)
+}
+
+.collected-emoji-tab.active {
+	background: var(--active);
+	color: var(--text)
 }
 
 .collected-emoji-manage {

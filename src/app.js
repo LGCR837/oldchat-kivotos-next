@@ -10622,12 +10622,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 <div class="context-menu-item" data-action="quote">引用</div>
                 <div class="context-menu-item" data-action="favorite">收藏</div>
             `;
-            // 图片消息额外增加"查看原图 / 另存为 / 收藏为表情"
+            // 图片消息额外增加"查看原图 / 另存为 / 收藏到本地"
             const msgType = msgDiv.dataset.msgType;
             if (msgType === 'image') {
                 menuHtml += `<div class="context-menu-item" data-action="view-original">查看原图</div>`;
                 menuHtml += `<div class="context-menu-item" data-action="save-image">另存为</div>`;
-                menuHtml += `<div class="context-menu-item" data-action="collect-emoji">收藏为表情</div>`;
+                menuHtml += `<div class="context-menu-item" data-action="collect-emoji">收藏到本地</div>`;
             }
             if (canRecall) {
                 menuHtml += `<div class="context-menu-item" data-action="recall" style="color:#ff6b6b;">撤回</div>`;
@@ -10757,7 +10757,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     if (!dlUrl && chatImg && chatImg.src) dlUrl = chatImg.src;
                     if (dlUrl) downloadImage(dlUrl);
                 } else if (action === 'collect-emoji') {
-                    // 收藏为表情：保存相对路径（如 /v1/uploads/media/xxx.jpg）
+                    // 收藏到本地：保存相对路径（如 /v1/uploads/media/xxx.jpg）
                     const rawMsg = JSON.parse(msgDiv.dataset.rawBody || '{}');
                     const mediaPath = rawMsg.media_url || '';
                     if (!mediaPath) {
@@ -10765,7 +10765,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     } else if (!addCollectedEmoji(mediaPath)) {
                         showAlert('该表情已在收藏中');
                     } else {
-                        showAlert('已收藏为表情');
+                        showAlert('已收藏到本地');
                     }
                 } else if (action === 'favorite') {
                     // 收藏到收藏夹（§37）
@@ -11110,7 +11110,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         openRedPacketDetail(card.dataset.packetId, card);
     });
 
-    // ===== 收藏表情（我的收藏）=====
+    // ===== 收藏表情（本地收藏）=====
     const COLLECTED_EMOJI_KEY = 'oc_collected_emojis';
     function loadCollectedEmojis() {
         try {
@@ -11138,7 +11138,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const list = loadCollectedEmojis();
         container.innerHTML = '';
         if (list.length === 0) {
-            container.innerHTML = '<div class="collected-emoji-empty">还没有收藏的表情<br>在图片消息上右键选择「收藏为表情」</div>';
+            container.innerHTML = '<div class="collected-emoji-empty">还没有收藏的表情<br>在图片消息上右键选择「收藏到本地」</div>';
             return;
         }
         list.forEach(path => {
@@ -11167,7 +11167,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         });
     }
 
-    // 输入框「表情」按钮 → 我的收藏表情选择器
+    // 输入框「表情」按钮 → 本地收藏 / 收藏夹 双选项卡选择器
     function showCollectedEmojiPicker() {
         const existing = document.getElementById('collectedEmojiPicker');
         if (existing) { existing.remove(); return; }
@@ -11177,7 +11177,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         picker.className = 'emoticon-picker collected-emoji-picker';
         picker.innerHTML = `
             <div class="collected-emoji-header">
-                <span>我的收藏</span>
+                <div class="collected-emoji-tabs">
+                    <div class="collected-emoji-tab active" data-tab="local">本地收藏</div>
+                    <div class="collected-emoji-tab" data-tab="folder">收藏夹</div>
+                </div>
                 <button class="collected-emoji-manage" id="collectedEmojiManageBtn" title="在设置中管理">管理</button>
             </div>
             <div class="emoticon-grid" id="collectedEmojiGrid"></div>
@@ -11185,7 +11188,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         document.body.appendChild(picker);
 
         const grid = document.getElementById('collectedEmojiGrid');
-        const refresh = () => {
+        const tabs = picker.querySelectorAll('.collected-emoji-tab');
+
+        const renderLocal = () => {
+            grid.innerHTML = '';
             renderCollectedEmojiGrid(grid, (path) => {
                 if (!currentConv) {
                     showAlert('请先在聊天中打开一个会话');
@@ -11195,7 +11201,46 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 picker.remove();
             });
         };
-        refresh();
+
+        const renderFolder = async () => {
+            grid.innerHTML = '<div class="collected-emoji-empty">加载中…</div>';
+            try {
+                const res = await apiFetch('/v1/favorites?limit=100');
+                const data = await res.json();
+                const items = data.items || (data.data && data.data.items) || [];
+                const imgs = items.filter(it => it.type === 'image' && it.media_url);
+                if (!imgs.length) {
+                    grid.innerHTML = '<div class="collected-emoji-empty">收藏夹还是空的<br>在聊天中右键消息选择「收藏」即可加入</div>';
+                    return;
+                }
+                grid.innerHTML = '';
+                imgs.forEach(it => {
+                    const itemEl = document.createElement('div');
+                    itemEl.className = 'emoticon-item';
+                    itemEl.innerHTML = `<img src="${cachedResolveMediaUrl(it.media_url)}" loading="lazy">`;
+                    itemEl.addEventListener('click', () => {
+                        if (!currentConv) {
+                            showAlert('请先在聊天中打开一个会话');
+                            return;
+                        }
+                        sendMessage('', 'image', it.media_url);
+                        picker.remove();
+                    });
+                    grid.appendChild(itemEl);
+                });
+            } catch (e) {
+                grid.innerHTML = '<div class="collected-emoji-empty">加载失败，请稍后重试</div>';
+            }
+        };
+
+        tabs.forEach(tab => tab.addEventListener('click', () => {
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            if (tab.dataset.tab === 'local') renderLocal();
+            else renderFolder();
+        }));
+
+        renderLocal();
 
         document.getElementById('collectedEmojiManageBtn').addEventListener('click', (e) => {
             e.stopPropagation();
@@ -11413,7 +11458,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     <span class="value"><i class="fa-solid fa-chevron-right"></i></span>
                 </div>
                 <div class="settings-item" id="settingsMyFavorites">
-                    <span class="label">我的收藏</span>
+                    <span class="label">本地收藏</span>
                     <span class="value"><i class="fa-solid fa-chevron-right"></i></span>
                 </div>
                 <div class="settings-item" id="settingsMyFavFolder">
@@ -12648,7 +12693,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         return el;
     }
 
-    // 设置 → 我的收藏（与输入框表情选择器共用同一份 localStorage 数据）
+    // 设置 → 本地收藏（与输入框表情选择器共用同一份 localStorage 数据）
     function renderSettingsFavorites() {
         currentSettingsTab = 'favorites';
         const render = () => {
@@ -12672,7 +12717,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         settingsContent.innerHTML = `
             <h3 style="display:flex;align-items:center;gap:10px;">
                 <button class="btn" id="favBack" title="返回我的">返回</button>
-                我的收藏
+                本地收藏
                 <span id="favCount" style="font-size:12px;color:var(--secondary-text);font-weight:normal;"></span>
             </h3>
             <div class="emoticon-grid" id="favEmojiGrid"></div>
@@ -12682,7 +12727,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         document.getElementById('favBack')?.addEventListener('click', () => renderSettingsPage('profile'));
     }
 
-    // 设置 → 收藏夹（§37 服务端收藏，区别于「我的收藏」表情）
+    // 设置 → 收藏夹（§37 服务端收藏，区别于「本地收藏」表情）
     async function renderSettingsFavoritesList() {
         currentSettingsTab = 'favfolder';
         settingsContent.innerHTML = `
