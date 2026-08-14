@@ -190,7 +190,7 @@ function render(releases) {
         '    <li>Windows 可直接双击 <b>免安装单文件</b> 运行，或用 <b>NSIS 安装包</b> 安装到系统；Linux 推荐用 <b>AppImage</b>（双击运行）/ <b>deb</b>（Ubuntu/Debian）/ <b>rpm</b>（Fedora）安装。</li>\n' +
         '    <li>macOS 为未签名 dmg：首次打开请<strong>右键 → 打开</strong>（或终端执行 <code>xattr -cr /Applications/OldChat\\ For\\ Kivotos.app</code>）以越过 Gatekeeper 拦截。</li>\n' +
         '    <li>Linux 免安装单文件与 macOS 原生包在部分环境需系统已带 WebView 框架。</li>\n' +
-        '    <li>本项目基于 GNU GPL-3.0 开源，由 Aoharu Reverie（LGCR837）开发维护。</li>\n' +
+        '    <li>本项目基于 MIT License 开源，由 Aoharu Reverie（LGCR837）开发维护。</li>\n' +
         '  </ul>\n' +
         '</body>\n' +
         '</html>\n';
