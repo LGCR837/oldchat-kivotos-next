@@ -152,7 +152,7 @@ pub fn report_runtime_failure(detail: &str) {
 // ============================================================
 
 fn collect_issues() -> Vec<Issue> {
-    let mut issues = Vec::new();
+    let mut issues: Vec<Issue> = Vec::new();
 
     #[cfg(windows)]
     windows_checks(&mut issues);
