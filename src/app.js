@@ -6680,6 +6680,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     function isMultiSessionEnabled() {
         try { return localStorage.getItem('oc_multi_session') !== '0'; } catch (e) { return true; }
     }
+    // ===== 消息排序修正（设置 → 通用 → 消息排序修正，默认关闭）=====
+    // 关闭（默认）：实时推送/增量更新一律追加到末尾，不重排——时间戳不精准，乱序插入会让用户觉得消息错位（插到历史中间）。
+    // 开启：增量/轮询拉取会按时间戳修正顺序，必要时把消息插入到正确位置（开销略大）。
+    function isMsgSortFixEnabled() {
+        try { return localStorage.getItem('oc_msg_sort_fix') === '1'; } catch (e) { return false; }
+    }
     // 把一条 WS 推送消息归一化为统一结构（direct/group 共用），与 handleWsMessage 内现 render 分支一致
     function buildMsgObj(d, convKey, isGroup, groupId) {
         const fromUid = getFromUid(d);
@@ -8058,74 +8064,80 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 return;
             }
 
-            // 已有消息且有新消息：增量追加（仅当能找到「重叠点」时，保证新消息都晚于现有消息 → 不会错位）
+            // 已有消息且有新消息：增量处理（是否重排取决于「消息排序修正」开关）
             if (existingMsgEls.length > 0 && newMsgs.length > 0) {
-                // 检查新消息是否在现有消息之后（简单验证：第一条现有消息在 msgs 中的位置）
-                const firstExisting = existingMsgEls[0].dataset.msgId;
-                const firstExistingIdx = msgs.findIndex(m => m.id === firstExisting);
+                const msgSortFix = isMsgSortFixEnabled();
+                if (!msgSortFix) {
+                    // 默认关闭：仅把「晚于当前末尾」的新消息追加到末尾，不重排、不插入历史中间。
+                    // 时间戳不精准，乱序插入会让用户觉得消息错位（插到历史中间），故只追加真正更新的部分。
+                    const lastEl = existingMsgEls[existingMsgEls.length - 1];
+                    const lastId = lastEl && lastEl.dataset.msgId;
+                    const lastIdx = lastId ? msgs.findIndex(m => m.id === lastId) : -1;
+                    // lastIdx < 0：末尾消息已不在最新页（滑出窗口），无法安全增量，下方走完整重建
+                    const toAppend = lastIdx >= 0
+                        ? msgs.slice(lastIdx + 1).filter(m => m.id && !existingIds.has(m.id))
+                        : [];
+                    if (toAppend.length > 0) {
+                        // 追加「比末尾更新」的消息到末尾
+                        toAppend.forEach(msg => {
+                            if (reqId !== fetchLatestReqId || currentConv?.key !== convKey) return;
+                            appendMessage(msg, convKey, seenMsgIds[convKey] || new Set());
+                        });
 
-                if (firstExistingIdx >= 0) {
-                    // 找到重叠点，确定需要追加的消息
-                    const existingIdSet = new Set();
-                    existingMsgEls.forEach(el => { if (el.dataset.msgId) existingIdSet.add(el.dataset.msgId); });
-
-                    // 追加新消息到末尾
-                    newMsgs.forEach(msg => {
-                        if (reqId !== fetchLatestReqId || currentConv?.key !== convKey) return;
-                        appendMessage(msg, convKey, seenMsgIds[convKey] || new Set());
-                    });
-
-                    // 更新连续消息标记
-                    const allMsgEls = messagesContainer.querySelectorAll('.message');
-                    const existingLastIdx = allMsgEls.length - newMsgs.length - 1;
-                    if (existingLastIdx >= 0 && allMsgEls[existingLastIdx]) {
-                        const prevEl = allMsgEls[existingLastIdx];
-                        if (prevEl.classList.contains('consecutive') || prevEl.classList.contains('consecutive-first')) {
-                            prevEl.classList.add('consecutive-last');
-                            const lastNew = allMsgEls[existingLastIdx + 1];
-                            if (lastNew) {
-                                lastNew.classList.remove('consecutive-last');
-                                if (prevEl.dataset.fromUid === lastNew.dataset.fromUid) {
-                                    lastNew.classList.add('consecutive');
+                        // 更新连续消息标记
+                        const allMsgEls = messagesContainer.querySelectorAll('.message');
+                        const existingLastIdx = allMsgEls.length - toAppend.length - 1;
+                        if (existingLastIdx >= 0 && allMsgEls[existingLastIdx]) {
+                            const prevEl = allMsgEls[existingLastIdx];
+                            if (prevEl.classList.contains('consecutive') || prevEl.classList.contains('consecutive-first')) {
+                                prevEl.classList.add('consecutive-last');
+                                const lastNew = allMsgEls[existingLastIdx + 1];
+                                if (lastNew) {
+                                    lastNew.classList.remove('consecutive-last');
+                                    if (prevEl.dataset.fromUid === lastNew.dataset.fromUid) {
+                                        lastNew.classList.add('consecutive');
+                                    }
                                 }
                             }
                         }
+
+                        // 更新状态
+                        convOffset[convKey] = msgs.length;
+                        convHasMore[convKey] = msgs.length >= PAGE_SIZE;
+
+                        // 瞬时滚动到新消息位置（仅在贴底时，避免把正在看历史的用户拽回底部）
+                        if (_stickToBottom) pinToBottom();
+                        else updateScrollToBottomBtn();
+
+                        // 缓存最新 DOM
+                        delete convCache[convKey];
+                        if (currentConv?.key) {
+                            const frag = document.createDocumentFragment();
+                            Array.from(messagesContainer.children).forEach(el => frag.appendChild(el.cloneNode(true)));
+                            convCache[currentConv.key] = {
+                                fragment: frag,
+                                scrollTop: messagesContainer.scrollTop,
+                                seenMsgIds: seenMsgIds[currentConv.key] ? new Set(seenMsgIds[currentConv.key]) : new Set(),
+                                offset: convOffset[currentConv.key] || 0,
+                                hasMore: convHasMore[currentConv.key] !== false,
+                                lastTs: lastRenderedTs || 0
+                            };
+                        }
+
+                        // 切换会话来源：标记已读（异步，不阻塞渲染）
+                        if (source === 'switch-cache' || source === 'switch-nocache') {
+                            const readBody = type === 'group'
+                                ? JSON.stringify({ group_id: id })
+                                : withUidParam(id);
+                            apiFetch(type === 'group' ? '/v1/groups/read' : '/v1/direct/read', {
+                                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: readBody
+                            }).catch(() => {});
+                        }
+                        return;
                     }
-
-                    // 更新状态
-                    convOffset[convKey] = msgs.length;
-                    convHasMore[convKey] = msgs.length >= PAGE_SIZE;
-
-                    // 瞬时滚动到新消息位置（仅在贴底时，避免把正在看历史的用户拽回底部）
-                    if (_stickToBottom) pinToBottom();
-                    else updateScrollToBottomBtn();
-
-                    // 缓存最新 DOM
-                    delete convCache[convKey];
-                    if (currentConv?.key) {
-                        const frag = document.createDocumentFragment();
-                        Array.from(messagesContainer.children).forEach(el => frag.appendChild(el.cloneNode(true)));
-                        convCache[currentConv.key] = {
-                            fragment: frag,
-                            scrollTop: messagesContainer.scrollTop,
-                            seenMsgIds: seenMsgIds[currentConv.key] ? new Set(seenMsgIds[currentConv.key]) : new Set(),
-                            offset: convOffset[currentConv.key] || 0,
-                            hasMore: convHasMore[currentConv.key] !== false,
-                            lastTs: lastRenderedTs || 0
-                        };
-                    }
-
-                    // 切换会话来源：标记已读（异步，不阻塞渲染）
-                    if (source === 'switch-cache' || source === 'switch-nocache') {
-                        const readBody = type === 'group'
-                            ? JSON.stringify({ group_id: id })
-                            : withUidParam(id);
-                        apiFetch(type === 'group' ? '/v1/groups/read' : '/v1/direct/read', {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: readBody
-                        }).catch(() => {});
-                    }
-                    return;
+                    // toAppend 为空但确有新消息：无法安全增量，落到下方完整重建（不丢消息）
                 }
+                // 开启「消息排序修正」或无法安全增量：走完整重建，按时间正确排序
             }
 
             // ====== 完整重建路径（无缓存/无新消息/消息顺序异常） ======
@@ -12033,6 +12045,18 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
                     开启后，后台持续接收所有会话的 WebSocket 消息并暂存，切换到该会话时无需等待加载即可秒开（仍只拉最新一页，不翻历史）。关闭则退回原行为，不再暂存以节省内存。
                 </div>
+                <div class="settings-item" id="settingsMsgSortFix">
+                    <span class="label">消息排序修正</span>
+                    <span class="value">
+                        <label class="oc-switch">
+                            <input type="checkbox" id="msgSortFixToggle">
+                            <span class="oc-switch-slider"></span>
+                        </label>
+                    </span>
+                </div>
+                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
+                    默认关闭：新消息一律追加到末尾、不重排（时间戳不精准，乱序插入会让消息看起来错位于历史中间；实时推送本就如此）。开启后，增量/轮询拉取会按时间戳修正顺序，必要时把消息插入到正确位置（开销略大，仅在你确实观察到顺序错乱时开启）。
+                </div>
             </div>
             <h3 style="margin-top:20px;">侧边栏</h3>
             <div class="settings-group">
@@ -12131,6 +12155,15 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 try { localStorage.setItem('oc_multi_session', msToggle.checked ? '1' : '0'); } catch (e) {}
                 if (!msToggle.checked) clearAllBgStores();
                 if (typeof showAlert === 'function') showAlert('多会话消息接受已' + (msToggle.checked ? '开启' : '关闭'));
+            });
+        }
+        // 消息排序修正开关（设置 → 通用 → 消息排序修正，默认关闭）：关闭时只追加到末尾不重排，开启时按时间戳修正顺序
+        const sfToggle = document.getElementById('msgSortFixToggle');
+        if (sfToggle) {
+            sfToggle.checked = isMsgSortFixEnabled();
+            sfToggle.addEventListener('change', () => {
+                try { localStorage.setItem('oc_msg_sort_fix', sfToggle.checked ? '1' : '0'); } catch (e) {}
+                if (typeof showAlert === 'function') showAlert('消息排序修正已' + (sfToggle.checked ? '开启' : '关闭') + '，下次拉取消息生效');
             });
         }
         // 重点分区开关（设置 → 通用 → 侧边栏 → 重点分区，默认关闭）
