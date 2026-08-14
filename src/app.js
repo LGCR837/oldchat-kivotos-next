@@ -336,6 +336,114 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// 从「音乐分享」消息解析出音乐广场播放器所需的对象
+// 触发条件：msg.media_kind === 'music' 或 body 内 obj.media_kind === 'music'
+// body.text 形如：歌曲: X\n歌手: Y\n时长: 03:46\n封面: ...\n歌曲ID: ...\n歌词: ...\n点击播放
+function parseMusicShareFromMsg(msg) {
+    const mp3 = msg.media_url || '';
+    let cover = msg.thumb_url || '';
+    let name = '', artist = '', duration = '', songId = '', lyricsUrl = '';
+    let obj = null;
+    try { obj = JSON.parse(msg.body || '{}'); } catch (e) {}
+    // body 是合法 JSON 时直接取 text；非法（含真实换行等）时退化为正则提取
+    let textRaw = (obj && obj.text) ? String(obj.text) : '';
+    if (!textRaw && msg.body) {
+        const mt = String(msg.body).match(/"text"\s*:\s*"([\s\S]*?)"\s*,\s*"[A-Za-z_]+"\s*:/);
+        if (mt) textRaw = mt[1].replace(/\\n/g, '\n').replace(/\\\//g, '/').replace(/\\"/g, '"');
+    }
+    if (textRaw) {
+        // 状态机解析：body.text 里的封面/歌词/歌名常被折行（如「封面: /\nv1/...」），
+        // 需把后续非 key 行拼接回来；URL 行去空白，文本行用空格连接。
+        const keyRe = /^(歌曲|歌手|时长|封面|歌曲ID|歌词)\s*:\s*/;
+        let curKey = null, curVal = '';
+        const flush = function () {
+            if (!curKey) return;
+            const v = curVal.trim();
+            if (curKey === '歌曲') name = v;
+            else if (curKey === '歌手') artist = v;
+            else if (curKey === '时长') duration = v;
+            else if (curKey === '歌曲ID') songId = v.replace(/\s+/g, '');
+            else if (curKey === '歌词') lyricsUrl = v.replace(/\s+/g, '');
+            else if (curKey === '封面' && !cover) cover = v.replace(/\s+/g, '');
+            curKey = null; curVal = '';
+        };
+        textRaw.split('\n').forEach(function (line) {
+            const mt = line.match(keyRe);
+            if (mt) {
+                flush();
+                curKey = mt[1];
+                curVal = line.slice(mt[0].length);
+            } else if (curKey) {
+                const t = line.trim();
+                if (!t) return;
+                // 分享文本固定以「点击播放」结尾，可能折行（点击播/放）：含「点击」直接跳过
+                if (t.indexOf('点击') >= 0) return;
+                if (curKey === '封面' || curKey === '歌词') {
+                    // URL 续行：仅拼接「看起来像 URL 片段」的行（仅安全字符），
+                    // 折行残留的中文（如「放」）或噪音自然被排除
+                    const u = t.replace(/\s+/g, '');
+                    if (/^[\w\-./:%]+$/.test(u)) curVal += u;
+                } else {
+                    curVal += (curVal && !/\s$/.test(curVal) ? ' ' : '') + t; // 文本续行：空格连接
+                }
+            }
+        });
+        flush();
+    }
+    if (!name && mp3) {
+        const parts = mp3.split('?')[0].split('/');
+        name = decodeURIComponent(parts[parts.length - 1]) || '未知歌曲';
+    }
+    return {
+        id: songId,
+        name: name,
+        artist: artist,
+        owner_name: artist,
+        duration: duration,
+        cover_url: cover,
+        media_url: mp3,
+        lyrics_url: lyricsUrl
+    };
+}
+
+// 判定消息是否为「音乐分享」——与 msg_type 无关（服务端可能发 resource 也可能发 text）
+// 只认 media_kind === 'music'；body 非法 JSON 时用正则兜底
+function detectMusicShare(msg) {
+    let kind = msg.media_kind || '';
+    if (!kind && msg.body) {
+        const b = String(msg.body);
+        if (b.indexOf('media_kind') < 0) return null;
+        try {
+            const o = JSON.parse(b);
+            kind = (o && o.media_kind) || '';
+        } catch (e) {
+            if (/"media_kind"\s*:\s*"music"/.test(b)) kind = 'music';
+        }
+    }
+    if (kind !== 'music') return null;
+    const m = parseMusicShareFromMsg(msg);
+    // 解析不出任何可用信息就不当作音乐分享，交回普通渲染，避免误吞消息
+    if (!m.name && !m.id && !m.media_url) return null;
+    return m;
+}
+
+// 聊天内「音乐分享」专属卡片（点击跳音乐广场，用其播放器播放）
+function buildMusicShareCardHtml(m) {
+    const coverUrl = m.cover_url ? cachedResolveMediaUrl(m.cover_url) : '';
+    return `
+        <div class="music-share-card" data-music-json="${encodeURIComponent(JSON.stringify(m))}">
+            <div class="msc-cover">
+                <img src="${escapeHtml(coverUrl)}" alt="封面" onerror="this.src='assets/default-avatar.png'">
+                <div class="msc-play"><i class="fa-solid fa-play"></i></div>
+            </div>
+            <div class="msc-info">
+                <div class="msc-name">${escapeHtml(m.name || '未知歌曲')}</div>
+                <div class="msc-artist">${escapeHtml(m.artist || '未知')}</div>
+                <div class="msc-meta"><i class="fa-solid fa-music"></i> 音乐分享${m.duration ? ' · ' + escapeHtml(m.duration) : ''}</div>
+            </div>
+        </div>`;
+}
+
 function escapeRegExp(string) {
     return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -3583,6 +3691,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                     momentsHtml +
                     '</div>';
 
+                // 加载完成后内容平滑淡入（仅首次，避免点赞/评论等后续局部刷新时反复淡入）
+                if (!scroll.dataset.faded) {
+                    scroll.classList.add('oc-fade-in');
+                    scroll.dataset.faded = '1';
+                }
+
                 // 内容渲染后更新自绘滚动条
                 if (spScrollbar) requestAnimationFrame(() => spScrollbar.update());
 
@@ -4085,6 +4199,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                         '<div class="gm-members-list">' + membersHtml + '</div>' +
                     '</div>' +
                     btnsHtml;
+
+                // 加载完成后内容平滑淡入（仅首次，避免踢人/重命名等后续重新加载时反复淡入）
+                if (!scroll.dataset.faded) {
+                    scroll.classList.add('oc-fade-in');
+                    scroll.dataset.faded = '1';
+                }
 
                 // 成员项左键点击：弹出成员操作菜单（查看资料 / 设管理员 / 踢出）
                 scroll.querySelectorAll('.gm-member-item[data-uid]').forEach(item => {
@@ -8139,7 +8259,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             return msgDiv;
         }
 
-        if (msgType === 'video') {
+        // 音乐分享卡片：与 msg_type 无关（resource 带 media_url、text 仅带 body 两种都支持）
+        const musicShare = detectMusicShare(msg);
+        if (musicShare) {
+            content = buildMusicShareCardHtml(musicShare);
+        } else if (msgType === 'video') {
             // 默认显示缩略图（thumb_url），点击后原地加载 ArtPlayer（见 messagesContainer 点击委托）
             const vUrl = cachedResolveMediaUrl(msg.media_url || '');
             const tUrl = cachedResolveMediaUrl(msg.thumb_url || msg.media_url || '');
@@ -8793,6 +8917,34 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             audio.play().catch(function() {});
         } else {
             audio.pause();
+        }
+    });
+
+    // 聊天内「音乐分享」卡片：点击跳转音乐广场并用其播放器播放
+    messagesContainer.addEventListener('click', function(e) {
+        const card = e.target.closest('.music-share-card');
+        if (!card) return;
+        const raw = card.dataset.musicJson;
+        if (!raw) return;
+        let m;
+        try { m = JSON.parse(decodeURIComponent(raw)); } catch (err) { return; }
+        if (typeof switchTab === 'function') switchTab('music');
+        if (m.media_url) {
+            // 完整分享（resource 类型带 media_url）：直接用广场播放器播放
+            if (typeof playMusic === 'function') playMusic(m);
+        } else {
+            // 残缺分享（text 类型、服务端未带 media_url）：跳到音乐广场按歌名搜索，由用户点开播放
+            const q = m.name || m.artist || '';
+            if (q) {
+                setTimeout(function () {
+                    const searchTabBtn = document.querySelector('#musicTabs .music-tab-btn[data-music-tab="search"]');
+                    if (searchTabBtn) searchTabBtn.click();
+                    const inp = document.getElementById('musicSearchInput');
+                    if (!inp) return;
+                    inp.value = q;
+                    inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+                }, 80);
+            }
         }
     });
 

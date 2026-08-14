@@ -21,7 +21,7 @@
 
 本项目是初代 Python + Flask 网页版客户端的全新重写：在保留 MomoTalk 界面风格的同时，底层彻底重构为 Rust + Tauri v2 原生桌面客户端，直连后端、免安装运行，并在功能与稳定性上做了大量增强。
 
-> 「吾等所盼乃七之哀叹，吾等所忆乃杰里科的古法。」
+> 吾等所盼乃七之哀叹，吾等所忆乃杰里科的古法
 
 OldChat 由 MCL0 开发，是一个面向老安卓设备的聊天软件；本项目与其官方版本没有直接联系，仅作为其第三方客户端存在。
 
@@ -105,7 +105,7 @@ xattr -cr "/Applications/OldChat For Kivotos.app"
 ```bash
 npm install
 
-# 开发（热调试：前端改动按 Ctrl+R 刷新即可）
+# 开发
 npm run tauri dev
 
 # 打包当前平台
@@ -117,7 +117,7 @@ npm run tauri build
 ## 项目结构
 
 ```
-src/                     前端（原生 HTML/CSS/JS，无框架、无构建步骤）
+src/                     前端 (原生 HTML/CSS/JS)
   index.html             主界面
   app.js                 全部业务逻辑
   app.css                全部样式与主题变量
@@ -148,8 +148,6 @@ docs/                    开发文档、后端 API 文档、官网源码
 本项目是**非官方**的第三方客户端，与 OldChat 官方无隶属关系，亦未获其背书。
 
 《蔚蓝档案》（Blue Archive）及 MomoTalk 相关名称、形象与商标归 NEXON Games / Yostar 等各自权利人所有。本项目仅在界面风格上致敬，不包含也不分发任何游戏素材。
-
-软件按「现状」提供，使用风险自负。
 
 ## 致谢
 
