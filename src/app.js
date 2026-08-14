@@ -5914,9 +5914,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             if (convKey.indexOf('group:') === 0) {
                 const gid = convKey.slice('group:'.length);
                 const grp = contacts.groups.find(g => g.id === gid);
-                notifyNewMessage(((grp && grp.name) || gid) + ' · ' + lookupName(fromUid), messagePreview(m));
+                notifyNewMessage(((grp && grp.name) || gid) + ' · ' + lookupName(fromUid), messagePreview(m), convKey);
             } else {
-                notifyNewMessage(lookupName(fromUid), messagePreview(m));
+                notifyNewMessage(lookupName(fromUid), messagePreview(m), convKey);
             }
         }
         prevPollUnread = Object.assign({}, unreadCounts);
@@ -6563,13 +6563,33 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         return '';
     }
 
-    // 新消息通知：仅 Tauri 生效，由 Rust 端根据窗口状态决定闪烁任务栏 / 系统通知
-    function notifyNewMessage(title, body) {
+    // 通知开关（设置 → 通用）：默认开启
+    function isTaskbarFlashEnabled() {
+        try { return localStorage.getItem('oc_taskbar_flash') !== '0'; } catch (e) { return true; }
+    }
+    function isTrayNotifyEnabled() {
+        try { return localStorage.getItem('oc_tray_notify') !== '0'; } catch (e) { return true; }
+    }
+    // 会话是否被折叠（读 localStorage，独立于侧边栏作用域）
+    function isConvFolded(convKey) {
+        try {
+            const arr = JSON.parse(localStorage.getItem('oc_folded_convs'));
+            return Array.isArray(arr) && arr.indexOf(convKey) >= 0;
+        } catch (e) { return false; }
+    }
+
+    // 新消息通知：仅 Tauri 生效
+    // - 被折叠的会话：直接跳过，不推送任何通知（任务栏/系统通知都不发）
+    // - 其余由 Rust 端按窗口状态 + 两个开关决定：隐藏托盘→系统通知(system) / 最小化→任务栏闪动(flash)
+    function notifyNewMessage(title, body, convKey) {
         if (!IS_TAURI) return;
+        if (convKey && isConvFolded(convKey)) return; // 被折叠的会话不推送通知
         const invoke = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
                        (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);
         if (!invoke) return;
-        invoke('notify_new_message', { title: String(title || ''), body: String(body || '') }).catch(() => {});
+        const flash = isTaskbarFlashEnabled();
+        const system = isTrayNotifyEnabled();
+        invoke('notify_new_message', { title: String(title || ''), body: String(body || ''), flash, system }).catch(() => {});
     }
 
     // 消息预览：非文本类型显示类型标签
@@ -6738,8 +6758,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const d = msg.data || {};
             const fromUid = getFromUid(d);
             if (isSelfUid(fromUid)) return;
-            notifyNewMessage(lookupName(fromUid), messagePreview(d));
             const convKey = `direct:${fromUid}`;
+            notifyNewMessage(lookupName(fromUid), messagePreview(d), convKey);
             // 只在当前会话匹配时才显示消息
             if (!currentConv || currentConv.key !== convKey) {
                 // 多会话消息接受：先暂存消息到后台，切到该会话时秒开
@@ -6778,8 +6798,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 }
             }
             const _grp = contacts.groups.find(g => g.id === groupId);
-            notifyNewMessage(((_grp && _grp.name) || groupId) + ' · ' + lookupName(fromUid), messagePreview(d));
             const convKey = `group:${groupId}`;
+            notifyNewMessage(((_grp && _grp.name) || groupId) + ' · ' + lookupName(fromUid), messagePreview(d), convKey);
             // 只在当前会话匹配时才显示消息
             if (!currentConv || currentConv.key !== convKey) {
                 // 多会话消息接受：先暂存消息到后台，切到该会话时秒开
@@ -12071,6 +12091,30 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
                     默认关闭：新消息一律追加到末尾、不重排（时间戳不精准，乱序插入会让消息看起来错位于历史中间；实时推送本就如此）。开启后，增量/轮询拉取会按时间戳修正顺序，必要时把消息插入到正确位置（开销略大，仅在你确实观察到顺序错乱时开启）。
                 </div>
+                <div class="settings-item" id="settingsTaskbarFlash">
+                    <span class="label">任务栏闪动通知</span>
+                    <span class="value">
+                        <label class="oc-switch">
+                            <input type="checkbox" id="taskbarFlashToggle">
+                            <span class="oc-switch-slider"></span>
+                        </label>
+                    </span>
+                </div>
+                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
+                    开启后，窗口最小化到任务栏时新消息会闪烁任务栏图标（Windows）。关闭则不再闪烁。被折叠的会话始终不会触发任何通知。
+                </div>
+                <div class="settings-item" id="settingsTrayNotify">
+                    <span class="label">托盘状态系统通知</span>
+                    <span class="value">
+                        <label class="oc-switch">
+                            <input type="checkbox" id="trayNotifyToggle">
+                            <span class="oc-switch-slider"></span>
+                        </label>
+                    </span>
+                </div>
+                <div style="padding:8px 14px;font-size:12px;color:var(--secondary-text);">
+                    开启后，窗口隐藏到系统托盘时新消息会弹出系统通知。关闭则不再弹出。被折叠的会话始终不会触发任何通知。
+                </div>
             </div>
             <h3 style="margin-top:20px;">侧边栏</h3>
             <div class="settings-group">
@@ -12178,6 +12222,24 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             sfToggle.addEventListener('change', () => {
                 try { localStorage.setItem('oc_msg_sort_fix', sfToggle.checked ? '1' : '0'); } catch (e) {}
                 if (typeof showAlert === 'function') showAlert('消息排序修正已' + (sfToggle.checked ? '开启' : '关闭') + '，下次拉取消息生效');
+            });
+        }
+        // 任务栏闪动通知开关（设置 → 通用，默认开启）：控制最小化时是否闪烁任务栏图标
+        const tfToggle = document.getElementById('taskbarFlashToggle');
+        if (tfToggle) {
+            tfToggle.checked = isTaskbarFlashEnabled();
+            tfToggle.addEventListener('change', () => {
+                try { localStorage.setItem('oc_taskbar_flash', tfToggle.checked ? '1' : '0'); } catch (e) {}
+                if (typeof showAlert === 'function') showAlert('任务栏闪动通知已' + (tfToggle.checked ? '开启' : '关闭'));
+            });
+        }
+        // 托盘状态系统通知开关（设置 → 通用，默认开启）：控制隐藏到托盘时是否弹出系统通知
+        const tnToggle = document.getElementById('trayNotifyToggle');
+        if (tnToggle) {
+            tnToggle.checked = isTrayNotifyEnabled();
+            tnToggle.addEventListener('change', () => {
+                try { localStorage.setItem('oc_tray_notify', tnToggle.checked ? '1' : '0'); } catch (e) {}
+                if (typeof showAlert === 'function') showAlert('托盘状态系统通知已' + (tnToggle.checked ? '开启' : '关闭'));
             });
         }
         // 重点分区开关（设置 → 通用 → 侧边栏 → 重点分区，默认关闭）

@@ -87,31 +87,36 @@ fn is_window_maximized(window: WebviewWindow) -> bool {
 }
 
 // 新消息通知：根据窗口状态决定通知方式
-// - 隐藏到托盘（不可见）：弹出系统通知
-// - 最小化到任务栏：闪烁任务栏图标（Windows）
+// - 隐藏到托盘（不可见）且 system=true：弹出系统通知
+// - 最小化到任务栏且 flash=true：闪烁任务栏图标（Windows）
 // - 正常显示：不通知
+// flash / system 由前端按「任务栏闪动通知」「托盘状态系统通知」开关传入
 #[cfg(desktop)]
 #[tauri::command]
-fn notify_new_message(window: WebviewWindow, app: tauri::AppHandle, title: String, body: String) {
+fn notify_new_message(window: WebviewWindow, app: tauri::AppHandle, title: String, body: String, flash: bool, system: bool) {
     let visible = window.is_visible().unwrap_or(true);
     let minimized = window.is_minimized().unwrap_or(false);
     if !visible {
-        // 隐藏到托盘：发送系统通知
-        use tauri_plugin_notification::NotificationExt;
-        let _ = app
-            .notification()
-            .builder()
-            .title(&title)
-            .body(&body)
-            .show();
+        // 隐藏到托盘：发送系统通知（受「托盘状态系统通知」开关控制）
+        if system {
+            use tauri_plugin_notification::NotificationExt;
+            let _ = app
+                .notification()
+                .builder()
+                .title(&title)
+                .body(&body)
+                .show();
+        }
     } else if minimized {
-        // 最小化到任务栏：闪烁任务栏图标
-        #[cfg(windows)]
-        {
-            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            if let Ok(handle) = window.window_handle() {
-                if let RawWindowHandle::Win32(win32) = handle.as_raw() {
-                    flash_taskbar_windows(win32.hwnd.get());
+        // 最小化到任务栏：闪烁任务栏图标（受「任务栏闪动通知」开关控制）
+        if flash {
+            #[cfg(windows)]
+            {
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                if let Ok(handle) = window.window_handle() {
+                    if let RawWindowHandle::Win32(win32) = handle.as_raw() {
+                        flash_taskbar_windows(win32.hwnd.get());
+                    }
                 }
             }
         }
