@@ -8448,6 +8448,42 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const time = new Date(msg.created_at * 1000).toLocaleTimeString('zh-CN', { hour12: false });
         let content = '';
 
+        // 上传中占位（仅自己发出的临时消息）：文件/资源显示「文件名 + 进度条」，图片/视频/音频走下方各自的缩略图分支。
+        if (msg._uploading && (msgType === 'resource' || msgType === 'file')) {
+            const wrap = document.createElement('div');
+            wrap.className = `message ${isSelf ? 'self' : 'other'} uploading-file-msg`;
+            wrap.dataset.msgId = msg.id;
+            wrap.dataset.fromUid = fromUid;
+            wrap.dataset.fromName = sender || '';
+            wrap.dataset.msgType = msgType;
+
+            const avatarUrl = isSelf
+                ? myAvatar
+                : (msg.from_avatar || msg.sender_avatar || msg.avatar_url || lookupAvatar(displayUid));
+            const avatarImg = document.createElement('img');
+            avatarImg.src = avatarUrl ? cachedResolveMediaUrl(avatarUrl) : 'assets/default-avatar.png';
+            avatarImg.className = 'msg-avatar';
+            avatarImg.onerror = () => { avatarImg.src = 'assets/default-avatar.png'; };
+            wrap.appendChild(avatarImg);
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.innerHTML = `
+                <div class="upload-file-card">
+                    <div class="ufc-name">${escapeHtml(msg._fileName || '文件')}</div>
+                    <div class="ufc-progress"><div class="ufc-progress-fill"></div></div>
+                </div>`;
+            wrap.appendChild(contentDiv);
+
+            const timeDiv = document.createElement('div');
+            timeDiv.className = 'message-time';
+            timeDiv.textContent = time;
+            wrap.appendChild(timeDiv);
+
+            wrap.dataset.rawBody = JSON.stringify(msg) || '';
+            return wrap;
+        }
+
         if (msgType === 'image') {
             // 新格式：优先拉取缩略图(thumb_url → media_url)，原图留作「查看原图」
             const thumbUrl = msg.thumb_url || msg.media_url || '';
@@ -10247,8 +10283,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const formData = new FormData();
         formData.append('file', file);
 
-        // 立即显示发送中消息（半透明）
+        // 立即显示发送中消息：图片=缩略图气泡，其余=进度条卡片
         const tempId = 'temp_' + Date.now();
+        const fileName = (file.name || '').toLowerCase();
+        const isImage = /\.(jpg|jpeg|png|gif|webp)$/.test(fileName);
+        const tempType = isImage ? 'image' : 'resource';
         const tempMsg = {
             id: tempId,
             from_uid: myDisplayUid,
@@ -10256,9 +10295,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             from_name: myName,
             from_avatar: myAvatar || '',
             body: '',
-            msg_type: 'resource',
-            media_url: URL.createObjectURL(file),
+            msg_type: tempType,
+            media_url: isImage ? URL.createObjectURL(file) : '',
             thumb_url: null,
+            _uploading: true,
+            _fileName: file.name || '文件',
             created_at: Math.floor(Date.now() / 1000),
         };
         if (currentConv.type === 'group') {
@@ -10267,7 +10308,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         appendMessage(tempMsg, currentConv.key, seenMsgIds[currentConv.key]);
         scrollToBottom(true, true);
         const tempEl = messagesContainer.querySelector(`[data-msg-id="${tempId}"]`);
-        if (tempEl) {
+        // 仅对图片缩略图做半透明；文件进度条卡片本身已表达「上传中」
+        if (tempEl && isImage) {
             tempEl.style.opacity = '0.5';
         }
 
