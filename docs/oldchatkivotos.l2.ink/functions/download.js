@@ -117,8 +117,8 @@ const CSS = '' +
     '.btn:active{background:#fff;color:#000;transform:translate(0,0);box-shadow:0 0 0 #000}\n' +
     '.btn:focus-visible{background:#000;color:#fff;outline:none}\n' +
     '.tag{display:inline-block;font-size:12px;font-weight:700;color:#fff;background:#000;padding:2px 8px;margin-left:8px;vertical-align:middle;border-radius:0}\n' +
-    '.dls{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin:10px 0 0}\n' +
-    '@media(max-width:400px){.dls{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}}\n' +
+    '.dls{display:grid;grid-template-columns:repeat(auto-fill,minmax(256px,1fr));gap:10px;margin:10px 0 0}\n' +
+    '@media(max-width:400px){.dls{grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}}\n' +
     '.dls .btn{margin:0;text-align:center}\n' +
     'ul{padding-left:20px}\n' +
     'li{margin:6px 0}\n' +
