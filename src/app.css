@@ -2004,18 +2004,19 @@ body::-webkit-scrollbar {
 	display: flex;
 	align-items: center;
 	gap: 12px;
-	padding: 10px;
+	padding: 0;
 	border-radius: 12px;
-	background: var(--hover);
-	border: 1px solid var(--border);
+	background: transparent;
+	border: none;
 	cursor: pointer;
 	user-select: none;
 	max-width: 320px;
-	transition: background-color 0.15s ease, border-color 0.15s ease;
+	transition: opacity 0.15s ease;
 }
 .music-share-card:hover {
-	background: var(--active);
-	border-color: var(--accent);
+	background: transparent;
+	border-color: transparent;
+	opacity: 0.85;
 }
 .music-share-card .msc-cover {
 	position: relative;
