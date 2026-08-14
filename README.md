@@ -2,14 +2,17 @@
 
 # OldChat For Kivotos Next
 
-**桃信旧聊** —— 为《蔚蓝档案》基沃托斯的 Sensei 量身打造的第三方 OldChat 桌面客户端
+**桃信旧聊** —— 为《蔚蓝档案》中基沃托斯的 Sensei 量身打造的第三方 OldChat 桌面客户端
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-2ea44f.svg)](https://github.com/LGCR837/oldchat-kivotos-next/releases)
 [![Built with Tauri](https://img.shields.io/badge/Built%20with-Tauri%20v2-24c8db.svg)](https://v2.tauri.app)
 [![Language](https://img.shields.io/badge/Language-Rust%20%26%20JavaScript-orange.svg)](https://github.com/LGCR837/oldchat-kivotos-next)
 
-[官网](https://ockn.reverie.dpdns.org) · [下载](https://ockn.reverie.dpdns.org/download) · [GitHub Releases](https://github.com/LGCR837/oldchat-kivotos-next/releases) · [OldChat 官网](http://oc.mcl0.dpdns.org/)
+[OCKN 官网](https://ockn.reverie.dpdns.org) · [下载页](https://ockn.reverie.dpdns.org/download) · [GitHub Releases](https://github.com/LGCR837/oldchat-kivotos-next/releases) · [OldChat 官网](https://oc.mcl0.dpdns.org/)
+
+
+> 吾等所盼乃七之哀叹，吾等所忆乃杰里科的古法
 
 </div>
 
@@ -17,11 +20,9 @@
 
 ## 关于本项目
 
-**OldChat For Kivotos Next**（俗称「桃信旧聊」，即 OldChat 基沃托斯特供版）是一个非官方的第三方 [OldChat](http://oc.mcl0.dpdns.org/) 桌面客户端，专门为《蔚蓝档案》的基沃托斯量身定制，界面风格致敬 MomoTalk。
+**OldChat For Kivotos Next**（俗称「桃信旧聊」，即 OldChat 基沃托斯特供版）是一个非官方的第三方 [OldChat](https://oc.mcl0.dpdns.org/) 桌面客户端，专为基沃托斯的 Sensei 们量身定制，界面风格致敬 MomoTalk 的风格但是有特色修改。
 
-本项目是初代 Python + Flask 网页版客户端的全新重写：在保留 MomoTalk 界面风格的同时，底层彻底重构为 Rust + Tauri v2 原生桌面客户端，直连后端、免安装运行，并在功能与稳定性上做了大量增强。
-
-> 吾等所盼乃七之哀叹，吾等所忆乃杰里科的古法
+本项目是初代 [OldChat For Kivotos](https://codeberg.org/lgcr837/oldchat-kivotos) 这个 Python + Flask 网页版客户端的全新重写。在保留 MomoTalk 界面风格的同时，底层彻底重构为 Rust + Tauri v2 原生桌面客户端，直连后端，并在功能与稳定性上做了大量增强。
 
 OldChat 由 MCL0 开发，是一个面向老安卓设备的聊天软件；本项目与其官方版本没有直接联系，仅作为其第三方客户端存在。
 
@@ -69,9 +70,9 @@ OldChat 由 MCL0 开发，是一个面向老安卓设备的聊天软件；本项
 
 | 平台 | 架构 | 产物 |
 | --- | --- | --- |
-| Windows | x86_64 / i686 / aarch64 | 免安装单文件 `.exe` |
-| Windows | x86_64 / aarch64 | NSIS 安装包 |
-| Linux | x86_64 / aarch64 | 免安装单文件、AppImage、deb、rpm |
+| Windows | amd64 / i386 / arm64 | 免安装单文件 `.exe` |
+| Windows | amd64 / arm64 | NSIS 安装包 |
+| Linux | amd64 / arm64 | 免安装单文件、AppImage、deb、rpm |
 | macOS | Apple Silicon / Intel | `.dmg`（未签名） |
 
 Windows 免安装单文件约 12–15 MB，双击即用。
@@ -147,15 +148,17 @@ docs/                    开发文档、后端 API 文档、官网源码
 
 本项目是**非官方**的第三方客户端，与 OldChat 官方无隶属关系，亦未获其背书。
 
-《蔚蓝档案》（Blue Archive）及 MomoTalk 相关名称、形象与商标归 NEXON Games / Yostar 等各自权利人所有。本项目仅在界面风格上致敬，不包含也不分发任何游戏素材。
+《蔚蓝档案》(Blue Archive) 及 MomoTalk 相关名称、形象与商标归 NEXON Games / Yostar 等所有。本项目仅在界面风格上致敬，不包含也不分发任何游戏素材。
 
-## 致谢
+## 特别鸣谢
 
-[Tauri](https://tauri.app/) · [Font Awesome](https://fontawesome.com/) · [ArtPlayer](https://artplayer.org/) · [Dumogu Scrollbar](https://github.com/dumogu/dumogu-scrollbar) · [Fengari](https://fengari.io/)
+[OlChat](https://oc.mcl0.dpdns.org) · [Tauri](https://tauri.app/) · [Font Awesome](https://fontawesome.com/) · [ArtPlayer](https://artplayer.org/) · [Dumogu Scrollbar](https://github.com/dumogu/dumogu-scrollbar) · [Fengari](https://fengari.io/)
 
 ## 许可
 
 本项目基于 [MIT License](LICENSE) 开源。
+
+请遵守开源协议谢谢喵~
 
 Copyright (c) 2026 **Aoharu Reverie** (LGCR837)
 
