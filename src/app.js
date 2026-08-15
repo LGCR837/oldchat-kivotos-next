@@ -9104,7 +9104,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             msgDiv.classList.add('burn-message');
             const burnRealHtml = bubble.innerHTML;
             bubble.classList.add('burn-locked');
-            bubble.innerHTML = '<span class="burn-lock"><i class="fa-solid fa-fire"></i> 阅后即焚 · 点击查看</span>';
+            bubble.innerHTML = '<span class="burn-lock">🔥 阅后即焚</span>';
             bubble.addEventListener('click', (e) => {
                 if (bubble.dataset.burnRevealed === '1') return; // 已揭示：放行内部交互（如视频播放）
                 e.stopPropagation();
@@ -9115,7 +9115,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 // 计时仅在点击查看后开始（而非收到即计时）
                 setTimeout(() => {
                     bubble.classList.add('burn-destroyed');
-                    bubble.innerHTML = '<span class="burn-lock burn-destroyed">🔥 已焚毁</span>';
+                    bubble.innerHTML = '<span class="burn-lock burn-destroyed">已焚毁</span>';
                     msgDiv.classList.add('burned');
                 }, burnSeconds * 1000);
             });
