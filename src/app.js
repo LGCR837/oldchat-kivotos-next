@@ -8403,11 +8403,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (_switchingConv) return;
         _switchingConv = true;
         try {
-        // 切换会话时隐藏 typing 指示器（不清除 Map，保留其他会话的状态）
-        if (typingIndicator) {
-            typingIndicator.style.display = 'none';
-            typingIndicator.innerHTML = '';
-        }
+        // 切换会话时隐藏 typing 指示器（不清除 Map，保留其他会话的状态）；
+        // 复用 beginTypingLeave() 走 typingLeave 淡出+下移退出动画，与自动超时一致
+        if (typingIndicator) { beginTypingLeave(); }
         // 淡出动画
         messagesContainer.classList.remove('fade-in');
         messagesContainer.classList.add('fade-out');
@@ -9024,14 +9022,18 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 const iconHtml = cover
                     ? `<img class="rp-cover" src="${escapeHtml(cachedResolveMediaUrl(cover))}" onerror="window.rpCoverOnError(this)">`
                     : `<div class="rp-icon">🧧</div>`;
+                const rpClaimed = claimedRedPackets.has(packetId);
+                const rpStatusText = rpClaimed
+                    ? (claimedRpAmount[packetId] ? '已领取 ' + claimedRpAmount[packetId] : '已领取')
+                    : '点击领取';
                 content = `
-                    <div class="red-packet-card" data-packet-id="${escapeHtml(packetId)}" data-claimed="false" data-title="${escapeHtml(title)}" data-cover="${escapeHtml(cover)}">
+                    <div class="red-packet-card" data-packet-id="${escapeHtml(packetId)}" data-claimed="${rpClaimed ? 'true' : 'false'}" data-title="${escapeHtml(title)}" data-cover="${escapeHtml(cover)}">
                         ${iconHtml}
                         <div class="rp-info">
                             <div class="rp-title">${escapeHtml(title)}</div>
                             <div class="rp-desc">总额 ${escapeHtml(String(totalAmount))} · ${escapeHtml(String(totalCount))}个</div>
                         </div>
-                        <div class="rp-status">点击领取</div>
+                        <div class="rp-status">${rpStatusText}</div>
                     </div>`;
             } else {
                 content = `[红包] ${escapeHtml(msg.body || '')}`;
@@ -10256,6 +10258,51 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (img && img.parentNode) img.replaceWith(d);
     };
 
+    // 已领取红包集合：跨消息重渲染保留「已领取」状态，避免点击领取后状态丢失 / 卡在「领取中…」
+    const claimedRedPackets = new Set();
+    const claimedRpAmount = Object.create(null);
+    function setRpStatus(pid, text) {
+        const nodes = document.querySelectorAll('.red-packet-card');
+        for (const n of nodes) {
+            if (n.dataset.packetId === pid) {
+                const s = n.querySelector('.rp-status');
+                if (s) s.textContent = text;
+                return n;
+            }
+        }
+        return null;
+    }
+
+    // 红包右键菜单（查看详细 / 复制ID）—— 默认不显示详情，仅经此菜单「查看红包详细」打开
+    function showRedPacketMenu(card, x, y) {
+        const packetId = card.dataset.packetId;
+        const menu = document.createElement('div');
+        menu.className = 'custom-context-menu';
+        menu.style.left = x + 'px';
+        menu.style.top = y + 'px';
+        menu.innerHTML =
+            '<div class="context-menu-item" data-action="detail">查看红包详细</div>' +
+            '<div class="context-menu-item" data-action="copy-id">复制红包ID</div>';
+        document.body.appendChild(menu);
+        requestAnimationFrame(() => { clampContextMenu(menu, x, y); menu.classList.add('show'); });
+        contextMenu = menu;
+        menu.addEventListener('click', (ev) => {
+            const action = ev.target.dataset.action;
+            if (action === 'detail') {
+                openRedPacketDetail(packetId, card);
+            } else if (action === 'copy-id') {
+                const text = packetId || '';
+                if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(() => fallbackCopyText(text));
+                else fallbackCopyText(text);
+            }
+            hideContextMenu();
+        });
+        const closeHandler = (ev) => {
+            if (!menu.contains(ev.target)) { hideContextMenu(); document.removeEventListener('click', closeHandler); }
+        };
+        setTimeout(() => document.addEventListener('click', closeHandler), 0);
+    }
+
     // 红包详情弹窗（领取后再次点击 / 右键「查看详细」均打开）
     async function openRedPacketDetail(packetId, cardEl) {
         if (!packetId) return;
@@ -10340,14 +10387,16 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                             });
                             const d2 = await r2.json();
                             if (d2.error) { showAlert(d2.error); claimBtn.disabled = false; claimBtn.textContent = '领取红包'; return; }
-                            if (cardEl) {
-                                cardEl.dataset.claimed = 'true';
-                                cardEl.style.pointerEvents = 'none';
-                                const st = cardEl.querySelector('.rp-status');
-                                const amt = d2.amount != null ? d2.amount : '';
-                                if (st) st.textContent = amt ? `已领取 ${amt}` : '已领取';
-                                cardEl.style.opacity = '0.7';
-                            }
+                if (cardEl) {
+                    claimedRedPackets.add(packetId);
+                    if (d2.amount != null) claimedRpAmount[packetId] = d2.amount;
+                    cardEl.dataset.claimed = 'true';
+                    cardEl.style.pointerEvents = 'none';
+                    const st = cardEl.querySelector('.rp-status');
+                    const amt = d2.amount != null ? d2.amount : '';
+                    if (st) st.textContent = amt ? `已领取 ${amt}` : '已领取';
+                    cardEl.style.opacity = '0.7';
+                }
                             loadDetail();
                         } catch (e) { showAlert('领取失败'); claimBtn.disabled = false; claimBtn.textContent = '领取红包'; }
                     });
@@ -10568,6 +10617,14 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             if (window.__gmShowMemberActions) {
                 window.__gmShowMemberActions(member, gmMyRole, e.clientX, e.clientY);
             }
+            return;
+        }
+
+        // 2.6 红包卡片：弹出专属右键菜单（查看详细 / 复制ID），不与聊天菜单复用
+        const rpCard = e.target.closest('.red-packet-card');
+        if (rpCard) {
+            e.preventDefault();
+            showRedPacketMenu(rpCard, e.clientX, e.clientY);
             return;
         }
 
@@ -11253,17 +11310,19 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     document.addEventListener('click', async (e) => {
         const card = e.target.closest('.red-packet-card');
         if (!card) return;
-        const claimed = card.dataset.claimed === 'true';
-        // 已领取：再次点击打开详情（领取后查看详细）
-        if (claimed) { openRedPacketDetail(card.dataset.packetId, card); return; }
-
         const packetId = card.dataset.packetId;
         if (!packetId) return;
 
-        // 立即禁用，避免重复点击
-        card.dataset.claimed = 'true';
+        // 已领取：再次点击打开详情（领取后查看详细）
+        if (claimedRedPackets.has(packetId)) {
+            openRedPacketDetail(packetId, card);
+            return;
+        }
+
+        // 立即禁用，避免重复点击；并记录到集合（跨重渲染保留状态）
+        claimedRedPackets.add(packetId);
+        setRpStatus(packetId, '领取中...');
         card.style.pointerEvents = 'none';
-        card.querySelector('.rp-status').textContent = '领取中...';
 
         try {
             const res = await apiFetch('/v1/redpackets/claim', {
@@ -11275,36 +11334,32 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             if (data.error) {
                 // 已领过 → 直接进入详情（而非报错）
                 if (String(data.error).toLowerCase().includes('already')) {
+                    claimedRedPackets.add(packetId);
+                    setRpStatus(packetId, '已领取');
                     openRedPacketDetail(packetId, card);
                     return;
                 }
-                card.dataset.claimed = 'false';
+                claimedRedPackets.delete(packetId);
+                setRpStatus(packetId, data.error);
                 card.style.pointerEvents = '';
-                card.querySelector('.rp-status').textContent = data.error;
                 card.style.opacity = '0.7';
             } else {
                 // 领取成功，显示金额（如果接口返回 amount 字段）
                 const amount = data.amount !== undefined ? data.amount : '';
-                card.querySelector('.rp-status').textContent = amount ? `已领取 ${amount}` : '已领取';
-                card.dataset.amount = amount;
+                claimedRpAmount[packetId] = amount;
+                setRpStatus(packetId, amount ? `已领取 ${amount}` : '已领取');
                 card.style.opacity = '0.7';
                 card.style.cursor = 'default';
             }
         } catch (err) {
-            card.dataset.claimed = 'false';
+            claimedRedPackets.delete(packetId);
+            setRpStatus(packetId, '网络错误');
             card.style.pointerEvents = '';
-            card.querySelector('.rp-status').textContent = '网络错误';
             card.style.opacity = '0.7';
         }
     });
 
-    // 右键红包 → 查看详细
-    document.addEventListener('contextmenu', (e) => {
-        const card = e.target.closest('.red-packet-card');
-        if (!card) return;
-        e.preventDefault();
-        openRedPacketDetail(card.dataset.packetId, card);
-    });
+    // 红包右键已改为专属菜单（showRedPacketMenu），由全局 contextmenu 处理，此处不再直开详情。
 
     // ===== 收藏表情（本地收藏）=====
     const COLLECTED_EMOJI_KEY = 'oc_collected_emojis';
@@ -14154,10 +14209,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const cid = channelId || (channelMeta && channelMeta.id) || '';
         const div = document.createElement('div');
         div.className = 'channel-post';
-        // 发帖人优先取帖子自带作者字段；官方频道多为只读内容流，作者字段缺失时回退到频道自身身份
-        const authorName = post.from_name || (post.author && post.author.name) || post.name
+        // 发帖人优先取后端返回的真实作者字段（channel_posts 表：author_name/author_avatar/author_uid）；
+        // 本地乐观帖用 from_name/from_avatar；两者皆缺时（官方只读频道流）才回退到频道自身身份
+        const authorName = post.author_name || post.from_name || (post.author && post.author.name) || post.name
             || (channelMeta && channelMeta.name) || '频道';
-        const authorAvatar = post.from_avatar || post.sender_avatar || post.avatar_url
+        const authorAvatar = post.author_avatar || post.from_avatar || post.sender_avatar || post.avatar_url
             || (post.author && (post.author.avatar_url || post.author.avatar))
             || (channelMeta && channelMeta.avatar_url) || '';
         const time = fmtChannelTime(post.created_at || post.created_at_ts);

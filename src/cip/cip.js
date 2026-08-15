@@ -41,6 +41,80 @@
     return Promise.resolve(null); // 无 subtle 时跳过校验
   }
 
+  // 云端小程序文件缓存：默认 4h。存于 localStorage，键 cip_cache_<k>，值为 {ts,data}。
+  var CLOUD_CACHE_MS = 4 * 60 * 60 * 1000;
+  function cacheKey(k) { return 'cip_cache_' + k; }
+  function cacheGet(k) {
+    try {
+      var s = localStorage.getItem(cacheKey(k));
+      if (!s) return null;
+      var o = JSON.parse(s);
+      if (!o || typeof o.ts !== 'number' || !o.data) return null;
+      if (Date.now() - o.ts > CLOUD_CACHE_MS) return null; // 过期
+      return o.data;
+    } catch (e) { return null; }
+  }
+  function cacheSet(k, data) {
+    try { localStorage.setItem(cacheKey(k), JSON.stringify({ ts: Date.now(), data: data })); } catch (e) {}
+  }
+  function cacheDrop(k) { try { localStorage.removeItem(cacheKey(k)); } catch (e) {} }
+
+  // 字节可读化（用于「下载量」显示）
+  function fmtBytes(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(2) + ' MB';
+  }
+
+  // 服务端 manifest 条目 → 内部 app 对象
+  function mapRemoteApp(a) {
+    return {
+      id: a.id,
+      name: a.name || a.id,
+      description: a.description || '',
+      version: a.version || '',
+      permissions: a.permissions || [],
+      allowed_hosts: a.allowed_hosts || [],
+      kind: 'remote'
+    };
+  }
+
+  // 流式下载（带进度回调）。直接用 window.__tauriHttpFetchImpl（plugin:http），
+  // 其返回标准 Response，body 为 ReadableStream，headers 含 content-length。
+  // 边读边累计字节调用 onProgress(received, total)，最后返回完整文本。
+  function fetchWithProgress(url, headers, onProgress) {
+    var impl = window.__tauriHttpFetchImpl;
+    var p = impl ? impl(url, { method: 'GET', headers: headers }) : fetch(url, { method: 'GET', headers: headers });
+    return Promise.resolve(p).then(function (res) {
+      if (!res.ok) {
+        return res.text().then(function (t) { throw new Error('HTTP ' + res.status + (t ? ': ' + t.slice(0, 200) : '')); });
+      }
+      var total = 0;
+      try { total = parseInt((res.headers && res.headers.get ? res.headers.get('content-length') : '') || '0', 10) || 0; } catch (e) {}
+      if (!res.body || !res.body.getReader) {
+        return res.text().then(function (t) { var l = (t || '').length; if (onProgress) onProgress(l, l); return t; });
+      }
+      var reader = res.body.getReader();
+      var chunks = [];
+      var received = 0;
+      function pump() {
+        return reader.read().then(function (r) {
+          if (r.done) return;
+          var v = r.value;
+          if (v && v.byteLength) { received += v.byteLength; chunks.push(v); if (onProgress) onProgress(received, total); }
+          return pump();
+        });
+      }
+      return pump().then(function () {
+        var buf = new Uint8Array(received);
+        var pos = 0;
+        chunks.forEach(function (c) { buf.set(c, pos); pos += c.byteLength; });
+        return new TextDecoder('utf-8').decode(buf);
+      });
+    });
+  }
+
   // 调 Rust 命令（与 app.js getInvoke() 同款写法）
   function cipInvoke(cmd, args) {
     var invoke = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
@@ -52,6 +126,8 @@
   var Controller = {
     _list: [],
     _engine: null,
+    _last: null, // 最后执行的云端小程序脚本（供「重载」不重新下载直接重跑）
+    _lastApp: null, // 当前运行的小程序（供运行区右键菜单使用）
 
     open: function () {
       // 跳转到小程序页面（发现页的独立面板）
@@ -75,7 +151,7 @@
       var self = this;
       var listEl = document.getElementById('cipAppList');
       listEl.innerHTML = '<div class="cip-placeholder">加载清单中…</div>';
-      // 本地与官方清单独立加载，任一失败都不影响另一部分
+      // 本地与云端清单独立加载，任一失败都不影响另一部分
       Promise.allSettled([this.loadLocal(), this.loadRemote()]).then(function (r) {
         var list = [];
         if (r[0].status === 'fulfilled') list = list.concat(r[0].value);
@@ -100,20 +176,18 @@
         });
       });
     },
-    // 官方小程序（服务端 manifest）
-    loadRemote: function () {
+    // 云端小程序（服务端 manifest），默认缓存 4h
+    loadRemote: function (force) {
+      if (!force) {
+        var cached = cacheGet('manifest');
+        if (cached && Array.isArray(cached.apps)) {
+          return Promise.resolve(cached.apps.map(mapRemoteApp));
+        }
+      }
       return getJSON(manifestUrl()).then(function (data) {
-        return (data && data.apps || []).map(function (a) {
-          return {
-            id: a.id,
-            name: a.name || a.id,
-            description: a.description || '',
-            version: a.version || '',
-            permissions: a.permissions || [],
-            allowed_hosts: a.allowed_hosts || [],
-            kind: 'remote'
-          };
-        });
+        var apps = (data && data.apps) || [];
+        cacheSet('manifest', { apps: apps });
+        return apps.map(mapRemoteApp);
       });
     },
     renderList: function () {
@@ -152,7 +226,13 @@
         right.style.flexShrink = '0';
         var badge = document.createElement('span');
         badge.className = 'cip-badge ' + (app.kind === 'local' ? 'cip-badge-local' : 'cip-badge-remote');
-        badge.textContent = app.kind === 'local' ? '本地' : '官方';
+        badge.textContent = app.kind === 'local' ? '本地' : '云端';
+        // 已「赋予所有权限 / 退出沙箱」的云端小程序：徽标加标记，提示用户
+        if (app.kind === 'remote' && isGrantedAll(app.id)) {
+          badge.classList.add('cip-badge-granted');
+          badge.title = '已赋予全部权限（退出沙箱运行）';
+          badge.textContent = '云端·全权限';
+        }
         right.appendChild(badge);
         if (app.kind === 'local') {
           var del = document.createElement('button');
@@ -179,11 +259,13 @@
       if (itemEl) itemEl.classList.add('active');
       this.runApp(app);
     },
-    runApp: function (app) {
+    runApp: function (app, force) {
       var self = this;
       var area = document.getElementById('cipRunArea');
-      area.innerHTML = '<div class="cip-placeholder">加载「' + (app.name || app.id) + '」中…</div>';
+      this._lastApp = app;
+      applyClarity(); // 保持运行区「文本清晰模式」状态
       if (app.kind === 'local') {
+        area.innerHTML = '<div class="cip-placeholder">加载「' + (app.name || app.id) + '」中…</div>';
         // 本地小程序：读取入口脚本 + 包内资源（不做 sha256 远程校验）
         Promise.all([
           cipInvoke('read_cip_app', { id: app.id }),
@@ -198,26 +280,97 @@
         });
         return;
       }
-      // 官方小程序：拉取脚本 + sha256 校验；资源走 /lua-assets/<id>/<path>
-      getJSON(appUrl(app.id)).then(function (data) {
-        var script = data && data.script;
-        if (!script) { area.innerHTML = '<div class="cip-error">脚本为空</div>'; return; }
-        sha256Hex(script).then(function (hash) {
-          var expected = (data.sha256 || '').toLowerCase();
-          if (expected && hash && hash !== expected) {
-            area.innerHTML = '<div class="cip-error">校验失败：sha256 不匹配（期望 ' +
-              expected.slice(0, 12) + '… 实际 ' + hash.slice(0, 12) + '…）</div>';
-            return;
-          }
-          var resolver = function (path) {
-            var p = String(path || '').replace(/^assets\//, '');
-            return origin() + '/lua-assets/' + app.id + '/' + p;
-          };
-          self.execute(app, script, resolver);
+      // 云端小程序：优先读缓存（默认 4h），否则流式下载 + 进度 + sha256 校验；资源走 /lua-assets/<id>/<path>
+      var prog = this._showLoading(area, app);
+      var cached = force ? null : cacheGet('app_' + app.id);
+      if (cached && cached.script) {
+        prog.note('已从缓存读取（4h 内有效，右键可刷新）');
+        prog.done();
+        this._executeFromData(app, cached);
+        return;
+      }
+      prog.note('连接服务器…');
+      fetchWithProgress(appUrl(app.id), {
+        'Authorization': 'Bearer ' + getToken(),
+        'Accept': 'application/json'
+      }, function (received, total) { prog.update(received, total); })
+        .then(function (text) {
+          var data;
+          try { data = JSON.parse(text); } catch (e) { throw new Error('响应不是合法 JSON'); }
+          var script = data && data.script;
+          if (!script) { area.innerHTML = '<div class="cip-error">脚本为空</div>'; return; }
+          cacheSet('app_' + app.id, data);
+          prog.note('校验中…');
+          sha256Hex(script).then(function (hash) {
+            var expected = (data.sha256 || '').toLowerCase();
+            if (expected && hash && hash !== expected) {
+              area.innerHTML = '<div class="cip-error">校验失败：sha256 不匹配（期望 ' +
+                expected.slice(0, 12) + '… 实际 ' + hash.slice(0, 12) + '…）</div>';
+              return;
+            }
+            prog.done();
+            self._executeFromData(app, data);
+          });
+        })
+        .catch(function (err) {
+          area.innerHTML = '<div class="cip-error">加载失败：' + ((err && err.message) || err) + '</div>';
         });
-      }).catch(function (err) {
-        area.innerHTML = '<div class="cip-error">加载失败：' + ((err && err.message) || err) + '</div>';
-      });
+    },
+    // 渲染右侧加载进度 UI，返回更新器
+    _showLoading: function (area, app) {
+      area.innerHTML = '';
+      var wrap = document.createElement('div');
+      wrap.className = 'cip-loading';
+      var title = document.createElement('div');
+      title.className = 'cip-loading-title';
+      title.textContent = '加载「' + (app.name || app.id) + '」中…';
+      var barWrap = document.createElement('div');
+      barWrap.className = 'cip-progress';
+      var bar = document.createElement('div');
+      bar.className = 'cip-progress-bar';
+      barWrap.appendChild(bar);
+      var meta = document.createElement('div');
+      meta.className = 'cip-loading-meta';
+      meta.textContent = '准备下载…';
+      wrap.appendChild(title);
+      wrap.appendChild(barWrap);
+      wrap.appendChild(meta);
+      area.appendChild(wrap);
+      return {
+        update: function (received, total) {
+          if (total && total > 0) {
+            var pct = Math.min(100, Math.round(received / total * 100));
+            bar.style.width = pct + '%';
+            meta.textContent = fmtBytes(received) + ' / ' + fmtBytes(total) + '（' + pct + '%）';
+          } else {
+            bar.style.width = '100%';
+            meta.textContent = '已下载 ' + fmtBytes(received);
+          }
+        },
+        note: function (t) { meta.textContent = t; },
+        done: function () { bar.style.width = '100%'; }
+      };
+    },
+    // 由缓存/网络拿到的 app 数据执行（构建云端资源解析器）
+    _executeFromData: function (app, data) {
+      var script = data && data.script;
+      if (!script) { var area = document.getElementById('cipRunArea'); area.innerHTML = '<div class="cip-error">脚本为空</div>'; return; }
+      var resolver = function (path) {
+        var p = String(path || '').replace(/^assets\//, '');
+        return origin() + '/lua-assets/' + app.id + '/' + p;
+      };
+      // 记一份内存副本，供「重载」不重新下载直接重跑
+      this._last = { id: app.id, script: script, resolver: resolver };
+      this.execute(app, script, resolver);
+    },
+    // 重载：不重新下载，直接重跑内存中最后执行的脚本（无则退回缓存/下载）
+    reloadApp: function (app) {
+      var last = this._last;
+      if (last && last.id === app.id && last.script) {
+        this.execute(app, last.script, last.resolver);
+      } else {
+        this.runApp(app, false);
+      }
     },
     // 由包内资源列表构建 path -> data URI 解析器（兼容 assets/ 前缀）
     _buildAssetResolver: function (assets, id) {
@@ -244,12 +397,21 @@
         // 切换小程序前先销毁上一个 Lua state，避免定时器/回调打到已废弃的 state
         this._teardown();
 
-        // 权限 / 外网白名单 / 资源解析器透传给引擎与宿主
-        var opts = {
-          permissions: app.permissions || [],
-          allowedHosts: app.allowed_hosts || [],
-          isRemote: app.kind === 'remote'
-        };
+        // 权限 / 外网白名单 / 资源解析器透传给引擎与宿主。
+        // 若已「赋予所有权限」，则退出沙箱：权限与白名单全部放行（不受清单限制）。
+        var sandbox = !isGrantedAll(app.id);
+        var opts = sandbox
+          ? {
+              permissions: app.permissions || [],
+              allowedHosts: app.allowed_hosts || [],
+              isRemote: app.kind === 'remote'
+            }
+          : {
+              permissions: ['*'],
+              allowedHosts: ['*'],
+              isRemote: app.kind === 'remote',
+              sandbox: false
+            };
         var ctx = { appId: app.id, toast: this.toast.bind(this), engine: null, assetResolver: resolver || null };
         var host = window.CipHost.makeHost(ctx);
         var engine = new window.CipEngine(app.id, host, opts);
@@ -356,6 +518,154 @@
     if (up && !up.dataset.bound) {
       up.dataset.bound = '1';
       up.addEventListener('click', function () { Controller.uploadApp(); });
+    }
+  })();
+
+  // 「赋予所有权限 / 退出沙箱」：永久生效（localStorage），需用户弹窗确认。
+  var ALL_PERMS_PREFIX = 'cip_perms_all_';
+  function isGrantedAll(id) {
+    try { return localStorage.getItem(ALL_PERMS_PREFIX + id) === '1'; } catch (e) { return false; }
+  }
+  function setGrantedAll(id, v) {
+    try { if (v) localStorage.setItem(ALL_PERMS_PREFIX + id, '1'); else localStorage.removeItem(ALL_PERMS_PREFIX + id); } catch (e) {}
+  }
+
+  // 右键菜单：复用全局 .custom-context-menu 样式（与聊天红包菜单外观一致），不再自绘丑样式
+  var _ctxMenu = null;
+  function _closeCtxMenu() {
+    if (_ctxMenu && _ctxMenu.parentNode) _ctxMenu.parentNode.removeChild(_ctxMenu);
+    _ctxMenu = null;
+    document.removeEventListener('click', _onDocClickMenu, true);
+    document.removeEventListener('keydown', _onEscMenu, true);
+  }
+  function _onDocClickMenu(e) { if (!_ctxMenu || !_ctxMenu.contains(e.target)) _closeCtxMenu(); }
+  function _onEscMenu(e) { if (e.key === 'Escape') _closeCtxMenu(); }
+
+  // items: [{ label, run, danger?, checked? }]
+  function _openNativeMenu(items, x, y) {
+    _closeCtxMenu();
+    var menu = document.createElement('div');
+    menu.className = 'custom-context-menu';
+    items.forEach(function (d) {
+      var el = document.createElement('div');
+      el.className = 'context-menu-item' + (d.danger ? ' danger' : '');
+      el.textContent = (d.checked ? '✓ ' : '') + d.label;
+      el.addEventListener('click', function (e) { e.stopPropagation(); _closeCtxMenu(); d.run(); });
+      menu.appendChild(el);
+    });
+    document.body.appendChild(menu);
+    // 定位：避免溢出视口
+    var mw = menu.offsetWidth, mh = menu.offsetHeight;
+    if (x + mw > window.innerWidth) x = Math.max(4, window.innerWidth - mw - 4);
+    if (y + mh > window.innerHeight) y = Math.max(4, window.innerHeight - mh - 4);
+    menu.style.left = x + 'px';
+    menu.style.top = y + 'px';
+    requestAnimationFrame(function () { menu.classList.add('show'); });
+    _ctxMenu = menu;
+    setTimeout(function () {
+      document.addEventListener('click', _onDocClickMenu, true);
+      document.addEventListener('keydown', _onEscMenu, true);
+    }, 0);
+  }
+
+  // 列表项右键菜单：本地/云端都弹；「重新下载」仅云端有
+  function _openCtxMenu(app, x, y) {
+    var granted = isGrantedAll(app.id);
+    var items = [];
+    if (app.kind === 'remote') {
+      // 重新下载：清缓存 + 强制从云端拉取（带进度）
+      items.push({ label: '重新下载', run: function () { cacheDrop('app_' + app.id); Controller.runApp(app, true); } });
+    }
+    // 重载：不重新下载，直接重跑内存中最后执行的脚本
+    items.push({ label: '重载', run: function () { Controller.reloadApp(app); } });
+    if (granted) {
+      items.push({ label: '取消赋予所有权限', danger: true, run: function () {
+        setGrantedAll(app.id, false);
+        Controller.renderList();
+        Controller.toast('已取消「' + (app.name || app.id) + '」的全部权限赋予');
+        Controller.runApp(app, false);
+      } });
+    } else {
+      items.push({ label: '赋予所有权限', run: function () { _requestGrantAll(app); } });
+    }
+    _openNativeMenu(items, x, y);
+  }
+  function _requestGrantAll(app) {
+    var warn = '即将为「' + (app.name || app.id) + '」赋予全部权限并退出沙箱运行。\n\n'
+      + '此后该小程序将不受清单权限限制，可访问存储、网络（含外网）、相机等全部能力，'
+      + '且此设置为永久生效（直到你在此右键菜单选择「取消赋予所有权限」）。\n\n'
+      + '仅在你完全信任该小程序来源时继续。确定继续吗？';
+    var proceed = function () {
+      setGrantedAll(app.id, true);
+      Controller.renderList();
+      Controller.toast('已为「' + (app.name || app.id) + '」赋予全部权限（退出沙箱）');
+      Controller.runApp(app, false);
+    };
+    if (typeof window.showConfirm === 'function') {
+      window.showConfirm(warn, '赋予所有权限（危险）').then(function (ok) { if (ok) proceed(); });
+    } else if (window.confirm(warn)) {
+      proceed();
+    }
+  }
+
+  // ===== 文本清晰模式（强制运行区所有文本使用主题可读色，覆盖小程序硬编码深色）=====
+  var CLARITY_KEY = 'cip_clarity';
+  function clarityOn() { try { return localStorage.getItem(CLARITY_KEY) === '1'; } catch (e) { return false; } }
+  function setClarity(on) { try { if (on) localStorage.setItem(CLARITY_KEY, '1'); else localStorage.removeItem(CLARITY_KEY); } catch (e) {} applyClarity(); }
+  function applyClarity() {
+    var area = document.getElementById('cipRunArea');
+    if (area) area.classList.toggle('cip-clarity', clarityOn());
+  }
+
+  // 运行区右键菜单：文本清晰模式 / 重载 / [重新下载(仅云端)]
+  function _openRunCtxMenu(app, x, y) {
+    var on = clarityOn();
+    var items = [
+      { label: '文本清晰模式', checked: on, run: function () { var nv = !on; setClarity(nv); Controller.toast(nv ? '已开启文本清晰模式' : '已关闭文本清晰模式'); } },
+      { label: '重载', run: function () { Controller.reloadApp(app); } }
+    ];
+    if (app.kind === 'remote') {
+      items.push({ label: '重新下载', run: function () { cacheDrop('app_' + app.id); Controller.runApp(app, true); } });
+    }
+    _openNativeMenu(items, x, y);
+  }
+
+  // 运行区右键：在运行的小程序内容上右键 → 弹菜单（文本清晰模式 / 重载 / 重新下载）
+  (function bindCipRunMenu() {
+    var area = document.getElementById('cipRunArea');
+    if (area && !area.dataset.menuBound) {
+      area.dataset.menuBound = '1';
+      area.addEventListener('contextmenu', function (e) {
+        e.preventDefault();
+        e.stopPropagation(); // 不与全局聊天右键菜单混用
+        var app = Controller._lastApp;
+        if (!app) return;
+        _openRunCtxMenu(app, e.clientX, e.clientY);
+      });
+    }
+  })();
+  applyClarity();
+
+  // 右键菜单（云端小程序）：在列表容器上做事件委托，避免每次 renderList 重复绑监听。
+  // 右键云端项 → 弹出菜单（重新下载 / 重载 / 赋予所有权限）；其余区域右键仅屏蔽原生菜单。
+  (function bindCipListMenu() {
+    var list = document.getElementById('cipAppList');
+    if (list && !list.dataset.menuBound) {
+      list.dataset.menuBound = '1';
+      list.addEventListener('contextmenu', function (e) {
+        e.preventDefault();
+        var item = e.target && e.target.closest ? e.target.closest('.cip-app-item') : null;
+        if (!item) { _closeCtxMenu(); return; }
+        var id = item.dataset.id;
+        var app = null;
+        for (var i = 0; i < Controller._list.length; i++) {
+          if (Controller._list[i].id === id) { app = Controller._list[i]; break; }
+        }
+        if (!app) { _closeCtxMenu(); return; }
+        Array.prototype.forEach.call(list.children, function (c) { c.classList.remove('active'); });
+        item.classList.add('active');
+        _openCtxMenu(app, e.clientX, e.clientY);
+      });
     }
   })();
 

@@ -21,6 +21,20 @@
     return '';
   }
 
+  // 主题色解析：允许小程序用哨兵值跟随当前主题，避免硬编码亮色在深色模式看不清。
+  // 传入普通颜色字符串（如 "rgb(28,27,31)" / "#fff"）原样返回（向后兼容）。
+  function resolveColor(c) {
+    if (typeof c !== 'string') return c;
+    switch (c) {
+      case 'auto': case '@text': return 'var(--text-color, var(--text))';
+      case '@secondary': case '@secondary-text': return 'var(--secondary-text)';
+      case '@bg': case '@background': case '@surface': return 'var(--card-bg, rgba(127,127,127,0.06))';
+      case '@accent': return 'var(--accent)';
+      case '@border': return 'var(--border-color)';
+      default: return c;
+    }
+  }
+
   function applyCommon(el, node, ctx) {
     if (node.margin != null) el.style.margin = toPx(node.margin);
     if (node.padding != null) el.style.padding = toPx(node.padding);
@@ -49,7 +63,7 @@
         el.className = 'cip-text';
         el.textContent = node.text != null ? String(node.text) : '';
         if (node.size) el.style.fontSize = toPx(node.size);
-        if (node.color) el.style.color = node.color;
+        if (node.color) el.style.color = resolveColor(node.color);
         if (node.center) el.style.textAlign = 'center';
         applyCommon(el, node, ctx);
         return el;
@@ -125,7 +139,7 @@
         var el = document.createElement('div');
         el.className = 'cip-column';
         if (node.spacing != null) el.style.gap = toPx(node.spacing);
-        if (node.background) el.style.background = node.background;
+        if (node.background) el.style.background = resolveColor(node.background);
         applyCommon(el, node, ctx);
         el.appendChild(renderChildren(node, ctx));
         return el;
@@ -134,7 +148,7 @@
         var el = document.createElement('div');
         el.className = 'cip-row';
         if (node.spacing != null) el.style.gap = toPx(node.spacing);
-        if (node.background) el.style.background = node.background;
+        if (node.background) el.style.background = resolveColor(node.background);
         applyCommon(el, node, ctx);
         el.appendChild(renderChildren(node, ctx));
         return el;
@@ -142,7 +156,7 @@
       case 'card': {
         var el = document.createElement('div');
         el.className = 'cip-card';
-        if (node.background) el.style.background = node.background;
+        if (node.background) el.style.background = resolveColor(node.background);
         applyCommon(el, node, ctx);
         if (node.title) {
           var ct = document.createElement('div');

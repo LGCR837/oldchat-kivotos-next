@@ -171,6 +171,8 @@
     var host = this.host;
     var perms = (this.opts && this.opts.permissions) || [];
     var allowedHosts = (this.opts && this.opts.allowedHosts) || [];
+    // sandbox=false 表示「赋予所有权限 / 退出沙箱」：跳过一切权限校验与白名单
+    var sandbox = (this.opts && this.opts.sandbox) !== false;
 
     function captureRef(L2, idx) {
       if (lua.lua_type(L2, idx) === LUA_TFUNCTION) {
@@ -178,7 +180,7 @@
       }
       return null;
     }
-    function hasPerm(p) { return perms.indexOf(p) >= 0; }
+    function hasPerm(p) { return !sandbox || perms.indexOf(p) >= 0; }
     // 缺权限时：有回调则回调报错，否则 push nil；返回消耗的返回值数量
     function deny(cbRef, perm) {
       if (typeof cbRef === 'number') self.invokeRef(cbRef, null, '权限不足：需要 ' + perm + ' 权限');
@@ -356,9 +358,9 @@
         if (!url) { if (typeof cbRef === 'number') self.invokeRef(cbRef, null, '缺少 url'); return 0; }
         var isExternal = /^https?:\/\//i.test(url);
         if (isExternal) {
-          if (!hasPerm('network_external')) return deny(cbRef, 'network_external');
-          // allowed_hosts 白名单（'*' 或空表示全部）
-          if (allowedHosts.length && allowedHosts.indexOf('*') === -1) {
+          if (sandbox && !hasPerm('network_external')) return deny(cbRef, 'network_external');
+          // allowed_hosts 白名单（'*' 或空表示全部）；退出沙箱时全部放行
+          if (sandbox && allowedHosts.length && allowedHosts.indexOf('*') === -1) {
             try {
               var h = new URL(url).host;
               if (allowedHosts.indexOf(h) === -1) {
@@ -371,7 +373,7 @@
             }
           }
         } else {
-          if (!hasPerm('network')) return deny(cbRef, 'network');
+          if (sandbox && !hasPerm('network')) return deny(cbRef, 'network');
         }
         var method = (readStr(L2, 'method') || 'GET').toUpperCase();
         var headers = readTbl(L2, 'headers') || {};

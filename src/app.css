@@ -4887,7 +4887,9 @@ body.sidebar-anim-off .sidebar-panel.side-slide-in .contact-item { animation: no
     padding: 8px 0;
     box-sizing: border-box;
     min-height: 0;
+    scrollbar-width: none;
 }
+.cip-app-list::-webkit-scrollbar { display: none; }
 /* 小程序列表项：直接复用 .contact-item 侧栏样式（图标圆底 + 名称/描述 + 悬停/选中态） */
 .cip-app-item .msg-avatar {
     display: flex;
@@ -4909,9 +4911,15 @@ body.sidebar-anim-off .sidebar-panel.side-slide-in .contact-item { animation: no
     box-sizing: border-box;
 }
 .cip-placeholder { color: var(--secondary-text); text-align: center; margin-top: 40px; }
+.cip-loading { max-width: 440px; margin: 48px auto 0; padding: 0 16px; text-align: center; }
+.cip-loading-title { font-size: 14px; color: var(--text); margin-bottom: 14px; }
+.cip-loading-meta { font-size: 12px; color: var(--secondary-text); margin-top: 10px; word-break: break-all; }
 .cip-page { max-width: 640px; margin: 0 auto; }
 .cip-page-title { font-size: 18px; font-weight: 700; margin-bottom: 12px; }
-.cip-text { line-height: 1.6; }
+.cip-text { line-height: 1.6; color: var(--text-color, var(--text)); white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+
+/* 文本清晰模式：强制运行区内所有文本使用主题可读色（覆盖小程序硬编码的深/浅色，确保双主题都看得清） */
+.cip-run-area.cip-clarity *:not(img):not(svg):not(canvas) { color: var(--text-color, #111) !important; }
 .cip-image { display: block; max-width: 100%; border-radius: 8px; margin: 8px 0; }
 .cip-button {
     display: block;
@@ -5007,6 +5015,8 @@ body.sidebar-anim-off .sidebar-panel.side-slide-in .contact-item { animation: no
 }
 .cip-badge-local { background: rgba(76, 175, 80, 0.18); color: #4caf50; }
 .cip-badge-remote { background: rgba(120, 120, 120, 0.18); color: var(--secondary-text); }
+.cip-badge-granted { background: rgba(214, 48, 49, 0.18); color: #d63031; }
+
 .cip-app-del {
     border: none;
     background: transparent;
