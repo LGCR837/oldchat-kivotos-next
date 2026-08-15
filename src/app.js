@@ -2830,6 +2830,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         // 右侧主面板淡入淡出
         mainPanels.forEach(p => p.classList.toggle('active', p.dataset.panel === tabName));
 
+        // 整个应用侧边栏：切换选项卡时重放条目入场动画
+        sidebarPanels.forEach(p => p.classList.remove('side-slide-in'));
+        void panelsArr[panelIndex].offsetWidth;
+        panelsArr[panelIndex].classList.add('side-slide-in');
+
         // 子页面自绘滚动条在面板「变为可见」时重算几何：法庭/广场/小程序等非默认面板在
         // DOMContentLoaded 挂载滚动条时自身处于隐藏态，dumogu 拿到的滚动容器矩形是错的，
         // 轨道位置/长度会算歪。面板激活（布局就绪）后刷新一次即可归位。
@@ -2889,9 +2894,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         // 回到发现页落地页：清空右侧内容、恢复空状态提示、侧边栏回到启动器
+        // （已进入频道上下文时跳过，避免切换频道时重建侧边栏）
         if (tabName === 'discover') {
-            resetDiscoverMain();
-            restoreDiscoverLauncher();
+            const dl = document.getElementById('discoverList');
+            const inChannel = dl && dl.classList.contains('channel-side-active');
+            if (!inChannel) {
+                resetDiscoverMain();
+                restoreDiscoverLauncher();
+            }
         }
 
         // 离开发现页：清除发现页左面板板块项的高亮（进入发现页时不清除）
@@ -2905,7 +2915,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         sidebarTabs.addEventListener('click', (e) => {
             const btn = e.target.closest('.tab-btn');
             if (!btn) return;
-            switchTab(btn.dataset.tab);
+            const tab = btn.dataset.tab;
+            // 点击「发现」选项卡：若正处于频道上下文，先退出频道形态回到启动器
+            if (tab === 'discover') {
+                const dl = document.getElementById('discoverList');
+                if (dl && dl.classList.contains('channel-side-active')) {
+                    currentOpenChannel = null;
+                    dl.classList.remove('channel-side-active');
+                    restoreDiscoverLauncher();
+                }
+            }
+            switchTab(tab);
         });
     }
 
@@ -13819,13 +13839,39 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (_discoverLauncherHTML == null) _discoverLauncherHTML = el.innerHTML;
         el.innerHTML = _discoverLauncherHTML;
     }
+    // 重放侧边栏条目入场动画（切换选项卡 / 进入频道形态时调用）
+    function replaySidebarAnimation(panel) {
+        if (!panel) return;
+        panel.classList.remove('side-slide-in');
+        void panel.offsetWidth;
+        panel.classList.add('side-slide-in');
+    }
+    // 仅在尚未进入频道形态时构建侧边栏（切换频道时不重建）
+    function ensureChannelSidebar() {
+        const el = document.getElementById('discoverList');
+        if (!el || el.classList.contains('channel-side-active')) return;
+        renderChannelSidebar();
+    }
+    // 仅更新高亮，不重建侧边栏
+    function updateChannelSidebarActive(channelId) {
+        const el = document.getElementById('discoverList');
+        if (!el) return;
+        el.querySelectorAll('.channel-side-item').forEach(it => {
+            it.classList.toggle('active', it.dataset.channelId === (channelId || ''));
+        });
+        const disc = el.querySelector('[data-discover="channels"]');
+        if (disc) disc.classList.toggle('active', !channelId);
+    }
+
     function renderChannelSidebar() {
         const el = document.getElementById('discoverList');
         if (!el) return;
         el.classList.add('channel-side-active');
         const subs = getSubscribedChannels();
         // 顶部「发现频道」：复用启动器里的 data-discover="channels"，点击即回到频道浏览器（我的频道/发现）
-        let html = '<div class="contact-item" data-discover="channels" style="cursor:pointer;">'
+        // 默认（未打开具体频道时）选中「发现频道」
+        const discActive = currentOpenChannel ? '' : ' active';
+        let html = '<div class="contact-item' + discActive + '" data-discover="channels" style="cursor:pointer;">'
             + '<div class="msg-avatar"><i class="fa-solid fa-compass"></i></div>'
             + '<div class="contact-info"><div class="name">发现频道</div></div></div>';
         if (!subs.length) {
@@ -13846,6 +13892,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 if (ch) openChannelView(ch);
             });
         });
+        replaySidebarAnimation(document.querySelector('.sidebar-panel[data-panel="discover"]'));
     }
 
     async function apiJson(url, opts) {
@@ -14109,8 +14156,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     async function openChannelView(meta) {
         currentOpenChannel = meta || null;
         switchTab('discover');
-        // 打开具体频道：发现页侧边栏切换到「频道侧边栏」（顶部发现频道 + 已订阅列表）
-        renderChannelSidebar();
+        // 打开具体频道：确保侧边栏处于「频道侧边栏」形态（已处于则不再重建），仅更新高亮
+        ensureChannelSidebar();
+        updateChannelSidebarActive(meta ? meta.id : null);
         const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
         if (!main) return;
         main.classList.add('discover-has-content');
@@ -14190,11 +14238,17 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 (ch.description ? '<div class="desc">' + escapeHtml(ch.description) + '</div>' : '') +
             '</div>' +
             '<div class="channel-card-actions">' +
-                '<button class="btn small view-btn">查看</button>' +
                 '<button class="btn small ' + (subscribed ? '' : 'primary') + ' sub-btn">' + (subscribed ? '取消订阅' : '订阅') + '</button>' +
             '</div>';
-        div.querySelector('.view-btn').addEventListener('click', () => onView && onView());
-        div.querySelector('.sub-btn').addEventListener('click', () => onToggle && onToggle());
+        // 整卡点击直接打开频道（去掉「查看」按钮）；订阅按钮单独处理并阻止冒泡
+        div.addEventListener('click', (e) => {
+            if (e.target.closest('.sub-btn')) return;
+            if (onView) onView();
+        });
+        div.querySelector('.sub-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (onToggle) onToggle();
+        });
         return div;
     }
 
@@ -14311,8 +14365,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
             if (main) {
                 main.classList.add('discover-has-content');
+                currentOpenChannel = null; // 回到频道浏览器，默认选中「发现频道」
                 renderDiscoverChannels(main);
             }
+            // 侧边栏同时切换到「频道」形态，默认选中「发现频道」
+            ensureChannelSidebar();
+            updateChannelSidebarActive(null);
         } else if (target) {
             switchTab(target);
         }

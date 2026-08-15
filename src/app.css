@@ -4296,17 +4296,18 @@ body::-webkit-scrollbar {
     animation: channelImgIn 0.35s ease both;
 }
 /* 频道卡片入场 + 悬停抬升 */
-.channel-card { animation: channelPostIn 0.24s ease both; transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease; }
+.channel-card { animation: channelPostIn 0.24s ease both; transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease; cursor: pointer; }
 .channel-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,0.18); border-color: var(--accent); }
 /* 头像悬停微放大 */
 .channel-post-avatar, .channel-view-avatar, .channel-card-avatar { transition: transform 0.15s ease; }
 .channel-post-avatar:hover, .channel-view-avatar:hover, .channel-card-avatar:hover { transform: scale(1.05); }
-/* 频道侧边栏切入（打开频道时侧边栏整体切换为该形态） */
-#discoverList.channel-side-active .contact-item { animation: channelSideIn 0.22s ease both; }
-#discoverList.channel-side-active .contact-item:nth-child(1) { animation-delay: 0ms; }
-#discoverList.channel-side-active .contact-item:nth-child(2) { animation-delay: 40ms; }
-#discoverList.channel-side-active .contact-item:nth-child(3) { animation-delay: 80ms; }
-#discoverList.channel-side-active .contact-item:nth-child(n+4) { animation-delay: 120ms; }
+/* 切换选项卡时整个应用侧边栏条目入场（频道侧边栏复用同一动画） */
+.sidebar-panel.side-slide-in .contact-item { animation: channelSideIn 0.22s ease both; }
+.sidebar-panel.side-slide-in .contact-item:nth-child(1) { animation-delay: 0ms; }
+.sidebar-panel.side-slide-in .contact-item:nth-child(2) { animation-delay: 30ms; }
+.sidebar-panel.side-slide-in .contact-item:nth-child(3) { animation-delay: 60ms; }
+.sidebar-panel.side-slide-in .contact-item:nth-child(4) { animation-delay: 90ms; }
+.sidebar-panel.side-slide-in .contact-item:nth-child(n+5) { animation-delay: 120ms; }
 /* 侧边栏频道项悬停 */
 .channel-side-item { transition: background-color 0.15s ease, transform 0.12s ease; }
 .channel-side-item:hover { background: var(--hover); transform: translateX(2px); }
@@ -4316,7 +4317,7 @@ body::-webkit-scrollbar {
 
 @media (prefers-reduced-motion: reduce) {
     .channel-post, .channel-view-header, .channel-card,
-    #discoverList.channel-side-active .contact-item,
+    .sidebar-panel.side-slide-in .contact-item,
     .channel-post-avatar, .channel-view-avatar, .channel-card-avatar, .channel-post-media img {
         animation: none !important;
     }
