@@ -4282,6 +4282,47 @@ body::-webkit-scrollbar {
 /* 频道未读角标 */
 .channel-unread-badge { display: inline-block; min-width: 16px; height: 16px; line-height: 16px; padding: 0 4px; margin-left: 6px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 11px; font-weight: 600; text-align: center; vertical-align: middle; }
 
+/* ===== 频道 UI 动画 ===== */
+@keyframes channelPostIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes channelSideIn { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: none; } }
+@keyframes channelImgIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* 帖子逐条入场（延迟在 JS 中按次序设置） */
+.channel-post { animation: channelPostIn 0.26s ease both; }
+/* 频道视图头部入场 */
+.channel-view-header { animation: channelPostIn 0.3s ease both; }
+/* 媒体 / 头像图淡入 */
+.channel-post-avatar, .channel-view-avatar, .channel-card-avatar, .channel-post-media img {
+    animation: channelImgIn 0.35s ease both;
+}
+/* 频道卡片入场 + 悬停抬升 */
+.channel-card { animation: channelPostIn 0.24s ease both; transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease; }
+.channel-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,0.18); border-color: var(--accent); }
+/* 头像悬停微放大 */
+.channel-post-avatar, .channel-view-avatar, .channel-card-avatar { transition: transform 0.15s ease; }
+.channel-post-avatar:hover, .channel-view-avatar:hover, .channel-card-avatar:hover { transform: scale(1.05); }
+/* 频道侧边栏切入（打开频道时侧边栏整体切换为该形态） */
+#discoverList.channel-side-active .contact-item { animation: channelSideIn 0.22s ease both; }
+#discoverList.channel-side-active .contact-item:nth-child(1) { animation-delay: 0ms; }
+#discoverList.channel-side-active .contact-item:nth-child(2) { animation-delay: 40ms; }
+#discoverList.channel-side-active .contact-item:nth-child(3) { animation-delay: 80ms; }
+#discoverList.channel-side-active .contact-item:nth-child(n+4) { animation-delay: 120ms; }
+/* 侧边栏频道项悬停 */
+.channel-side-item { transition: background-color 0.15s ease, transform 0.12s ease; }
+.channel-side-item:hover { background: var(--hover); transform: translateX(2px); }
+.channel-side-item.active { background: var(--hover); }
+/* 反应 chip 按下反馈 */
+.channel-reaction-chip:active { transform: scale(0.94); }
+
+@media (prefers-reduced-motion: reduce) {
+    .channel-post, .channel-view-header, .channel-card,
+    #discoverList.channel-side-active .contact-item,
+    .channel-post-avatar, .channel-view-avatar, .channel-card-avatar, .channel-post-media img {
+        animation: none !important;
+    }
+    .channel-card:hover, .channel-side-item:hover { transform: none; }
+}
+
 /* ===== 公开法庭页面 ===== */
 .court-detail {
     flex: 1;

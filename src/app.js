@@ -626,7 +626,8 @@ function debounce(fn, wait) {
         }
     }
 
-    async function fetchAndStore(url) {
+    async function fetchAndStore(url, key) {
+        if (key === undefined || key === null) key = normalizeCacheKey(url);
         // 媒体缓存预取：走 tauriHttpFetch（plugin-http 无 CORS 限制，媒体域名已在 capabilities 白名单）。
         // 关键修复：候选源降级在【缓存层内部】完成（每个唯一 URL 只抓一次），
         // 避免每个渲染点都触发全局 error 监听的候选链、把请求量放大 2~4 倍。
@@ -636,8 +637,8 @@ function debounce(fn, wait) {
             try {
                 const blob = await fetchOne(c);
                 if (blob && blob.size) {
-                    memCache.set(url, blob);
-                    idbPut(url, blob, blob.type).catch(() => {});
+                    memCache.set(key, blob);
+                    idbPut(key, blob, blob.type).catch(() => {});
                     return blob;
                 }
             } catch (e) { lastErr = e; }
@@ -645,13 +646,26 @@ function debounce(fn, wait) {
         throw lastErr || new Error('all media candidates failed: ' + url);
     }
 
+    // 频道媒体签名 URL 的 ?exp=&sig= 会随每次刷新轮换，但文件名（路径）是内容寻址的（重上传会得到新文件名），
+    // 因此缓存键只取「/channel-media/ 或 channel-private: 之后的路径」，忽略查询串，使签名轮换后的新 URL 仍命中同一份 blob，
+    // 自愈重渲时零网络、零闪烁。其余媒体仍用完整 URL 作键。
+    function normalizeCacheKey(url) {
+        if (typeof url !== 'string') return url;
+        if (url.indexOf('/channel-media/') !== -1 || url.indexOf('channel-private:') === 0) {
+            const q = url.indexOf('?');
+            if (q >= 0) return url.slice(0, q);
+        }
+        return url;
+    }
+
     async function getBlob(url) {
-        if (memCache.has(url)) return memCache.get(url);
+        const key = normalizeCacheKey(url);
+        if (memCache.has(key)) return memCache.get(key);
         try {
-            const rec = await idbGet(url);
-            if (rec && rec.blob) { memCache.set(url, rec.blob); return rec.blob; }
+            const rec = await idbGet(key);
+            if (rec && rec.blob) { memCache.set(key, rec.blob); return rec.blob; }
         } catch (e) {}
-        return await fetchAndStore(url);
+        return await fetchAndStore(url, key);
     }
 
     function getCachedUrlOrPass(url, callback) {
@@ -13801,12 +13815,14 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     function restoreDiscoverLauncher() {
         const el = document.getElementById('discoverList');
         if (!el) return;
+        el.classList.remove('channel-side-active');
         if (_discoverLauncherHTML == null) _discoverLauncherHTML = el.innerHTML;
         el.innerHTML = _discoverLauncherHTML;
     }
     function renderChannelSidebar() {
         const el = document.getElementById('discoverList');
         if (!el) return;
+        el.classList.add('channel-side-active');
         const subs = getSubscribedChannels();
         // 顶部「发现频道」：复用启动器里的 data-discover="channels"，点击即回到频道浏览器（我的频道/发现）
         let html = '<div class="contact-item" data-discover="channels" style="cursor:pointer;">'
@@ -14074,7 +14090,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             if (!posts || !posts.length) { container.innerHTML = '<div class="channel-empty">暂无帖子</div>'; return; }
             const allowed = (meta.allowed_emojis && meta.allowed_emojis.length) ? meta.allowed_emojis : CHANNEL_DEFAULT_EMOJIS;
             // 服务端帖子一般按 seq 升序返回，这里反转成最新在底部（类聊天流）
-            posts.slice().reverse().forEach(p => container.appendChild(renderChannelPost(p, allowed, meta, meta.id)));
+            posts.slice().reverse().forEach((p, i) => {
+                const d = renderChannelPost(p, allowed, meta, meta.id);
+                d.style.animationDelay = (Math.min(i, 20) * 30) + 'ms';
+                container.appendChild(d);
+            });
         } catch (e) {
             container.innerHTML = '<div class="channel-empty">加载失败：' + escapeHtml(String(e && e.message || e)) + '</div>';
         }
