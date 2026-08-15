@@ -11545,11 +11545,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             }
         }
     });
-    // 聊天输入区域图标显示模式：发送按钮 / 其他按钮 分开控制，各为 'both'(默认)/'text'/'icon'
+    // 聊天输入区域图标显示模式：发送按钮 / 其他按钮 分开控制，发送默认 'icon'、其他默认 'text'
     function getInputIconSendMode() {
-        let m = 'both';
-        try { m = localStorage.getItem('oc_input_icons_send') || 'both'; } catch (e) {}
-        return (m === 'text' || m === 'icon') ? m : 'both';
+        let m = 'icon';
+        try { m = localStorage.getItem('oc_input_icons_send') || 'icon'; } catch (e) {}
+        return (m === 'text' || m === 'icon' || m === 'both') ? m : 'icon';
     }
     function getInputIconOthersMode() {
         let m = 'text';
@@ -13244,9 +13244,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     '<span class="label">发送按钮图标显示</span>' +
                     '<span class="value">' +
                         '<select id="inputIconsSendSelect" style="max-width:200px;padding:4px 8px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;cursor:pointer;">' +
-                            '<option value="both">文字+图标（默认）</option>' +
+                            '<option value="both">文字+图标</option>' +
                             '<option value="text">仅文字</option>' +
-                            '<option value="icon">仅图标</option>' +
+                            '<option value="icon">仅图标（默认）</option>' +
                         '</select>' +
                     '</span>' +
                 '</div>' +
@@ -13385,7 +13385,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             });
         }
 
-        // 聊天输入区域图标显示模式（设置 → 主题 → 发送/其他按钮图标显示，各默认 文字+图标）
+        // 聊天输入区域图标显示模式（设置 → 主题 → 发送默认 仅图标 / 其他默认 仅文字）
         const iisSel = document.getElementById('inputIconsSendSelect');
         if (iisSel) {
             iisSel.value = getInputIconSendMode();

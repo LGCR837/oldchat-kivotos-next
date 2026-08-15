@@ -1600,6 +1600,13 @@ body::-webkit-scrollbar {
 	background: var(--accent-dark, var(--accent));
 	box-shadow: 0 0 10px 1px var(--accent);
 }
+/* 发送按钮：固定宽度（所有显示模式一致，切换文字/图标不抖动），默认仅图标显示为方形图标按钮 */
+.input-buttons .btn.primary {
+	width: 60px;
+	min-width: 60px;
+	padding: 0;
+	justify-content: center;
+}
 
 /* 聊天输入区域图标显示模式（设置 → 主题 → 发送/其他按钮图标显示） */
 /* 仅文字：隐藏对应按钮组的图标 */
@@ -1607,13 +1614,10 @@ body::-webkit-scrollbar {
 .input-buttons[data-icons-send="text"] .btn.primary { gap: 0; }
 .input-buttons[data-icons-others="text"] .btn:not(.primary) > i.fa-solid { display: none; }
 .input-buttons[data-icons-others="text"] .btn:not(.primary) { gap: 0; }
-/* 仅图标：隐藏对应按钮组的文字并收成方形 */
+/* 仅图标：隐藏对应按钮组的文字（发送按钮宽度已固定，此处仅隐藏文字） */
 .input-buttons[data-icons-send="icon"] .btn.primary .btn-label { display: none; }
-.input-buttons[data-icons-send="icon"] .btn.primary {
-	width: 34px;
-	min-width: 34px;
-	padding: 0;
-}
+/* 发送按钮仅图标时，纸飞机图标视觉重心偏右，向左微调 3px 使其观感居中 */
+.input-buttons[data-icons-send="icon"] .btn.primary > i.fa-solid { margin-left: -3px; }
 .input-buttons[data-icons-others="icon"] .btn:not(.primary) .btn-label { display: none; }
 .input-buttons[data-icons-others="icon"] .btn:not(.primary) {
 	width: 34px;
@@ -3830,27 +3834,15 @@ body::-webkit-scrollbar {
 }
 
 /* ===== 阅后即焚消息样式 ===== */
-.burn-message .burn-hint {
-    font-style: italic;
-    color: var(--secondary-text);
+/* 气泡本身始终可见：未点击时显示「阅后即焚 · 点击查看」占位（.burn-lock），点击后替换为真实内容，
+   焚毁后替换为「已焚毁」（.burn-destroyed）。此处不再隐藏 .message-bubble —— 此前写成 display:none
+   会与「占位直接写在气泡内」的 JS 实现冲突，导致整条消息空白（啥都不显示）。 */
+.burn-message .burn-locked {
     cursor: pointer;
-    font-size: 13px;
-    padding: 4px 0;
 }
-.burn-message .burn-hint:hover {
-    color: var(--text);
-}
-.burn-message .message-bubble {
-    display: none !important;
-}
-.burn-message.revealed .message-bubble {
-    display: block !important;
-}
-.burn-message.burned .message-bubble {
-    display: none !important;
-}
-.burn-message.burned .burn-hint {
-    display: none !important;
+.burn-message.burned .burn-destroyed {
+    color: var(--secondary-text);
+    font-style: italic;
 }
 
 /* ===== 签到墙样式 ===== */
