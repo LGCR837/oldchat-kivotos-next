@@ -1549,7 +1549,15 @@ body::-webkit-scrollbar {
 	border-radius: 5px;
 	font-size: 13px;
 	line-height: 34px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
 	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
+}
+/* 输入栏按钮内的图标与文字对齐、留一点间距 */
+.input-buttons .btn i.fa-solid {
+	font-size: 13px;
 }
 
 .btn {
@@ -1575,6 +1583,23 @@ body::-webkit-scrollbar {
 
 .btn.primary:hover {
 	background: var(--accent-dark)
+}
+
+/* 聊天输入栏右下角操作按钮：悬停时平滑颜色过渡（沿用原 --hover 淡底色） */
+.input-buttons .btn {
+	transition: background-color 0.2s ease, color 0.2s ease;
+}
+.input-buttons .btn:hover {
+	background: var(--hover);
+}
+/* 发送按钮：悬停时柔和光晕脉动（更快） */
+.input-buttons .btn.primary:hover {
+	background: var(--accent-dark, var(--accent));
+	animation: inputBtnGlow 0.8s ease-in-out infinite;
+}
+@keyframes inputBtnGlow {
+	0%, 100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); }
+	50%      { box-shadow: 0 0 8px 0 var(--accent); }
 }
 
 .more-menu {
