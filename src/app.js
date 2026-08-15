@@ -13464,8 +13464,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             if (saSpeedWrap) saSpeedWrap.style.display = (saToggle && saToggle.checked) ? '' : 'none';
         };
         if (saToggle) {
-            let saOn = true;
-            try { saOn = localStorage.getItem('oc_sidebar_anim') !== '0'; } catch (e) {}
+            let saOn = false;
+            try { saOn = localStorage.getItem('oc_sidebar_anim') === '1'; } catch (e) {}
             saToggle.checked = saOn;
             updateSaSpeedVisibility();
             saToggle.addEventListener('change', () => {
@@ -13794,7 +13794,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // 速度由 CSS 变量驱动：--sb-anim-dur / --sb-anim-stagger；speed 1=最慢 ~ 10=最快
     function applySidebarAnimSettings() {
         let on = true, speed = 5;
-        try { on = localStorage.getItem('oc_sidebar_anim') !== '0'; } catch (e) {}
+        try { on = localStorage.getItem('oc_sidebar_anim') === '1'; } catch (e) {}
         try { speed = parseInt(localStorage.getItem('oc_sidebar_anim_speed'), 10) || 5; } catch (e) {}
         if (speed < 1) speed = 1; if (speed > 10) speed = 10;
         document.body.classList.toggle('sidebar-anim-off', !on);
