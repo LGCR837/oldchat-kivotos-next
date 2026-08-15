@@ -10122,7 +10122,24 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
     moreBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        moreMenu.classList.toggle('show');
+        if (moreMenu.classList.contains('show')) {
+            moreMenu.classList.remove('show');
+            return;
+        }
+        const M = 8;
+        const vw = window.innerWidth, vh = window.innerHeight;
+        const w = moreMenu.offsetWidth || 180, h = moreMenu.offsetHeight || 200;
+        // Y 轴锁死原锚点：输入栏底部上方 48px（与原 absolute bottom:48px 一致），不随鼠标移动
+        const iaRect = (document.getElementById('inputArea') || moreMenu.parentElement).getBoundingClientRect();
+        let y = iaRect.bottom - 48 - h;
+        if (y < M) y = M;
+        // X 轴跟随鼠标，钳制在视口内避免溢出
+        let x = e.clientX;
+        if (x < M) x = M;
+        if (x + w > vw - M) x = Math.max(M, vw - M - w);
+        moreMenu.style.left = x + 'px';
+        moreMenu.style.top = y + 'px';
+        moreMenu.classList.add('show');
     });
     document.addEventListener('click', () => {
         moreMenu.classList.remove('show');
@@ -11528,8 +11545,32 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             }
         }
     });
+    // 聊天输入区域图标显示模式：发送按钮 / 其他按钮 分开控制，各为 'both'(默认)/'text'/'icon'
+    function getInputIconSendMode() {
+        let m = 'both';
+        try { m = localStorage.getItem('oc_input_icons_send') || 'both'; } catch (e) {}
+        return (m === 'text' || m === 'icon') ? m : 'both';
+    }
+    function getInputIconOthersMode() {
+        let m = 'text';
+        try { m = localStorage.getItem('oc_input_icons_others') || 'text'; } catch (e) {}
+        return (m === 'text' || m === 'icon') ? m : 'text';
+    }
+    function applyInputIconMode() {
+        const box = document.querySelector('.input-buttons');
+        if (!box) return;
+        const s = getInputIconSendMode();
+        const o = getInputIconOthersMode();
+        if (s === 'both') box.removeAttribute('data-icons-send');
+        else box.setAttribute('data-icons-send', s);
+        if (o === 'both') box.removeAttribute('data-icons-others');
+        else box.setAttribute('data-icons-others', o);
+    }
+
     // 按「请求模式」建立实时链路（WS 或轮询）
     try { applyRequestMode(); } catch (e) { console.error('[请求模式] 初始化失败:', e); }
+    // 应用聊天输入区域图标显示模式（启动时）
+    try { applyInputIconMode(); } catch (e) { console.error('[输入图标模式] 初始化失败:', e); }
 
     // ===== 设置页面 =====
     let currentSettingsTab = 'profile';
@@ -13199,6 +13240,29 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         '</label>' +
                     '</span>' +
                 '</div>' +
+                '<div class="settings-item" id="settingsInputIconsSend" style="border-bottom:none;">' +
+                    '<span class="label">发送按钮图标显示</span>' +
+                    '<span class="value">' +
+                        '<select id="inputIconsSendSelect" style="max-width:200px;padding:4px 8px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;cursor:pointer;">' +
+                            '<option value="both">文字+图标（默认）</option>' +
+                            '<option value="text">仅文字</option>' +
+                            '<option value="icon">仅图标</option>' +
+                        '</select>' +
+                    '</span>' +
+                '</div>' +
+                '<div class="settings-item" id="settingsInputIconsOthers">' +
+                    '<span class="label">其他按钮图标显示</span>' +
+                    '<span class="value">' +
+                        '<select id="inputIconsOthersSelect" style="max-width:200px;padding:4px 8px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;cursor:pointer;">' +
+                            '<option value="both">文字+图标</option>' +
+                            '<option value="text">仅文字（默认）</option>' +
+                            '<option value="icon">仅图标</option>' +
+                        '</select>' +
+                    '</span>' +
+                '</div>' +
+                '<div class="settings-note">' +
+                    '控制聊天输入框右下角按钮的图标与文字显示方式，可分别设置「发送」与「图片 / 表情 / 更多」。切换即时生效。' +
+                '</div>' +
             '</div>' +
             '<div class="settings-group" style="margin-bottom:14px;">' +
                 '<button id="themeUploadBtn" class="btn primary" style="width:100%;">上传主题（.css 文件）</button>' +
@@ -13318,6 +13382,26 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             sbActiveToggle.addEventListener('change', () => {
                 try { localStorage.setItem('oc_sidebar_active_bar', sbActiveToggle.checked ? '1' : '0'); } catch (e) {}
                 applySidebarBarSettings();
+            });
+        }
+
+        // 聊天输入区域图标显示模式（设置 → 主题 → 发送/其他按钮图标显示，各默认 文字+图标）
+        const iisSel = document.getElementById('inputIconsSendSelect');
+        if (iisSel) {
+            iisSel.value = getInputIconSendMode();
+            iisSel.addEventListener('change', () => {
+                try { localStorage.setItem('oc_input_icons_send', iisSel.value); } catch (e) {}
+                applyInputIconMode();
+                if (typeof showAlert === 'function') showAlert('发送按钮图标显示已切换为「' + iisSel.value + '」，已即时生效');
+            });
+        }
+        const iioSel = document.getElementById('inputIconsOthersSelect');
+        if (iioSel) {
+            iioSel.value = getInputIconOthersMode();
+            iioSel.addEventListener('change', () => {
+                try { localStorage.setItem('oc_input_icons_others', iioSel.value); } catch (e) {}
+                applyInputIconMode();
+                if (typeof showAlert === 'function') showAlert('其他按钮图标显示已切换为「' + iioSel.value + '」，已即时生效');
             });
         }
 

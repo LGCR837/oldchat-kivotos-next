@@ -1592,34 +1592,51 @@ body::-webkit-scrollbar {
 .input-buttons .btn:hover {
 	background: var(--hover);
 }
-/* 发送按钮：悬停时柔和光晕脉动（更快） */
+/* 发送按钮：悬停时持续泛光（不脉动，带过渡平滑出现/消失） */
+.input-buttons .btn.primary {
+	transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.25s ease;
+}
 .input-buttons .btn.primary:hover {
 	background: var(--accent-dark, var(--accent));
-	animation: inputBtnGlow 0.8s ease-in-out infinite;
+	box-shadow: 0 0 10px 1px var(--accent);
 }
-@keyframes inputBtnGlow {
-	0%, 100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); }
-	50%      { box-shadow: 0 0 8px 0 var(--accent); }
+
+/* 聊天输入区域图标显示模式（设置 → 主题 → 发送/其他按钮图标显示） */
+/* 仅文字：隐藏对应按钮组的图标 */
+.input-buttons[data-icons-send="text"] .btn.primary > i.fa-solid { display: none; }
+.input-buttons[data-icons-send="text"] .btn.primary { gap: 0; }
+.input-buttons[data-icons-others="text"] .btn:not(.primary) > i.fa-solid { display: none; }
+.input-buttons[data-icons-others="text"] .btn:not(.primary) { gap: 0; }
+/* 仅图标：隐藏对应按钮组的文字并收成方形 */
+.input-buttons[data-icons-send="icon"] .btn.primary .btn-label { display: none; }
+.input-buttons[data-icons-send="icon"] .btn.primary {
+	width: 34px;
+	min-width: 34px;
+	padding: 0;
+}
+.input-buttons[data-icons-others="icon"] .btn:not(.primary) .btn-label { display: none; }
+.input-buttons[data-icons-others="icon"] .btn:not(.primary) {
+	width: 34px;
+	min-width: 34px;
+	padding: 0;
 }
 
 .more-menu {
-	position: absolute;
-	bottom: 48px;
-	right: 10px;
+	position: fixed;
+	z-index: 9999;
 	background: var(--chat-bg);
 	border: 1px solid var(--border);
-	z-index: 10;
 	border-radius: 6px;
 	overflow: hidden;
 	opacity: 0;
-	transform: scale(0.9) translateY(8px);
-	transform-origin: bottom right;
+	transform: scale(0.9);
+	transform-origin: top left;
 	pointer-events: none;
 	transition: opacity 0.18s ease, transform 0.18s ease;
 }
 .more-menu.show {
 	opacity: 1;
-	transform: scale(1) translateY(0);
+	transform: scale(1);
 	pointer-events: auto;
 }
 
