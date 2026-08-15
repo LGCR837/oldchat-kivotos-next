@@ -577,21 +577,37 @@ function debounce(fn, wait) {
             if (tk) baseHeaders['Authorization'] = 'Bearer ' + tk;
         } catch (e) {}
 
-        // /channel-media/ 是「全局签名下载」端点（官方 §14.10）：鉴权完全在 URL 的 exp+sig 里，
+        // /channel-media/ 是「全局签名下载」端点（官方 §14.10）：鉴权完全在 URL 的签名里，
         // 任何 Authorization 头（Bearer / v2 会话头）都会被拒签返回 401。因此只走「纯无鉴权 fetch」，
         // 且 mediaCandidateUrls 已针对 /channel-media/ 固定返回 [url]（不展开 host 候选，避免误打到 files/60.205 报 404）。
+        // 注意：签名 URL 有时效，过期后服务端返回 {"error":"media URL expired"}（HTTP 401）。
+        // 此时应重新拉取频道元数据以拿到新的签名 URL，而非当成鉴权失败。
         if (isChannelMedia) {
+            // 频道媒体是「全局签名下载」端点：签名 URL 一旦失效（过期 / 被服务端轮换 / 损坏），
+            // 任何非 2xx 响应都意味着需要重新拉取频道元数据拿新签名。这里对【任意】失败都触发自愈，
+            // 而非仅匹配特定错误文案——避免服务端返回非预期 401 文案时自愈不触发、头像/图片永久裂开。
             let lastErr;
+            let triggerRefresh = false;
             try {
                 const resp = await tauriHttpFetch(u, {});
                 if (resp && resp.ok) return await resp.blob();
-            } catch (e) { lastErr = e; }
-            try {
-                const b2 = await fetchMediaRust(u, {});
-                if (b2) return b2;
-            } catch (e) { lastErr = e; }
-            console.error('[MediaCache] channel-media 抓取失败（URL 签名可能已过期，需重新拉取帖子列表以获得新签名）:', u, '|', (lastErr && lastErr.message) || lastErr);
-            throw lastErr || new Error('channel-media fetch failed: ' + u);
+                triggerRefresh = true;
+                try {
+                    const status = resp && resp.status;
+                    const txt = await resp.text();
+                    console.warn('[MediaCache] channel-media 签名失效（HTTP ' + status + '），将触发频道媒体 URL 刷新以重新获取有效签名:', u, '|', String(txt).slice(0, 200));
+                } catch (e) {}
+            } catch (e) { lastErr = e; triggerRefresh = true; }
+            if (!lastErr && !triggerRefresh) {
+                try {
+                    const b2 = await fetchMediaRust(u, {});
+                    if (b2) return b2;
+                } catch (e) { lastErr = e; }
+            }
+            if (triggerRefresh && typeof window.__refreshChannelMediaOnExpiry === 'function') window.__refreshChannelMediaOnExpiry();
+            const err = new Error('channel-media fetch failed: ' + u);
+            err.code = 'media_url_expired';
+            throw err;
         }
 
         try {
@@ -675,7 +691,7 @@ function debounce(fn, wait) {
                         } else {
                             // 抓取失败：普通公开图片（无需鉴权）降级为直接 <img> 加载（no-cors 显示不报错）；
                             // 但需 Bearer 的 /v2/files/download 与 channel-private 资源直接加载必 401 且污染控制台，故保留占位、不回填。
-                            if (/\/v2\/files\/download\//.test(val) || /^channel-private:/.test(val)) {
+                            if (/\/v2\/files\/download\//.test(val) || /^channel-private:/.test(val) || /\/channel-media\//.test(val)) {
                                 // 保留已设置的透明占位，避免跨域请求噪音
                             } else {
                                 el.setAttribute(attr, val);
@@ -5733,6 +5749,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     }
 
     async function loadContacts() {
+        // 侧边栏加载前先显示统一转圈（复用 .oc-page-loading + .oc-spinner），数据到达后由 renderContacts 替换
+        contactList.innerHTML = '<div class="oc-page-loading"><span class="oc-spinner xl"></span><span>加载中...</span></div>';
         try {
             let frData = null, grData = null;
             // 好友 / 群聊各自独立加载并加超时保护：此前用 Promise.all，任一侧接口在途时被重载打断
@@ -5746,8 +5764,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 const grRes = await withTimeout(apiFetch('/v1/groups/list'), 15000, '群聊列表');
                 grData = await grRes.json().catch(() => null);
             } catch (e) { console.error('[contacts] 群聊列表加载失败:', e); }
-            if (!frData && !grData) { console.error('[contacts] 好友与群聊列表均加载失败'); return; }
-            if (frData && frData.error) { showAlert(frData.error); return; }
+            if (!frData && !grData) {
+                console.error('[contacts] 好友与群聊列表均加载失败');
+                contactList.innerHTML = '<div class="oc-page-loading"><span class="oc-spinner xl"></span><span style="color:var(--danger)">加载失败，请重试</span></div>';
+                return;
+            }
+            if (frData && frData.error) { showAlert(frData.error); contactList.innerHTML = ''; return; }
             contacts = {
                 friends: (frData && frData.friends || []).map(f => ({
                     uid: getUid(f),
@@ -11554,7 +11576,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     function getInputIconOthersMode() {
         let m = 'text';
         try { m = localStorage.getItem('oc_input_icons_others') || 'text'; } catch (e) {}
-        return (m === 'text' || m === 'icon') ? m : 'text';
+        return (m === 'both' || m === 'text' || m === 'icon') ? m : 'text';
     }
     function applyInputIconMode() {
         const box = document.querySelector('.input-buttons');
@@ -13711,6 +13733,61 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     function isSubscribedChannel(id) { return getSubscribedChannels().some(c => c.id === id); }
     function addSubscribedChannel(ch) { const a = getSubscribedChannels().filter(c => c.id !== ch.id); a.push(ch); setSubscribedChannels(a); }
     function removeSubscribedChannel(id) { setSubscribedChannels(getSubscribedChannels().filter(c => c.id !== id)); }
+    function updateSubscribedChannel(id, patch) {
+        const a = getSubscribedChannels().map(c => (c.id === id ? Object.assign({}, c, patch) : c));
+        setSubscribedChannels(a);
+    }
+    // 频道媒体签名 URL 过期时的自救：重新拉取频道元数据拿到新的签名 avatar_url，刷新本地缓存与可见 UI。
+    // 防风暴：15s 内最多刷一次；仅在确实检测到 media_url_expired 时触发（见 MediaCache.fetchOne 的过期分支）。
+    let _cmRefreshTimer = null;
+    let _lastCmRefresh = 0;
+    let currentOpenChannel = null;
+    async function refreshChannelAvatars() {
+        const now = Date.now();
+        if (now - _lastCmRefresh < 15000) return;
+        _lastCmRefresh = now;
+        try {
+            const arr = await discoverChannels('');
+            if (Array.isArray(arr)) {
+                const subs = getSubscribedChannels();
+                let changed = false;
+                arr.forEach(raw => {
+                    const ch = channelMetaFromApi(raw);
+                    if (!ch.id) return;
+                    const hit = subs.find(c => c.id === ch.id);
+                    if (hit && ch.avatar_url && ch.avatar_url !== hit.avatar_url) { hit.avatar_url = ch.avatar_url; changed = true; }
+                    // 当前正在查看的频道：即便不在「我的频道」缓存里，也直接刷新其签名 URL
+                    if (currentOpenChannel && ch.id === currentOpenChannel.id && ch.avatar_url) {
+                        currentOpenChannel.avatar_url = ch.avatar_url; changed = true;
+                    }
+                });
+                if (changed) setSubscribedChannels(subs);
+            }
+        } catch (e) { return; }
+        try { renderSubscribedList(); } catch (e) {}
+        const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
+        if (main && main.classList.contains('discover-has-content')) {
+            const chView = main.querySelector('.channel-view');
+            if (chView) {
+                const fresh = currentOpenChannel ? (getSubscribedChannels().find(c => c.id === currentOpenChannel.id) || currentOpenChannel) : null;
+                const av = chView.querySelector('.channel-view-avatar');
+                if (av && fresh && fresh.avatar_url) av.src = cachedResolveMediaUrl(fresh.avatar_url);
+                // 帖子媒体（图片/视频）同样依赖签名 URL，过期后需重新拉取帖子列表拿到新签名
+                const postsEl = chView.querySelector('#channelPosts');
+                if (postsEl && currentOpenChannel) {
+                    loadChannelPosts(postsEl, currentOpenChannel).catch(() => {});
+                }
+            } else {
+                const discList = document.getElementById('channelDiscoverList');
+                if (discList) loadChannelDiscover(document.getElementById('channelSearchInput') ? document.getElementById('channelSearchInput').value.trim() : '');
+            }
+        }
+    }
+    function scheduleChannelMediaRefresh() {
+        if (_cmRefreshTimer) return;
+        _cmRefreshTimer = setTimeout(() => { _cmRefreshTimer = null; refreshChannelAvatars().catch(() => {}); }, 600);
+    }
+    window.__refreshChannelMediaOnExpiry = scheduleChannelMediaRefresh;
 
     async function apiJson(url, opts) {
         const res = await apiFetch(url, opts);
@@ -13840,13 +13917,17 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         };
     }
 
+    // created_at：服务端为 Unix 秒（number 或纯数字字符串）或 ISO 8601 字符串，统一换算成本地时间。
+    // 不做一堆兜底：能解析就显示，解析不出返回空（由调用方决定是否显示）。
     function fmtChannelTime(ts) {
-        if (!ts) return '';
-        try {
-            const d = new Date(ts * 1000);
-            const p = n => (n < 10 ? '0' + n : '' + n);
-            return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
-        } catch (e) { return ''; }
+        if (ts == null || ts === '') return '';
+        let d;
+        if (typeof ts === 'number') d = new Date(ts * 1000);
+        else if (/^\d+$/.test(String(ts).trim())) d = new Date(Number(ts) * 1000);
+        else d = new Date(ts);
+        if (isNaN(d.getTime())) return '';
+        const p = n => (n < 10 ? '0' + n : '' + n);
+        return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
     }
 
     function normalizeReactions(obj) {
@@ -13907,7 +13988,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const div = document.createElement('div');
         div.className = 'channel-post';
         const authorName = post.from_name || (post.author && post.author.name) || post.name || '频道';
-        const authorAvatar = post.from_avatar || (post.author && post.author.avatar) || '';
+        // 帖子头像是「发布者（用户）」的头像：优先 from_avatar（规范字段），兼容 sender_avatar / avatar_url / author.*
+        const authorAvatar = post.from_avatar || post.sender_avatar || post.avatar_url
+            || (post.author && (post.author.avatar_url || post.author.avatar)) || '';
         const time = fmtChannelTime(post.created_at || post.created_at_ts);
         const pb = parsePostBody(post.body);
         // §14 帖子媒体可能以顶层 media_url/thumb_url 返回（独立于 body 文本），parsePostBody 只解析 body，这里兜底
@@ -13958,6 +14041,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
     let channelUpdateHandler = null;
     async function openChannelView(meta) {
+        currentOpenChannel = meta || null;
         switchTab('discover');
         const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
         if (!main) return;
