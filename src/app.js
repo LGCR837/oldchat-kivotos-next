@@ -13297,6 +13297,21 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         '</label>' +
                     '</span>' +
                 '</div>' +
+                '<div class="settings-item" id="settingsSidebarAnim">' +
+                    '<span class="label">侧边栏卡片进入动画</span>' +
+                    '<span class="value">' +
+                        '<label class="oc-switch">' +
+                            '<input type="checkbox" id="sidebarAnimToggle">' +
+                            '<span class="oc-switch-slider"></span>' +
+                        '</label>' +
+                    '</span>' +
+                '</div>' +
+                '<div class="settings-item" id="settingsSidebarAnimSpeed" style="display:none;">' +
+                    '<span class="label">动画速度</span>' +
+                    '<span class="value">' +
+                        '<input type="range" id="sidebarAnimSpeed" min="1" max="10" step="1" style="width:170px;accent-color:var(--accent);cursor:pointer;">' +
+                    '</span>' +
+                '</div>' +
                 '<div class="settings-item" id="settingsInputIconsSend" style="border-bottom:none;">' +
                     '<span class="label">发送按钮图标显示</span>' +
                     '<span class="value">' +
@@ -13439,6 +13454,38 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             sbActiveToggle.addEventListener('change', () => {
                 try { localStorage.setItem('oc_sidebar_active_bar', sbActiveToggle.checked ? '1' : '0'); } catch (e) {}
                 applySidebarBarSettings();
+            });
+        }
+
+        // 侧边栏卡片进入动画（设置 → 主题，默认开启）：关闭后条目直接显示、不播放切入动画
+        const saToggle = document.getElementById('sidebarAnimToggle');
+        const saSpeedWrap = document.getElementById('settingsSidebarAnimSpeed');
+        const updateSaSpeedVisibility = () => {
+            if (saSpeedWrap) saSpeedWrap.style.display = (saToggle && saToggle.checked) ? '' : 'none';
+        };
+        if (saToggle) {
+            let saOn = true;
+            try { saOn = localStorage.getItem('oc_sidebar_anim') !== '0'; } catch (e) {}
+            saToggle.checked = saOn;
+            updateSaSpeedVisibility();
+            saToggle.addEventListener('change', () => {
+                try { localStorage.setItem('oc_sidebar_anim', saToggle.checked ? '1' : '0'); } catch (e) {}
+                updateSaSpeedVisibility();
+                applySidebarAnimSettings();
+                // 即时预览：当前激活的侧面板重放一次（关闭则无动画）
+                replaySidebarAnimation(document.querySelector('.sidebar-panel.active'));
+            });
+        }
+        // 动画速度（子选项，1=最慢 ~ 10=最快，默认 5）：拖动即时生效并预览
+        const saSpeed = document.getElementById('sidebarAnimSpeed');
+        if (saSpeed) {
+            let speed = 5;
+            try { speed = parseInt(localStorage.getItem('oc_sidebar_anim_speed'), 10) || 5; } catch (e) {}
+            saSpeed.value = String(speed);
+            saSpeed.addEventListener('input', () => {
+                try { localStorage.setItem('oc_sidebar_anim_speed', saSpeed.value); } catch (e) {}
+                applySidebarAnimSettings();
+                replaySidebarAnimation(document.querySelector('.sidebar-panel.active'));
             });
         }
 
@@ -13742,6 +13789,19 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         document.body.classList.toggle('sidebar-active-bar', activeBarOn);
     }
     applySidebarBarSettings();
+
+    // 侧边栏卡片进入动画（设置 → 主题 → 侧边栏卡片进入动画，默认开启）
+    // 速度由 CSS 变量驱动：--sb-anim-dur / --sb-anim-stagger；speed 1=最慢 ~ 10=最快
+    function applySidebarAnimSettings() {
+        let on = true, speed = 5;
+        try { on = localStorage.getItem('oc_sidebar_anim') !== '0'; } catch (e) {}
+        try { speed = parseInt(localStorage.getItem('oc_sidebar_anim_speed'), 10) || 5; } catch (e) {}
+        if (speed < 1) speed = 1; if (speed > 10) speed = 10;
+        document.body.classList.toggle('sidebar-anim-off', !on);
+        document.documentElement.style.setProperty('--sb-anim-dur', Math.round(2250 / speed) + 'ms');
+        document.documentElement.style.setProperty('--sb-anim-stagger', Math.round(300 / speed) + 'ms');
+    }
+    applySidebarAnimSettings();
 
     // 蔚蓝档案点击特效：按设置初始化（默认关闭）
     // 互斥归一化：完整版与 Lite 同一时间只能启用一个（完整版优先），避免存储标志冲突导致 UI 显示错乱

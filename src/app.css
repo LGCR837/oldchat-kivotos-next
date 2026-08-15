@@ -4302,12 +4302,15 @@ body::-webkit-scrollbar {
 .channel-post-avatar, .channel-view-avatar, .channel-card-avatar { transition: transform 0.15s ease; }
 .channel-post-avatar:hover, .channel-view-avatar:hover, .channel-card-avatar:hover { transform: scale(1.05); }
 /* 切换选项卡时整个应用侧边栏条目入场（频道侧边栏复用同一动画） */
-.sidebar-panel.side-slide-in .contact-item { animation: channelSideIn 0.22s ease both; }
+/* 速度由 --sb-anim-dur / --sb-anim-stagger 控制（设置 → 主题 → 侧边栏卡片进入动画）；默认比原 0.22s 更慢 */
+.sidebar-panel.side-slide-in .contact-item { animation: channelSideIn var(--sb-anim-dur, 0.45s) ease both; }
 .sidebar-panel.side-slide-in .contact-item:nth-child(1) { animation-delay: 0ms; }
-.sidebar-panel.side-slide-in .contact-item:nth-child(2) { animation-delay: 30ms; }
-.sidebar-panel.side-slide-in .contact-item:nth-child(3) { animation-delay: 60ms; }
-.sidebar-panel.side-slide-in .contact-item:nth-child(4) { animation-delay: 90ms; }
-.sidebar-panel.side-slide-in .contact-item:nth-child(n+5) { animation-delay: 120ms; }
+.sidebar-panel.side-slide-in .contact-item:nth-child(2) { animation-delay: var(--sb-anim-stagger, 60ms); }
+.sidebar-panel.side-slide-in .contact-item:nth-child(3) { animation-delay: calc(var(--sb-anim-stagger, 60ms) * 2); }
+.sidebar-panel.side-slide-in .contact-item:nth-child(4) { animation-delay: calc(var(--sb-anim-stagger, 60ms) * 3); }
+.sidebar-panel.side-slide-in .contact-item:nth-child(n+5) { animation-delay: calc(var(--sb-anim-stagger, 60ms) * 4); }
+/* 关闭：设置「侧边栏卡片进入动画」关闭时，条目直接显示、不播放入场动画 */
+body.sidebar-anim-off .sidebar-panel.side-slide-in .contact-item { animation: none !important; }
 /* 侧边栏频道项悬停 */
 .channel-side-item { transition: background-color 0.15s ease, transform 0.12s ease; }
 .channel-side-item:hover { background: var(--hover); transform: translateX(2px); }
