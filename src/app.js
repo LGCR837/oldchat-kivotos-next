@@ -5060,6 +5060,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
+    // 自定义右键菜单：按真实渲染尺寸 clamp 到视口内，避免超出屏幕
+    // menu 必须为已挂入 DOM 的 .custom-context-menu（position:fixed，left/top 以视口坐标为准）
+    function clampContextMenu(menu, clientX, clientY) {
+        const M = 8; // 距屏幕边缘留白
+        const vw = window.innerWidth, vh = window.innerHeight;
+        const w = menu.offsetWidth || 180, h = menu.offsetHeight || 200;
+        let x = clientX, y = clientY;
+        if (x + w > vw - M) x = Math.max(M, vw - M - w);
+        if (y + h > vh - M) y = Math.max(M, vh - M - h);
+        menu.style.left = x + 'px';
+        menu.style.top = y + 'px';
+    }
+
     // 自绘编辑框右键菜单
     function showEditContextMenu(e, el) {
         const menu = document.createElement('div');
@@ -5100,7 +5113,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
         menu.innerHTML = menuHtml;
         document.body.appendChild(menu);
-        requestAnimationFrame(() => menu.classList.add('show'));
+        requestAnimationFrame(() => { clampContextMenu(menu, (typeof e !== 'undefined' ? e.clientX : x), (typeof e !== 'undefined' ? e.clientY : y)); menu.classList.add('show'); });
         contextMenu = menu;
 
         menu.addEventListener('click', async (event) => {
@@ -10564,7 +10577,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
             menu.innerHTML = menuHtml;
             document.body.appendChild(menu);
-            requestAnimationFrame(() => menu.classList.add('show'));
+            requestAnimationFrame(() => { clampContextMenu(menu, (typeof e !== 'undefined' ? e.clientX : x), (typeof e !== 'undefined' ? e.clientY : y)); menu.classList.add('show'); });
             contextMenu = menu;
 
             menu.addEventListener('click', (event) => {
@@ -10654,7 +10667,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             }
             menu.innerHTML = menuHtml;
             document.body.appendChild(menu);
-            requestAnimationFrame(() => menu.classList.add('show'));
+            requestAnimationFrame(() => { clampContextMenu(menu, (typeof e !== 'undefined' ? e.clientX : x), (typeof e !== 'undefined' ? e.clientY : y)); menu.classList.add('show'); });
             contextMenu = menu;
 
             menu.addEventListener('click', (event) => {
@@ -10743,7 +10756,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             }
             menu.innerHTML = menuHtml;
             document.body.appendChild(menu);
-            requestAnimationFrame(() => menu.classList.add('show'));
+            requestAnimationFrame(() => { clampContextMenu(menu, (typeof e !== 'undefined' ? e.clientX : x), (typeof e !== 'undefined' ? e.clientY : y)); menu.classList.add('show'); });
             contextMenu = menu;
             contextMsgId = msgId;
     
@@ -10908,7 +10921,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 <div class="context-menu-item" data-action="save-img">另存为</div>
             `;
             document.body.appendChild(menu);
-            requestAnimationFrame(() => menu.classList.add('show'));
+            requestAnimationFrame(() => { clampContextMenu(menu, (typeof e !== 'undefined' ? e.clientX : x), (typeof e !== 'undefined' ? e.clientY : y)); menu.classList.add('show'); });
             contextMenu = menu;
 
             menu.addEventListener('click', (event) => {
@@ -10942,7 +10955,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 <div class="context-menu-item" data-action="refresh">刷新</div>
             `;
             document.body.appendChild(menu);
-            requestAnimationFrame(() => menu.classList.add('show'));
+            requestAnimationFrame(() => { clampContextMenu(menu, (typeof e !== 'undefined' ? e.clientX : x), (typeof e !== 'undefined' ? e.clientY : y)); menu.classList.add('show'); });
             contextMenu = menu;
     
             menu.addEventListener('click', (event) => {
@@ -14523,7 +14536,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             '<div class="context-menu-divider"></div>' +
             '<div class="context-menu-item danger" data-action="plaza-del-section">删除分区</div>';
         document.body.appendChild(menu);
-        requestAnimationFrame(() => menu.classList.add('show'));
+        requestAnimationFrame(() => { clampContextMenu(menu, (typeof e !== 'undefined' ? e.clientX : x), (typeof e !== 'undefined' ? e.clientY : y)); menu.classList.add('show'); });
         contextMenu = menu;
         menu.addEventListener('click', (ev) => {
             const action = ev.target.dataset.action;
