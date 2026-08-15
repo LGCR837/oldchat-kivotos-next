@@ -88,19 +88,19 @@ browserify 会自动注入 process polyfill，于是 bundle 会**错误地走进
 
 ## 5. 现状与缺口
 
-已完成（P0）：引擎 / 宿主 / 渲染 / 调试器入口 / sha256 校验 / 打包链路。
+已完成（P0 + 本轮增强，对照 nx8 权威规范）：
+- 引擎 / 宿主 / 渲染 / 调试器入口 / sha256 校验 / 打包链路。
+- **UI 控件 14/14 全覆盖**（`page/text/image/button/input/checkbox/list/spacer/column/row/scroll/card/divider/progress`）。
+- **权限系统强制**：`manifest.permissions` 实际限制 `app.*` API（storage / network / network_external / camera），缺权限回调报错或返回 nil；`network_external` 走 `allowed_hosts` 白名单校验（`*` 或空=全部）。
+- **`app.*` API 对齐 nx8**：`http_get`(同服) / `http_request`(通用 method/headers/json/body，走 plugin:http 绕 CORS) / `asset`(本地 data URI / 远程 `/lua-assets/<id>/`) / `json_encode`·`json_decode` / `url_encode` / storage 系列(`get/set/remove/clear/keys/count/get_json/set_json`) / 控件操作(`get_text/append_text/set_hint/focus/get_checked/set_checked/set_visible/get_visible/set_enabled`)。
+- **`.cip` 本地包资源**：Rust `read_cip_assets` 把包内资源转 data URI，JS 端 `app.asset()` 解析（兼容 `assets/` 前缀）。
+- **`app.camera` 桌面替代**：Rust `cip_pick_image` 弹文件框选图，返回 data URI。
+- 指令预算 hook / 沙箱（`os`/`dofile`/`loadfile` 已剥离）沿用。
 
-还没做：
-
-- **`.cip` 包整体处理**：现在只消费服务端解包后下发的 `main.lua`，没有本地解 ZIP、
-  没有 `assets/` 资源解析（`assets/icon.png` 这类相对路径还不会映射到 `/lua-assets/<id>/...`）。
-- **权限系统**：`manifest.permissions` 只是显示，没有实际执行 —— 没声明 `network` 的小程序
-  照样能调 `http_get`；`allowed_hosts` 白名单未实现。
-- **外网请求**：`network_external` 需要走 Rust 侧代理命令（`cip_http_get`）做域名白名单校验，
-  目前是前端直接发。
-- **`app.camera`**：桌面端直接回错误。
-- **发现页集成**：现在只有设置页的调试入口，没有接进「发现」页的小程序列表。
-- UI 组件只覆盖 `page/text/image/button/input/checkbox/list/spacer`，规范里其它组件未实现。
+还没做（本轮未选 / 待验证）：
+- **发现页集成**：仍只有设置页「Lua 小程序调试器」入口，未接进「发现 → 小程序」列表（用户本轮未选）。
+- **远程包资源离线验证**：服务端 `/lua-assets/<id>/<path>` 路由仅在线小程序可用，本地无法离线验证资源路由。
+- **Rust 改动待构建验证**：`read_cip_assets`/`cip_pick_image` 已加但本沙箱无法 `tauri dev` 编译，需在用户机 `npm run tauri dev` 验证。
 
 备选方案：Rust 侧用 mlua 跑 Lua，安全边界更硬（真正的内存/指令限制、可控 FFI），
 但要新增一整套 IPC 协议来传 UI 树和回调。P0 没走这条路，规模化时可以重新评估。

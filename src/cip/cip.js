@@ -94,6 +94,7 @@
             description: a.description || '',
             version: a.version || '',
             permissions: a.permissions || [],
+            allowed_hosts: a.allowed_hosts || [],
             kind: 'local'
           };
         });
@@ -109,6 +110,7 @@
             description: a.description || '',
             version: a.version || '',
             permissions: a.permissions || [],
+            allowed_hosts: a.allowed_hosts || [],
             kind: 'remote'
           };
         });
@@ -182,16 +184,21 @@
       var area = document.getElementById('cipRunArea');
       area.innerHTML = '<div class="cip-placeholder">加载「' + (app.name || app.id) + '」中…</div>';
       if (app.kind === 'local') {
-        // 本地小程序：从用户目录读取入口脚本（不做 sha256 远程校验）
-        cipInvoke('read_cip_app', { id: app.id }).then(function (script) {
+        // 本地小程序：读取入口脚本 + 包内资源（不做 sha256 远程校验）
+        Promise.all([
+          cipInvoke('read_cip_app', { id: app.id }),
+          cipInvoke('read_cip_assets', { id: app.id }).catch(function () { return []; })
+        ]).then(function (res) {
+          var script = res[0];
+          var assets = res[1] || [];
           if (!script) { area.innerHTML = '<div class="cip-error">脚本为空</div>'; return; }
-          self.execute(app, script);
+          self.execute(app, script, self._buildAssetResolver(assets, app.id));
         }).catch(function (err) {
           area.innerHTML = '<div class="cip-error">加载失败：' + ((err && err.message) || err) + '</div>';
         });
         return;
       }
-      // 官方小程序：拉取脚本 + sha256 校验
+      // 官方小程序：拉取脚本 + sha256 校验；资源走 /lua-assets/<id>/<path>
       getJSON(appUrl(app.id)).then(function (data) {
         var script = data && data.script;
         if (!script) { area.innerHTML = '<div class="cip-error">脚本为空</div>'; return; }
@@ -202,13 +209,33 @@
               expected.slice(0, 12) + '… 实际 ' + hash.slice(0, 12) + '…）</div>';
             return;
           }
-          self.execute(app, script);
+          var resolver = function (path) {
+            var p = String(path || '').replace(/^assets\//, '');
+            return origin() + '/lua-assets/' + app.id + '/' + p;
+          };
+          self.execute(app, script, resolver);
         });
       }).catch(function (err) {
         area.innerHTML = '<div class="cip-error">加载失败：' + ((err && err.message) || err) + '</div>';
       });
     },
-    execute: function (app, script) {
+    // 由包内资源列表构建 path -> data URI 解析器（兼容 assets/ 前缀）
+    _buildAssetResolver: function (assets, id) {
+      var map = {};
+      (assets || []).forEach(function (a) {
+        var p = a.path || '';
+        if (a.data_uri) {
+          map[p] = a.data_uri;
+          var stripped = p.replace(/^assets\//, '');
+          if (stripped && stripped !== p) map[stripped] = a.data_uri;
+        }
+      });
+      return function (path) {
+        var p = String(path || '');
+        return map[p] || map[p.replace(/^assets\//, '')] || null;
+      };
+    },
+    execute: function (app, script, resolver) {
       var area = document.getElementById('cipRunArea');
       try {
         if (!window.CipEngine) { area.innerHTML = '<div class="cip-error">引擎未加载（fengari 缺失）</div>'; return; }
@@ -217,9 +244,15 @@
         // 切换小程序前先销毁上一个 Lua state，避免定时器/回调打到已废弃的 state
         this._teardown();
 
-        // host 复用 window.CipHost；engine 在构造后赋给 ctx.engine，运行时再调用
-        var ctx = { appId: app.id, toast: this.toast.bind(this), engine: null };
-        var engine = new window.CipEngine(app.id, window.CipHost.makeHost(ctx), {});
+        // 权限 / 外网白名单 / 资源解析器透传给引擎与宿主
+        var opts = {
+          permissions: app.permissions || [],
+          allowedHosts: app.allowed_hosts || [],
+          isRemote: app.kind === 'remote'
+        };
+        var ctx = { appId: app.id, toast: this.toast.bind(this), engine: null, assetResolver: resolver || null };
+        var host = window.CipHost.makeHost(ctx);
+        var engine = new window.CipEngine(app.id, host, opts);
         ctx.engine = engine;
         this._engine = engine;
         engine.init();
@@ -284,6 +317,33 @@
       return r.text().then(function (text) {
         if (!r.ok) throw new Error('HTTP ' + r.status + (text ? ': ' + text.slice(0, 200) : ''));
         return text;
+      });
+    });
+  };
+  // 通用 HTTP 请求（供 app.http_request 使用）：支持 method/headers/body。
+  // 走 window.__tauriHttpFetchImpl（plugin:http，Rust 侧取，绕开 CORS）；相对路径自动补 origin+/v1 并带 Bearer，
+  // 绝对 URL 视为外网、不带凭据（allowed_hosts 白名单已在引擎侧校验）。
+  window.__cipHttpRequest = function (opts) {
+    opts = opts || {};
+    var url = opts.url || '';
+    var method = (opts.method || 'GET').toUpperCase();
+    var headers = {};
+    var h = opts.headers || {};
+    Object.keys(h).forEach(function (k) { headers[k] = String(h[k]); });
+    var isAbs = /^https?:\/\//i.test(url);
+    if (!isAbs) {
+      url = origin() + '/v1' + (url.charAt(0) === '/' ? url : '/' + url);
+      headers['Authorization'] = 'Bearer ' + getToken();
+    }
+    var init = { method: method, headers: headers };
+    if (method !== 'GET' && method !== 'HEAD' && opts.body != null) init.body = opts.body;
+    var impl = window.__tauriHttpFetchImpl;
+    var p = impl ? impl(url, init) : fetch(url, init);
+    return Promise.resolve(p).then(function (r) {
+      return r.text().then(function (text) {
+        var rh = {};
+        try { if (r.headers && r.headers.forEach) r.headers.forEach(function (v, k) { rh[k] = v; }); } catch (e) {}
+        return { status: r.status, headers: rh, body: text };
       });
     });
   };

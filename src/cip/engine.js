@@ -25,6 +25,11 @@
   var LUA_TFUNCTION = lua.LUA_TFUNCTION;
   var LUA_OK = lua.LUA_OK;
 
+  // 所有 UI 控件的标量属性白名单（Lua 表 ↔ JS 节点树共用）
+  var SCALAR_KEYS = ['text', 'id', 'url', 'title', 'placeholder', 'value',
+    'height', 'width', 'margin', 'padding', 'size', 'color', 'center', 'checked',
+    'spacing', 'orientation', 'background', 'gravity', 'min', 'max'];
+
   function luaToString(L, idx) {
     var t = lua.lua_type(L, idx);
     if (t === LUA_TSTRING) return to_jsstring(lua.lua_tolstring(L, idx));
@@ -113,12 +118,10 @@
 
         if (lua.lua_gettop(L2) >= 1 && lua.lua_type(L2, 1) === LUA_TTABLE) {
           var propsIdx = 1;
-          var scalarKeys = ['text', 'id', 'url', 'title', 'placeholder', 'value',
-            'height', 'margin', 'size', 'color', 'center', 'checked'];
-          for (var k = 0; k < scalarKeys.length; k++) {
-            lua.lua_getfield(L2, propsIdx, to_luastring(scalarKeys[k]));
+          for (var k = 0; k < SCALAR_KEYS.length; k++) {
+            lua.lua_getfield(L2, propsIdx, to_luastring(SCALAR_KEYS[k]));
             if (lua.lua_type(L2, -1) !== LUA_TNIL) {
-              lua.lua_setfield(L2, -2, to_luastring(scalarKeys[k])); // 存入 node(-2)
+              lua.lua_setfield(L2, -2, to_luastring(SCALAR_KEYS[k])); // 存入 node(-2)
             } else {
               lua.lua_pop(L2, 1);
             }
@@ -151,7 +154,8 @@
       };
     }
 
-    var uiFns = ['page', 'text', 'image', 'button', 'input', 'checkbox', 'list', 'spacer'];
+    var uiFns = ['page', 'text', 'image', 'button', 'input', 'checkbox', 'list', 'spacer',
+      'column', 'row', 'scroll', 'card', 'divider', 'progress'];
     lua.lua_createtable(L, 0, uiFns.length); // ui 表
     for (var n = 0; n < uiFns.length; n++) {
       lua.lua_pushcfunction(L, makeNodeCtor(uiFns[n]));
@@ -160,17 +164,37 @@
     lua.lua_setglobal(L, to_luastring('ui'));
   };
 
-  // ---- app.* 宿主 API（回调式）----
+  // ---- app.* 宿主 API（回调式，带权限强制）----
   CipEngine.prototype._installApp = function () {
     var L = this.L;
     var self = this;
     var host = this.host;
+    var perms = (this.opts && this.opts.permissions) || [];
+    var allowedHosts = (this.opts && this.opts.allowedHosts) || [];
 
     function captureRef(L2, idx) {
       if (lua.lua_type(L2, idx) === LUA_TFUNCTION) {
         return lauxlib.luaL_ref(L2, LUA_REGISTRYINDEX);
       }
       return null;
+    }
+    function hasPerm(p) { return perms.indexOf(p) >= 0; }
+    // 缺权限时：有回调则回调报错，否则 push nil；返回消耗的返回值数量
+    function deny(cbRef, perm) {
+      if (typeof cbRef === 'number') self.invokeRef(cbRef, null, '权限不足：需要 ' + perm + ' 权限');
+      return 0;
+    }
+    function readStr(L2, key) {
+      lua.lua_getfield(L2, 1, to_luastring(key));
+      var s = (lua.lua_type(L2, -1) === LUA_TSTRING) ? to_jsstring(lua.lua_tolstring(L2, -1)) : null;
+      lua.lua_pop(L2, 1);
+      return s;
+    }
+    function readTbl(L2, key) {
+      lua.lua_getfield(L2, 1, to_luastring(key));
+      var t = (lua.lua_type(L2, -1) === LUA_TTABLE) ? self._luaTableToJs(L2, -1) : null;
+      lua.lua_pop(L2, 1);
+      return t;
     }
 
     var appFns = {
@@ -179,17 +203,53 @@
         return 0;
       },
       storage_get: function (L2) {
+        if (!hasPerm('storage')) { lua.lua_pushnil(L2); return 1; }
         var v = host.storage_get ? host.storage_get(luaToString(L2, 1)) : null;
         if (v == null) lua.lua_pushnil(L2);
         else lua.lua_pushstring(L2, to_luastring(String(v)));
         return 1;
       },
       storage_set: function (L2) {
+        if (!hasPerm('storage')) return 0;
         if (host.storage_set) host.storage_set(luaToString(L2, 1), luaToString(L2, 2));
         return 0;
       },
+      storage_remove: function (L2) {
+        if (!hasPerm('storage')) return 0;
+        if (host.storage_remove) host.storage_remove(luaToString(L2, 1));
+        return 0;
+      },
+      storage_clear: function (L2) {
+        if (!hasPerm('storage')) return 0;
+        if (host.storage_clear) host.storage_clear();
+        return 0;
+      },
+      storage_keys: function (L2) {
+        if (!hasPerm('storage')) { lua.lua_pushnil(L2); return 1; }
+        var keys = host.storage_keys ? host.storage_keys() : [];
+        self.pushJsToLua(L2, keys);
+        return 1;
+      },
+      storage_count: function (L2) {
+        if (!hasPerm('storage')) { lua.lua_pushinteger(L2, 0); return 1; }
+        var n = host.storage_count ? host.storage_count() : 0;
+        lua.lua_pushinteger(L2, n);
+        return 1;
+      },
+      storage_get_json: function (L2) {
+        if (!hasPerm('storage')) { lua.lua_pushnil(L2); return 1; }
+        var obj = host.storage_get_json ? host.storage_get_json(luaToString(L2, 1)) : null;
+        self.pushJsToLua(L2, obj);
+        return 1;
+      },
+      storage_set_json: function (L2) {
+        if (!hasPerm('storage')) return 0;
+        var val = (lua.lua_type(L2, 2) === LUA_TTABLE) ? self._luaTableToJs(L2, 2) : null;
+        if (host.storage_set_json) host.storage_set_json(luaToString(L2, 1), val);
+        return 0;
+      },
+      // app.json ≈ json_encode（保留向后兼容）
       json: function (L2) {
-        // 把 Lua 值转 JS 再 JSON 序列化（简单支持 string/number/boolean/table）
         var v;
         var t = lua.lua_type(L2, 1);
         if (t === LUA_TSTRING) v = luaToString(L2, 1);
@@ -197,8 +257,37 @@
         else if (t === LUA_TBOOLEAN) v = lua.lua_toboolean(L2, 1);
         else if (t === LUA_TTABLE) v = self._luaTableToJs(L2, 1);
         else v = null;
-        var s = JSON.stringify(v);
-        lua.lua_pushstring(L2, to_luastring(s == null ? 'null' : s));
+        lua.lua_pushstring(L2, to_luastring(JSON.stringify(v)));
+        return 1;
+      },
+      json_encode: function (L2) {
+        var v;
+        var t = lua.lua_type(L2, 1);
+        if (t === LUA_TSTRING) v = luaToString(L2, 1);
+        else if (t === LUA_TNUMBER) v = lua.lua_tonumber(L2, 1);
+        else if (t === LUA_TBOOLEAN) v = lua.lua_toboolean(L2, 1);
+        else if (t === LUA_TTABLE) v = self._luaTableToJs(L2, 1);
+        else v = null;
+        lua.lua_pushstring(L2, to_luastring(JSON.stringify(v)));
+        return 1;
+      },
+      json_decode: function (L2) {
+        var s = luaToString(L2, 1);
+        if (s == null) { lua.lua_pushnil(L2); return 1; }
+        try { self.pushJsToLua(L2, JSON.parse(s)); } catch (e) { lua.lua_pushnil(L2); }
+        return 1;
+      },
+      url_encode: function (L2) {
+        var s = luaToString(L2, 1) || '';
+        lua.lua_pushstring(L2, to_luastring(encodeURIComponent(s)));
+        return 1;
+      },
+      asset: function (L2) {
+        var path = luaToString(L2, 1) || '';
+        if (self.opts && self.opts.isRemote && !hasPerm('network')) { lua.lua_pushnil(L2); return 1; }
+        var url = host.asset ? host.asset(path) : null;
+        if (url == null) lua.lua_pushnil(L2);
+        else lua.lua_pushstring(L2, to_luastring(String(url)));
         return 1;
       },
       delay: function (L2) {
@@ -215,15 +304,107 @@
         if (host.set_image) host.set_image(luaToString(L2, 1), luaToString(L2, 2));
         return 0;
       },
+      append_text: function (L2) {
+        if (host.append_text) host.append_text(luaToString(L2, 1), luaToString(L2, 2));
+        return 0;
+      },
+      set_hint: function (L2) {
+        if (host.set_hint) host.set_hint(luaToString(L2, 1), luaToString(L2, 2));
+        return 0;
+      },
+      focus: function (L2) {
+        if (host.focus) host.focus(luaToString(L2, 1));
+        return 0;
+      },
+      get_text: function (L2) {
+        var s = host.get_text ? host.get_text(luaToString(L2, 1)) : null;
+        if (s == null) lua.lua_pushnil(L2); else lua.lua_pushstring(L2, to_luastring(s));
+        return 1;
+      },
+      get_checked: function (L2) {
+        var b = host.get_checked ? host.get_checked(luaToString(L2, 1)) : false;
+        lua.lua_pushboolean(L2, !!b);
+        return 1;
+      },
+      set_checked: function (L2) {
+        if (host.set_checked) host.set_checked(luaToString(L2, 1), !!lua.lua_toboolean(L2, 2));
+        return 0;
+      },
+      set_visible: function (L2) {
+        if (host.set_visible) host.set_visible(luaToString(L2, 1), !!lua.lua_toboolean(L2, 2));
+        return 0;
+      },
+      get_visible: function (L2) {
+        var b = host.get_visible ? host.get_visible(luaToString(L2, 1)) : true;
+        lua.lua_pushboolean(L2, !!b);
+        return 1;
+      },
+      set_enabled: function (L2) {
+        if (host.set_enabled) host.set_enabled(luaToString(L2, 1), !!lua.lua_toboolean(L2, 2));
+        return 0;
+      },
       http_get: function (L2) {
+        var cbRef = captureRef(L2, 2);
+        if (!hasPerm('network')) return deny(cbRef, 'network');
         var path = luaToString(L2, 1);
-        var ref = captureRef(L2, 2);
-        if (host.http_get) host.http_get(path, ref);
+        if (host.http_get) host.http_get(path, cbRef);
+        return 0;
+      },
+      http_request: function (L2) {
+        var url = readStr(L2, 'url');
+        var cbRef = captureRef(L2, 2);
+        if (!url) { if (typeof cbRef === 'number') self.invokeRef(cbRef, null, '缺少 url'); return 0; }
+        var isExternal = /^https?:\/\//i.test(url);
+        if (isExternal) {
+          if (!hasPerm('network_external')) return deny(cbRef, 'network_external');
+          // allowed_hosts 白名单（'*' 或空表示全部）
+          if (allowedHosts.length && allowedHosts.indexOf('*') === -1) {
+            try {
+              var h = new URL(url).host;
+              if (allowedHosts.indexOf(h) === -1) {
+                if (typeof cbRef === 'number') self.invokeRef(cbRef, null, '目标主机不在 allowed_hosts 白名单: ' + h);
+                return 0;
+              }
+            } catch (e) {
+              if (typeof cbRef === 'number') self.invokeRef(cbRef, null, '非法 URL');
+              return 0;
+            }
+          }
+        } else {
+          if (!hasPerm('network')) return deny(cbRef, 'network');
+        }
+        var method = (readStr(L2, 'method') || 'GET').toUpperCase();
+        var headers = readTbl(L2, 'headers') || {};
+        var body = readStr(L2, 'body') || '';
+        var jsonBody = readTbl(L2, 'json');
+        if (jsonBody && typeof jsonBody === 'object') {
+          body = JSON.stringify(jsonBody);
+          if (!headers['Content-Type'] && !headers['content-type']) headers['Content-Type'] = 'application/json';
+        }
+        var fn = window.__cipHttpRequest;
+        var p = fn ? fn({ url: url, method: method, headers: headers, body: body })
+                   : Promise.reject(new Error('请求能力不可用'));
+        Promise.resolve(p).then(function (resp) {
+          if (typeof cbRef === 'number') {
+            var r = (resp && typeof resp === 'object') ? resp : { status: 0, headers: {}, body: String(resp || '') };
+            self.invokeRef(cbRef, r, null);
+          }
+        }).catch(function (err) {
+          if (typeof cbRef === 'number') self.invokeRef(cbRef, null, String((err && err.message) || err));
+        });
         return 0;
       },
       camera: function (L2) {
-        var ref = captureRef(L2, 1);
-        if (host.camera) host.camera(ref);
+        var cbRef = captureRef(L2, 1);
+        if (!hasPerm('camera')) return deny(cbRef, 'camera');
+        var inv = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
+          (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke);
+        if (!inv) { if (typeof cbRef === 'number') self.invokeRef(cbRef, null, '桌面端不支持相机'); return 0; }
+        Promise.resolve(inv('cip_pick_image', {})).then(function (uri) {
+          if (typeof cbRef === 'number') self.invokeRef(cbRef, uri || null, uri ? null : '已取消选择');
+        }).catch(function (err) {
+          if (typeof cbRef === 'number') self.invokeRef(cbRef, null, String((err && err.message) || err));
+        });
         return 0;
       },
       back: function (L2) {
@@ -238,6 +419,26 @@
       lua.lua_setfield(L, -2, to_luastring(name));
     });
     lua.lua_setglobal(L, to_luastring('app'));
+  };
+
+  // JS 值 → Lua 栈（供 app.* 返回 table/数组用）
+  CipEngine.prototype.pushJsToLua = function (L, v) {
+    if (v === null || v === undefined) { lua.lua_pushnil(L); return; }
+    if (typeof v === 'string') { lua.lua_pushstring(L, to_luastring(v)); return; }
+    if (typeof v === 'number') { lua.lua_pushnumber(L, v); return; }
+    if (typeof v === 'boolean') { lua.lua_pushboolean(L, v); return; }
+    if (Array.isArray(v)) {
+      lua.lua_createtable(L, v.length, 0);
+      for (var i = 0; i < v.length; i++) { this.pushJsToLua(L, v[i]); lua.lua_rawseti(L, -2, i + 1); }
+      return;
+    }
+    if (typeof v === 'object') {
+      lua.lua_createtable(L, 0, Object.keys(v).length);
+      var self = this;
+      Object.keys(v).forEach(function (k) { self.pushJsToLua(L, v[k]); lua.lua_setfield(L, -2, to_luastring(k)); });
+      return;
+    }
+    lua.lua_pushnil(L);
   };
 
   // ---- 执行脚本，返回 JS 节点树 ----
@@ -275,11 +476,9 @@
     lua.lua_pop(L, 1);
     if (!type) return null;
     var node = { type: type };
-    var scalarKeys = ['text', 'id', 'url', 'title', 'placeholder', 'value',
-      'height', 'margin', 'size', 'color', 'center', 'checked'];
-    for (var k = 0; k < scalarKeys.length; k++) {
-      var v = readScalar(L, idx, scalarKeys[k]);
-      if (v !== null) node[scalarKeys[k]] = v;
+    for (var k = 0; k < SCALAR_KEYS.length; k++) {
+      var v = readScalar(L, idx, SCALAR_KEYS[k]);
+      if (v !== null) node[SCALAR_KEYS[k]] = v;
     }
     // on_click_ref
     lua.lua_getfield(L, idx, to_luastring('on_click_ref'));
@@ -365,6 +564,8 @@
       if (a == null) lua.lua_pushnil(L);
       else if (typeof a === 'number') lua.lua_pushnumber(L, a);
       else if (typeof a === 'boolean') lua.lua_pushboolean(L, a);
+      else if (typeof a === 'string') lua.lua_pushstring(L, to_luastring(a));
+      else if (typeof a === 'object') this.pushJsToLua(L, a);
       else lua.lua_pushstring(L, to_luastring(String(a)));
     }
     var status = lua.lua_pcall(L, args.length, 0, 0);

@@ -23,10 +23,22 @@
 
   function applyCommon(el, node, ctx) {
     if (node.margin != null) el.style.margin = toPx(node.margin);
+    if (node.padding != null) el.style.padding = toPx(node.padding);
     if (node.id) {
       el.dataset.cipId = node.id;
       idRegistry[ctx.appId + ':' + node.id] = el;
     }
+  }
+
+  // 渲染子节点（容器控件通用）
+  function renderChildren(node, ctx) {
+    var frag = document.createDocumentFragment();
+    var children = node.children || [];
+    for (var i = 0; i < children.length; i++) {
+      var el = renderNode(children[i], ctx);
+      if (el) frag.appendChild(el);
+    }
+    return frag;
   }
 
   function renderNode(node, ctx) {
@@ -109,6 +121,63 @@
         el.style.height = toPx(node.height || 8);
         return el;
       }
+      case 'column': {
+        var el = document.createElement('div');
+        el.className = 'cip-column';
+        if (node.spacing != null) el.style.gap = toPx(node.spacing);
+        if (node.background) el.style.background = node.background;
+        applyCommon(el, node, ctx);
+        el.appendChild(renderChildren(node, ctx));
+        return el;
+      }
+      case 'row': {
+        var el = document.createElement('div');
+        el.className = 'cip-row';
+        if (node.spacing != null) el.style.gap = toPx(node.spacing);
+        if (node.background) el.style.background = node.background;
+        applyCommon(el, node, ctx);
+        el.appendChild(renderChildren(node, ctx));
+        return el;
+      }
+      case 'card': {
+        var el = document.createElement('div');
+        el.className = 'cip-card';
+        if (node.background) el.style.background = node.background;
+        applyCommon(el, node, ctx);
+        if (node.title) {
+          var ct = document.createElement('div');
+          ct.className = 'cip-card-title';
+          ct.textContent = node.title;
+          el.appendChild(ct);
+        }
+        el.appendChild(renderChildren(node, ctx));
+        return el;
+      }
+      case 'scroll': {
+        var el = document.createElement('div');
+        el.className = 'cip-scroll';
+        if (node.height) el.style.maxHeight = toPx(node.height);
+        applyCommon(el, node, ctx);
+        el.appendChild(renderChildren(node, ctx));
+        return el;
+      }
+      case 'divider': {
+        var el = document.createElement('hr');
+        el.className = 'cip-divider';
+        applyCommon(el, node, ctx);
+        return el;
+      }
+      case 'progress': {
+        var el = document.createElement('div');
+        el.className = 'cip-progress';
+        var bar = document.createElement('div');
+        bar.className = 'cip-progress-bar';
+        var pct = Math.max(0, Math.min(100, Number(node.value) || 0));
+        bar.style.width = pct + '%';
+        el.appendChild(bar);
+        applyCommon(el, node, ctx);
+        return el;
+      }
       default:
         console.warn('[cip] unknown node type', node && node.type);
         return null;
@@ -155,11 +224,52 @@
     if (el && el.tagName === 'IMG') { el.src = uri; return true; }
     return false;
   }
+  function getEl(appId, id) { return idRegistry[appId + ':' + id] || null; }
+  function getText(appId, id) { var el = getEl(appId, id); return el ? el.textContent : null; }
+  function appendText(appId, id, s) {
+    var el = getEl(appId, id); if (!el) return false;
+    el.textContent = (el.textContent || '') + String(s); return true;
+  }
+  function setHint(appId, id, s) {
+    var el = getEl(appId, id); if (!el || el.tagName !== 'INPUT') return false;
+    el.placeholder = String(s); return true;
+  }
+  function focus(appId, id) { var el = getEl(appId, id); if (el) { try { el.focus(); } catch (e) {} return true; } return false; }
+  function getChecked(appId, id) {
+    var el = getEl(appId, id); if (!el || el.tagName !== 'INPUT' || el.type !== 'checkbox') return false;
+    return !!el.checked;
+  }
+  function setChecked(appId, id, b) {
+    var el = getEl(appId, id); if (!el || el.tagName !== 'INPUT' || el.type !== 'checkbox') return false;
+    el.checked = !!b; return true;
+  }
+  function setVisible(appId, id, v) {
+    var el = getEl(appId, id); if (!el) return false;
+    el.style.display = v ? '' : 'none'; return true;
+  }
+  function getVisible(appId, id) {
+    var el = getEl(appId, id); if (!el) return false;
+    return el.style.display !== 'none';
+  }
+  function setEnabled(appId, id, e) {
+    var el = getEl(appId, id); if (!el) return false;
+    if (el.tagName === 'INPUT' || el.tagName === 'BUTTON' || el.tagName === 'TEXTAREA') { el.disabled = !e; return true; }
+    return false;
+  }
 
   window.CipRender = {
     renderTree: renderTree,
     setText: setText,
     setImage: setImage,
+    getText: getText,
+    appendText: appendText,
+    setHint: setHint,
+    focus: focus,
+    getChecked: getChecked,
+    setChecked: setChecked,
+    setVisible: setVisible,
+    getVisible: getVisible,
+    setEnabled: setEnabled,
     clearRegistry: clearRegistry
   };
 })(window);

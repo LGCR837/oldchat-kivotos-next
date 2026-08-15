@@ -872,6 +872,108 @@ fn delete_cip_app(app: tauri::AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+// 最小 base64 编码（避免引入额外 crate）
+fn b64_encode(input: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    let mut i = 0;
+    while i < input.len() {
+        let b0 = input[i] as usize;
+        let b1 = if i + 1 < input.len() { input[i + 1] as usize } else { 0 };
+        let b2 = if i + 2 < input.len() { input[i + 2] as usize } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(CHARS[(n >> 18) & 63] as char);
+        out.push(CHARS[(n >> 12) & 63] as char);
+        out.push(if i + 1 < input.len() { CHARS[(n >> 6) & 63] as char } else { '=' });
+        out.push(if i + 2 < input.len() { CHARS[n & 63] as char } else { '=' });
+        i += 3;
+    }
+    out
+}
+
+fn mime_of(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "json" => "application/json",
+        "txt" => "text/plain",
+        "md" => "text/markdown",
+        "css" => "text/css",
+        "js" => "application/javascript",
+        "html" => "text/html",
+        _ => "application/octet-stream",
+    }
+}
+
+// 读取本地小程序包内资源（不含 .lua 脚本），返回 [{path, data_uri}]
+fn collect_assets(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<serde_json::Value>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                collect_assets(root, &p, out);
+                continue;
+            }
+            let ext = p
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if ext == "lua" {
+                continue; // 只打包资源，不打包脚本
+            }
+            if let Ok(bytes) = std::fs::read(&p) {
+                let rel = p
+                    .strip_prefix(root)
+                    .unwrap_or(&p)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let uri = format!("data:{};base64,{}", mime_of(&p), b64_encode(&bytes));
+                out.push(serde_json::json!({ "path": rel, "data_uri": uri }));
+            }
+        }
+    }
+}
+
+#[tauri::command]
+fn read_cip_assets(app: tauri::AppHandle, id: String) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    let safe = sanitize_theme_id(&id);
+    let dir = match cip_base(&app) {
+        Ok(d) => d.join(safe),
+        Err(_) => return out,
+    };
+    collect_assets(&dir, &dir, &mut out);
+    out
+}
+
+// 桌面端相机替代：弹文件框选图片，返回 data URI（取消则返回 null）
+#[tauri::command]
+fn cip_pick_image(app: tauri::AppHandle) -> Option<String> {
+    let picked = app
+        .dialog()
+        .file()
+        .add_filter("图片", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
+        .blocking_pick_file();
+    let path = match picked {
+        Some(FilePath::Path(p)) => p,
+        _ => return None,
+    };
+    let bytes = std::fs::read(&path).ok()?;
+    let mime = mime_of(&path);
+    Some(format!("data:{};base64,{}", mime, b64_encode(&bytes)))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 启动自检：必须先于 Tauri 运行时初始化。
@@ -919,7 +1021,9 @@ pub fn run() {
             import_cip_app,
             list_cip_apps,
             read_cip_app,
-            delete_cip_app
+            delete_cip_app,
+            read_cip_assets,
+            cip_pick_image
         ])
         // 拦截窗口关闭请求：改为隐藏到托盘
         .on_window_event(|window, event| {

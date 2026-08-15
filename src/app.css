@@ -4944,6 +4944,19 @@ body.sidebar-anim-off .sidebar-panel.side-slide-in .contact-item { animation: no
 .cip-list-item { padding: 10px 12px; border-bottom: 1px solid var(--border-color); font-size: 14px; }
 .cip-list-item:last-child { border-bottom: none; }
 .cip-spacer { width: 100%; }
+.cip-column { display: flex; flex-direction: column; gap: 8px; }
+.cip-row { display: flex; flex-direction: row; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cip-card {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 12px;
+    background: var(--card-bg, rgba(127,127,127,0.06));
+}
+.cip-card-title { font-size: 14px; font-weight: 700; margin-bottom: 8px; }
+.cip-scroll { max-height: 320px; overflow: auto; border: 1px solid var(--border-color); border-radius: 8px; padding: 8px; }
+.cip-divider { height: 1px; background: var(--border-color); border: 0; margin: 8px 0; }
+.cip-progress { height: 8px; background: var(--border-color); border-radius: 4px; overflow: hidden; margin: 8px 0; }
+.cip-progress-bar { height: 100%; background: var(--accent); width: 0%; transition: width 0.2s ease; }
 .cip-toast {
     position: fixed;
     left: 50%;
