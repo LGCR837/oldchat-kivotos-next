@@ -14315,16 +14315,25 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const arr = await discoverChannels(q);
             wrap.innerHTML = '';
             if (!arr || !arr.length) { wrap.innerHTML = '<div class="channel-empty">没有找到频道</div>'; return; }
+            // 跨设备订阅同步：发现列表里标记为已订阅的频道，并入本地「我的频道」缓存
             arr.forEach(raw => {
                 const ch = channelMetaFromApi(raw);
-                // 跨设备订阅同步：发现列表里标记为已订阅的频道，并入本地「我的频道」缓存
                 if (ch.subscribed) addSubscribedChannel(ch);
+            });
+            // 最右侧「发现」栏不显示已加入的频道；已加入的只在左侧「我的频道」栏展示
+            const toShow = arr.filter(raw => !isSubscribedChannel(channelMetaFromApi(raw).id));
+            if (!toShow.length) { wrap.innerHTML = '<div class="channel-empty">没有更多可发现的频道</div>'; return; }
+            toShow.forEach(raw => {
+                const ch = channelMetaFromApi(raw);
                 const subscribed = isSubscribedChannel(ch.id);
                 wrap.appendChild(channelCard(ch, subscribed,
                     () => openChannelView(ch),
                     async () => {
                         if (subscribed) await doUnsubscribe(ch); else await doSubscribe(ch);
+                        // 订阅/取消后：刷新右侧「我的频道」栏与「发现」栏，并同步左侧侧边栏
                         renderSubscribedList();
+                        if (typeof renderChannelSidebar === 'function') renderChannelSidebar();
+                        updateChannelSidebarActive(null);
                         loadChannelDiscover(q);
                     }
                 ));
