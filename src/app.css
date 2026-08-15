@@ -337,6 +337,27 @@ body::-webkit-scrollbar {
 	margin-left: 8px;
 }
 
+/* 会话列表卡片右下角在线状态小圆点：默认隐藏，hover 才显示，带过渡动画 */
+.presence-dot {
+	position: absolute;
+	right: 16px;
+	bottom: 9px;
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	border: 2px solid var(--sidebar-bg, #fff);
+	box-sizing: border-box;
+	opacity: 0;
+	transform: scale(0.4);
+	transition: opacity 0.18s ease, transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+	pointer-events: none;
+	z-index: 2;
+}
+.contact-item:hover .presence-dot {
+	opacity: 1;
+	transform: scale(1);
+}
+
 .chat-area {
 	flex: 1;
 	display: flex;
@@ -2409,6 +2430,48 @@ body::-webkit-scrollbar {
 	background: var(--active)
 }
 
+/* 表情广场「收藏」按钮（hover 显按钮、已收藏时实心常驻） */
+.emoticon-item {
+	position: relative;
+}
+.emoticon-item .plaza-fav-btn {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: 0;
+	border-radius: 11px;
+	background: rgba(0,0,0,.55);
+	color: #fff;
+	font-size: 14px;
+	line-height: 22px;
+	text-align: center;
+	cursor: pointer;
+	opacity: 0;
+	transform: scale(.7);
+	transition: opacity .15s ease, transform .15s ease, background .15s ease;
+	z-index: 2;
+}
+.emoticon-item:hover .plaza-fav-btn {
+	opacity: 1;
+	transform: scale(1);
+}
+.emoticon-item .plaza-fav-btn:hover {
+	background: rgba(0,0,0,.75);
+}
+.emoticon-item .plaza-fav-btn.faved {
+	opacity: 1;
+	transform: scale(1);
+	background: var(--accent, #2563eb);
+	color: #fff;
+}
+.emoticon-item .plaza-fav-btn:disabled {
+	opacity: .5;
+	cursor: progress;
+}
+
 /* 收藏表情（本地收藏） */
 .collected-emoji-item {
 	position: relative
@@ -4311,10 +4374,12 @@ body::-webkit-scrollbar {
 .sidebar-panel.side-slide-in .contact-item:nth-child(n+5) { animation-delay: calc(var(--sb-anim-stagger, 60ms) * 4); }
 /* 关闭：设置「侧边栏卡片进入动画」关闭时，条目直接显示、不播放入场动画 */
 body.sidebar-anim-off .sidebar-panel.side-slide-in .contact-item { animation: none !important; }
-/* 侧边栏频道项悬停 */
-.channel-side-item { transition: background-color 0.15s ease, transform 0.12s ease; }
-.channel-side-item:hover { background: var(--hover); transform: translateX(2px); }
-.channel-side-item.active { background: var(--hover); }
+/* 侧边栏频道项：悬停/选中与普通联系人列表保持完全一致（不位移、同配色，避免视觉错位） */
+.channel-side-item { transition: background-color 0.15s ease; }
+.channel-side-item:hover { background: rgba(0,0,0,0.05); }
+.channel-side-item.active { background: rgba(0,0,0,0.07); font-weight: 500; }
+[data-theme-mode="dark"] .channel-side-item:hover { background: rgba(255,255,255,0.05); }
+[data-theme-mode="dark"] .channel-side-item.active { background: rgba(255,255,255,0.12); }
 /* 反应 chip 按下反馈 */
 .channel-reaction-chip:active { transform: scale(0.94); }
 
@@ -4324,7 +4389,7 @@ body.sidebar-anim-off .sidebar-panel.side-slide-in .contact-item { animation: no
     .channel-post-avatar, .channel-view-avatar, .channel-card-avatar, .channel-post-media img {
         animation: none !important;
     }
-    .channel-card:hover, .channel-side-item:hover { transform: none; }
+    .channel-card:hover { transform: none; }
 }
 
 /* ===== 公开法庭页面 ===== */

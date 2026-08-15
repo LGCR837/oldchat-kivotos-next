@@ -5783,9 +5783,34 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         });
     }
 
+    const CONTACTS_CACHE_KEY = 'oc_contacts_cache';
+    function readContactsCache() {
+        try {
+            const raw = localStorage.getItem(CONTACTS_CACHE_KEY);
+            if (!raw) return null;
+            const obj = JSON.parse(raw);
+            if (!obj || !Array.isArray(obj.friends) || !Array.isArray(obj.groups)) return null;
+            return obj;
+        } catch (e) { return null; }
+    }
+    function writeContactsCache(data) {
+        try { localStorage.setItem(CONTACTS_CACHE_KEY, JSON.stringify(data)); } catch (e) {}
+    }
+
     async function loadContacts() {
-        // 侧边栏加载前先显示统一转圈（复用 .oc-page-loading + .oc-spinner），数据到达后由 renderContacts 替换
-        contactList.innerHTML = '<div class="oc-page-loading"><span class="oc-spinner xl"></span><span>加载中...</span></div>';
+        // 缓存优先：先同步用缓存渲染，避免 5Mbps 限速下空等近 10s 白屏；拉取触发时机与原来一致
+        const _cached = readContactsCache();
+        if (_cached) {
+            contacts = _cached;
+            renderContacts();
+            renderPresenceIndicators();
+        } else {
+            // 侧边栏加载前先显示统一转圈（复用 .oc-page-loading + .oc-spinner），数据到达后由 renderContacts 替换
+            contactList.innerHTML = '<div class="oc-page-loading"><span class="oc-spinner xl"></span><span>加载中...</span></div>';
+        }
+        // 防并发：已在后台拉取则跳过（缓存已显示，等结果即可），不改变原有拉取触发时机
+        if (loadContacts._loading) return;
+        loadContacts._loading = true;
         try {
             let frData = null, grData = null;
             // 好友 / 群聊各自独立加载并加超时保护：此前用 Promise.all，任一侧接口在途时被重载打断
@@ -5801,10 +5826,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             } catch (e) { console.error('[contacts] 群聊列表加载失败:', e); }
             if (!frData && !grData) {
                 console.error('[contacts] 好友与群聊列表均加载失败');
-                contactList.innerHTML = '<div class="oc-page-loading"><span class="oc-spinner xl"></span><span style="color:var(--danger)">加载失败，请重试</span></div>';
+                if (!_cached) contactList.innerHTML = '<div class="oc-page-loading"><span class="oc-spinner xl"></span><span style="color:var(--danger)">加载失败，请重试</span></div>';
                 return;
             }
-            if (frData && frData.error) { showAlert(frData.error); contactList.innerHTML = ''; return; }
+            if (frData && frData.error) { showAlert(frData.error); if (!_cached) contactList.innerHTML = ''; return; }
             contacts = {
                 friends: (frData && frData.friends || []).map(f => ({
                     uid: getUid(f),
@@ -5825,6 +5850,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 }))
             };
             renderContacts();
+            // 拉取成功：写回缓存，下次启动/切换可直接显示，无需再等 5Mbps 限速链路
+            writeContactsCache(contacts);
+            // 渲染在线状态小圆点（卡片右下角 hover 显示）；presence 推送到达时会再次触发
+            renderPresenceIndicators();
             // 后台预加载联系人资料（填充称号到缓存），节流控制并发数
             const MAX_CONCURRENT_PROFILE_FETCHES = 3;
             let profileFetchIndex = 0;
@@ -5855,6 +5884,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             // 多会话消息接受：首次联系人加载完成后，对所有会话做一次静默补拉，补回离线期间漏掉的消息
             if (isMultiSessionEnabled()) backfillAllConversations();
         } catch (e) { console.error(e); }
+        finally { loadContacts._loading = false; }
     }
 
     async function loadUnreadCounts() {
@@ -7029,14 +7059,23 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     }
     function renderPresenceIndicators() {
         try {
-            // 会话列表头像（img[data-uid]）：用 box-shadow 圆环表示在线（兼容被替换元素不渲染 ::after 的限制）
-            document.querySelectorAll('img[data-uid]').forEach(img => {
-                const st = presenceMap.get(String(img.dataset.uid || '').toUpperCase());
-                if (!st || !st.isOnline) { img.style.boxShadow = ''; return; }
+            // 会话列表卡片：右下角小圆点表示在线，默认隐藏，hover 才显示（带过渡动画，见 app.css .presence-dot）
+            // 仅私聊卡片有意义（对方是在线用户）；群/频道不显示在线点
+            document.querySelectorAll('.contact-item[data-type="direct"]').forEach(item => {
+                const uid = String(item.dataset.id || '').toUpperCase();
+                const st = uid ? presenceMap.get(uid) : null;
+                let dot = item.querySelector('.presence-dot');
+                if (!st || !st.isOnline) { if (dot) dot.remove(); return; }
                 const color = st.status === 'busy' ? '#ef4444' : st.status === 'away' ? '#f59e0b' : '#22c55e';
-                img.style.boxShadow = '0 0 0 2px ' + color;
+                if (!dot) {
+                    dot = document.createElement('span');
+                    dot.className = 'presence-dot';
+                    item.appendChild(dot);
+                }
+                dot.style.background = color;
+                dot.title = st.status === 'busy' ? '忙碌' : st.status === 'away' ? '离开' : '在线';
             });
-            // 当前私聊头部在线点
+            // 当前私聊头部在线点（保留原有的小圆点，不属于卡片 hover 形态）
             const dot = document.getElementById('chatPresenceDot');
             if (dot && currentConv && currentConv.type === 'direct') {
                 const st = presenceMap.get(String(currentConv.id || '').toUpperCase());
@@ -8515,6 +8554,28 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         } finally {
             _switchingConv = false;
         }
+    }
+
+    // 聊天界面右键「刷新」：强制从服务器完整重拉当前会话消息。
+    // 与再次 switchConversation 不同——后者会命中内存缓存走静默增量，
+    // 服务器数据未变时（existingMsgEls>0 && newMsgs.length===0）直接 return，毫无可见效果。
+    // 这里清空内存缓存 + 清空 DOM，强制进入完整重建路径，并以非静默方式显示「同步中」。
+    async function forceRefreshConversation() {
+        if (!currentConv) return;
+        const type = currentConv.type, id = currentConv.id, convKey = currentConv.key;
+        // 清内存会话缓存，避免命中缓存恢复路径（那样仍走静默增量）
+        delete convCache[convKey];
+        // 清空 DOM 与渲染状态，强制进入完整重建路径（existingMsgEls.length === 0）
+        messagesContainer.classList.remove('fade-out');
+        messagesContainer.innerHTML = '';
+        lastRenderedMsg = null;
+        lastRenderedTs = 0;
+        convOffset[convKey] = 0;
+        convHasMore[convKey] = true;
+        if (seenMsgIds[convKey]) delete seenMsgIds[convKey];
+        messagesContainer._scrollHandler && messagesContainer.removeEventListener('scroll', messagesContainer._scrollHandler);
+        // 非静默：显示「同步中」并从服务器真正重拉（含完整重建 + 重挂滚动监听 + 标记已读）
+        fetchLatestMessages(type, id, convKey, false, 'switch-nocache');
     }
 
     /**
@@ -11092,18 +11153,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             menu.addEventListener('click', (event) => {
                 const action = event.target.dataset.action;
                 if (action === 'refresh') {
-                    if (currentConv) {
-                        const convKey = currentConv.key;
-                        switchConversation(currentConv.type, currentConv.id, currentConv.name);
-                        setTimeout(() => {
-                            const items = contactList.querySelectorAll('.contact-item');
-                            items.forEach(item => {
-                                if (item.dataset.convKey === convKey) {
-                                    item.classList.add('active');
-                                }
-                            });
-                        }, 0);
-                    }
+                    forceRefreshConversation();
                 }
                 hideContextMenu();
             });
@@ -11456,31 +11506,54 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const renderFolder = async () => {
             grid.innerHTML = '<div class="collected-emoji-empty">加载中…</div>';
             try {
-                const res = await apiFetch('/v1/favorites?limit=100');
+                // 云端「我的表情」：收藏的表情走 emoji 广场体系（/v1/emoji/plaza/mine），
+                // 与 §37 消息收藏夹（/v1/favorites）是两套独立系统。
+                // 旧实现误查 /v1/favorites 且只认 type==='image' && media_url，
+                // 导致收藏的表情一个都看不到。这里改为正确的「我的表情」接口。
+                const res = await apiFetch('/v1/emoji/plaza/mine?limit=200');
                 const data = await res.json();
                 const items = data.items || (data.data && data.data.items) || [];
-                const imgs = items.filter(it => it.type === 'image' && it.media_url);
-                if (!imgs.length) {
-                    grid.innerHTML = '<div class="collected-emoji-empty">暂不可用</div>';
+                const emojis = items
+                    .map(it => ({ id: it.id, url: it.media_url || it.cover_url || '' }))
+                    .filter(e => e.url);
+                if (!emojis.length) {
+                    grid.innerHTML = '<div class="collected-emoji-empty">还没有收藏的表情<br>在表情广场里点「收藏」即可加入</div>';
                     return;
                 }
                 grid.innerHTML = '';
-                imgs.forEach(it => {
+                emojis.forEach(e => {
                     const itemEl = document.createElement('div');
-                    itemEl.className = 'emoticon-item';
-                    itemEl.innerHTML = `<img src="${cachedResolveMediaUrl(it.media_url)}" loading="lazy">`;
+                    itemEl.className = 'emoticon-item collected-emoji-item';
+                    itemEl.innerHTML = `<img src="${cachedResolveMediaUrl(e.url)}" loading="lazy">`;
                     itemEl.addEventListener('click', () => {
                         if (!currentConv) {
                             showAlert('请先在聊天中打开一个会话');
                             return;
                         }
-                        sendMessage('', 'image', it.media_url);
+                        sendMessage('', 'image', e.url);
                         picker.remove();
                     });
+                    // 取消收藏（从「我的表情」移除）
+                    const delBtn = document.createElement('button');
+                    delBtn.className = 'collected-emoji-del';
+                    delBtn.title = '取消收藏';
+                    delBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+                    delBtn.addEventListener('click', async (ev) => {
+                        ev.stopPropagation();
+                        try {
+                            await apiFetch('/v1/emoji/plaza/delete', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ id: e.id })
+                            });
+                            renderFolder();
+                        } catch (err) { showAlert('取消收藏失败'); }
+                    });
+                    itemEl.appendChild(delBtn);
                     grid.appendChild(itemEl);
                 });
             } catch (e) {
-                grid.innerHTML = '<div class="collected-emoji-empty">暂不可用</div>';
+                grid.innerHTML = '<div class="collected-emoji-empty">加载失败，请稍后重试</div>';
             }
         };
 
@@ -11561,6 +11634,16 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     let plazaLoading = false;
     let plazaHasMore = true;
 
+    // 表情广场的收藏状态：{ [itemId]: true }（本地先缓存，确保 hover 上 UI 立即变化，再异步落库）
+    let plazaFavState = (() => {
+        try {
+            return JSON.parse(localStorage.getItem('oc_plaza_fav_state') || '{}') || {};
+        } catch (e) { return {}; }
+    })();
+    function savePlazaFavState() {
+        try { localStorage.setItem('oc_plaza_fav_state', JSON.stringify(plazaFavState)); } catch (e) {}
+    }
+
     async function showEmojiPlaza() {
         const existing = document.getElementById('emojiPlazaPanel');
         if (existing) { existing.remove(); return; }
@@ -11600,12 +11683,58 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 items.forEach(item => {
                     const imgUrl = item.media_url || item.cover_url || '';
                     if (!imgUrl) return;
+                    const itemId = item.id != null ? String(item.id) : '';
                     const div = document.createElement('div');
                     div.className = 'emoticon-item';
-                    div.innerHTML = `<img src="${cachedResolveMediaUrl(imgUrl)}" loading="lazy">`;
-                    div.addEventListener('click', () => {
+                    // 收藏按钮（hover 才显示；已收藏时显示实心并持续可见）
+                    const isFaved = itemId && (plazaFavState[itemId] || false);
+                    div.innerHTML = `
+                        <img src="${cachedResolveMediaUrl(imgUrl)}" loading="lazy">
+                        <button class="plaza-fav-btn${isFaved ? ' faved' : ''}" type="button"
+                                title="${isFaved ? '已收藏（点击取消）' : '收藏到我的表情'}"
+                                aria-label="收藏">${isFaved ? '★' : '☆'}</button>
+                    `;
+                    div.addEventListener('click', (e) => {
+                        // 点按钮 = 收藏/取消收藏；点图 = 发送表情
+                        if (e.target && e.target.classList && e.target.classList.contains('plaza-fav-btn')) return;
                         sendMessage('', 'image', imgUrl);
                         panel.remove();
+                    });
+                    const favBtn = div.querySelector('.plaza-fav-btn');
+                    favBtn.addEventListener('click', async (ev) => {
+                        ev.stopPropagation();
+                        if (!itemId) { showAlert('该表情没有可识别的 id'); return; }
+                        const wasFaved = !!plazaFavState[itemId];
+                        favBtn.disabled = true;
+                        try {
+                            if (wasFaved) {
+                                await apiFetch('/v1/emoji/plaza/delete', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ id: itemId })
+                                });
+                                delete plazaFavState[itemId];
+                                favBtn.classList.remove('faved');
+                                favBtn.textContent = '☆';
+                                favBtn.title = '收藏到我的表情';
+                            } else {
+                                await apiFetch('/v1/emoji/plaza/save', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ id: itemId })
+                                });
+                                plazaFavState[itemId] = true;
+                                favBtn.classList.add('faved');
+                                favBtn.textContent = '★';
+                                favBtn.title = '已收藏（点击取消）';
+                            }
+                            savePlazaFavState();
+                        } catch (err) {
+                            console.error(err);
+                            showAlert(wasFaved ? '取消收藏失败' : '收藏失败');
+                        } finally {
+                            favBtn.disabled = false;
+                        }
                     });
                     grid.appendChild(div);
                 });
