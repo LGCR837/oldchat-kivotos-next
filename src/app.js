@@ -2874,9 +2874,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             renderSettingsPage(currentSettingsTab || 'profile');
         }
 
-        // 回到发现页落地页：清空右侧内容、恢复空状态提示
+        // 回到发现页落地页：清空右侧内容、恢复空状态提示、侧边栏回到启动器
         if (tabName === 'discover') {
             resetDiscoverMain();
+            restoreDiscoverLauncher();
         }
 
         // 离开发现页：清除发现页左面板板块项的高亮（进入发现页时不清除）
@@ -13765,6 +13766,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             }
         } catch (e) { return; }
         try { renderSubscribedList(); } catch (e) {}
+        // 若当前正处于「频道侧边栏」形态，顺带用新签名 URL 刷新其头像
+        try {
+            const dl = document.getElementById('discoverList');
+            if (dl && dl.querySelector('.channel-side-item')) renderChannelSidebar();
+        } catch (e) {}
         const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
         if (main && main.classList.contains('discover-has-content')) {
             const chView = main.querySelector('.channel-view');
@@ -13788,6 +13794,43 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         _cmRefreshTimer = setTimeout(() => { _cmRefreshTimer = null; refreshChannelAvatars().catch(() => {}); }, 600);
     }
     window.__refreshChannelMediaOnExpiry = scheduleChannelMediaRefresh;
+
+    // 发现页侧边栏有两种形态：① 启动器（默认静态内容，checkin/scratch/notice/channels 等）
+    // ② 频道侧边栏（打开具体频道时）：顶部「发现频道」+ 已订阅频道列表
+    let _discoverLauncherHTML = null;
+    function restoreDiscoverLauncher() {
+        const el = document.getElementById('discoverList');
+        if (!el) return;
+        if (_discoverLauncherHTML == null) _discoverLauncherHTML = el.innerHTML;
+        el.innerHTML = _discoverLauncherHTML;
+    }
+    function renderChannelSidebar() {
+        const el = document.getElementById('discoverList');
+        if (!el) return;
+        const subs = getSubscribedChannels();
+        // 顶部「发现频道」：复用启动器里的 data-discover="channels"，点击即回到频道浏览器（我的频道/发现）
+        let html = '<div class="contact-item" data-discover="channels" style="cursor:pointer;">'
+            + '<div class="msg-avatar"><i class="fa-solid fa-compass"></i></div>'
+            + '<div class="contact-info"><div class="name">发现频道</div></div></div>';
+        if (!subs.length) {
+            html += '<div class="channel-empty" style="padding:14px 16px;">还没有订阅任何频道</div>';
+        } else {
+            subs.forEach(ch => {
+                const active = (currentOpenChannel && currentOpenChannel.id === ch.id) ? ' active' : '';
+                const av = cachedResolveMediaUrl(ch.avatar_url || '');
+                html += '<div class="contact-item channel-side-item' + active + '" data-channel-id="' + escapeHtml(ch.id || '') + '" style="cursor:pointer;">'
+                    + '<img class="contact-avatar" src="' + av + '" onerror="this.src=\'assets/default-avatar.png\'">'
+                    + '<div class="contact-info"><div class="name">' + escapeHtml(ch.name || '') + '</div></div></div>';
+            });
+        }
+        el.innerHTML = html;
+        el.querySelectorAll('.channel-side-item').forEach(it => {
+            it.addEventListener('click', () => {
+                const ch = getSubscribedChannels().find(c => c.id === it.dataset.channelId);
+                if (ch) openChannelView(ch);
+            });
+        });
+    }
 
     async function apiJson(url, opts) {
         const res = await apiFetch(url, opts);
@@ -13866,7 +13909,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 msg_type: msgType || 'text'
             };
             const allowed = CHANNEL_DEFAULT_EMOJIS;
-            container.appendChild(renderChannelPost(post, allowed, channelId));
+            container.appendChild(renderChannelPost(post, allowed, null, channelId));
             container.scrollTop = container.scrollHeight;
         } catch (e) { showAlert('发送失败：' + (e && e.message || e)); }
     }
@@ -13983,14 +14026,17 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         });
     }
 
-    function renderChannelPost(post, allowed, channelId) {
+    function renderChannelPost(post, allowed, channelMeta, channelId) {
         const postId = post.id || post.post_id || '';
+        const cid = channelId || (channelMeta && channelMeta.id) || '';
         const div = document.createElement('div');
         div.className = 'channel-post';
-        const authorName = post.from_name || (post.author && post.author.name) || post.name || '频道';
-        // 帖子头像是「发布者（用户）」的头像：优先 from_avatar（规范字段），兼容 sender_avatar / avatar_url / author.*
+        // 发帖人优先取帖子自带作者字段；官方频道多为只读内容流，作者字段缺失时回退到频道自身身份
+        const authorName = post.from_name || (post.author && post.author.name) || post.name
+            || (channelMeta && channelMeta.name) || '频道';
         const authorAvatar = post.from_avatar || post.sender_avatar || post.avatar_url
-            || (post.author && (post.author.avatar_url || post.author.avatar)) || '';
+            || (post.author && (post.author.avatar_url || post.author.avatar))
+            || (channelMeta && channelMeta.avatar_url) || '';
         const time = fmtChannelTime(post.created_at || post.created_at_ts);
         const pb = parsePostBody(post.body);
         // §14 帖子媒体可能以顶层 media_url/thumb_url 返回（独立于 body 文本），parsePostBody 只解析 body，这里兜底
@@ -14016,7 +14062,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 '<div class="channel-post-content">' + contentHtml + '</div>' +
                 '<div class="channel-reactions"></div>' +
             '</div>';
-        renderReactionsInto(div.querySelector('.channel-reactions'), post, allowed, channelId, postId);
+        renderReactionsInto(div.querySelector('.channel-reactions'), post, allowed, cid, postId);
         return div;
     }
 
@@ -14028,7 +14074,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             if (!posts || !posts.length) { container.innerHTML = '<div class="channel-empty">暂无帖子</div>'; return; }
             const allowed = (meta.allowed_emojis && meta.allowed_emojis.length) ? meta.allowed_emojis : CHANNEL_DEFAULT_EMOJIS;
             // 服务端帖子一般按 seq 升序返回，这里反转成最新在底部（类聊天流）
-            posts.slice().reverse().forEach(p => container.appendChild(renderChannelPost(p, allowed, meta.id)));
+            posts.slice().reverse().forEach(p => container.appendChild(renderChannelPost(p, allowed, meta, meta.id)));
         } catch (e) {
             container.innerHTML = '<div class="channel-empty">加载失败：' + escapeHtml(String(e && e.message || e)) + '</div>';
         }
@@ -14043,6 +14089,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     async function openChannelView(meta) {
         currentOpenChannel = meta || null;
         switchTab('discover');
+        // 打开具体频道：发现页侧边栏切换到「频道侧边栏」（顶部发现频道 + 已订阅列表）
+        renderChannelSidebar();
         const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
         if (!main) return;
         main.classList.add('discover-has-content');
