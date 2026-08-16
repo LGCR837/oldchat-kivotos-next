@@ -1762,6 +1762,9 @@ body::-webkit-scrollbar {
 	min-width: 34px;
 	padding: 0;
 }
+/* 音乐「正在播放」按钮：始终仅显示图标，不受「其他按钮图标模式」影响 */
+.input-buttons #nowPlayingBtn > i.fa-solid { display: inline-block !important; }
+.input-buttons #nowPlayingBtn .btn-label { display: none !important; }
 
 .more-menu {
 	position: fixed;
