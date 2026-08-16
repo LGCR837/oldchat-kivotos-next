@@ -1225,6 +1225,137 @@ body::-webkit-scrollbar {
 	color: #fff;
 }
 
+/* ===== 我的音乐：上传表单（拖拽 + 简单输入框） ===== */
+.music-mine-upload {
+	padding: 10px 12px;
+	border-bottom: 1px solid var(--border);
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	flex-shrink: 0;
+}
+
+.music-upload-title {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--secondary-text);
+	-webkit-user-select: none;
+	user-select: none;
+}
+
+.music-upload-dropzone {
+	border: 1.5px dashed var(--border);
+	border-radius: 10px;
+	padding: 14px 10px;
+	text-align: center;
+	color: var(--secondary-text);
+	cursor: pointer;
+	transition: border-color 0.15s, background-color 0.15s, color 0.15s;
+}
+
+.music-upload-dropzone:hover {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+
+.music-upload-dropzone.dragover {
+	border-color: var(--accent);
+	background: var(--hover);
+	color: var(--accent);
+}
+
+.music-upload-dropzone > i {
+	font-size: 22px;
+	display: block;
+	margin-bottom: 4px;
+	pointer-events: none;
+}
+
+.music-upload-hint {
+	font-size: 12px;
+	pointer-events: none;
+}
+
+.music-upload-link {
+	color: var(--accent);
+	text-decoration: underline;
+}
+
+.music-upload-filename {
+	margin-top: 4px;
+	font-size: 11px;
+	color: var(--accent);
+	word-break: break-all;
+	display: none;
+}
+
+.music-upload-input,
+.music-upload-textarea {
+	width: 100%;
+	box-sizing: border-box;
+	padding: 7px 10px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--chat-bg);
+	color: var(--text);
+	font-size: 13px;
+	font-family: inherit;
+	outline: none;
+	transition: border-color 0.15s;
+}
+
+.music-upload-input:focus,
+.music-upload-textarea:focus {
+	border-color: var(--accent);
+}
+
+.music-upload-textarea {
+	resize: vertical;
+	min-height: 54px;
+	line-height: 1.4;
+}
+
+.music-upload-row {
+	display: flex;
+	gap: 8px;
+}
+
+.music-upload-filelabel {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	padding: 6px 8px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--chat-bg);
+	color: var(--secondary-text);
+	font-size: 11px;
+	cursor: pointer;
+	white-space: nowrap;
+	overflow: hidden;
+	transition: border-color 0.15s, color 0.15s;
+}
+
+.music-upload-filelabel:hover {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+
+.music-upload-filechosen {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--accent);
+}
+
+.music-upload-btn {
+	padding: 8px;
+	border-radius: 8px;
+	font-size: 13px;
+	font-weight: 600;
+}
+
 /* ===== 音乐右侧工作区（参考 CRMusic） ===== */
 .music-workspace {
 	position: absolute;
@@ -2642,6 +2773,8 @@ body::-webkit-scrollbar {
 .oc-spinner.lg { width: 36px; height: 36px; border-width: 4px; }
 @media (prefers-reduced-motion: reduce) {
 	.oc-spinner { animation-duration: 2.4s; }
+	.oc-loading { animation: none !important; }
+	.channel-loading::before, .court-loading::before { animation: none !important; }
 }
 
 /* 全窗口面板的加载态：居中粉环，风格对齐启动闪屏（.xl 42px 与 .app-splash-spinner 一致） */
@@ -2655,6 +2788,33 @@ body::-webkit-scrollbar {
 	gap: 14px;
 	color: var(--secondary-text);
 	font-size: 13px;
+}
+
+/* 统一加载组件：粉环 spinner + 文案，竖向居中、带淡入；.inline 用于按钮/行内 */
+.oc-loading {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	padding: 28px 12px;
+	color: var(--secondary-text);
+	font-size: 13px;
+	animation: ocFadeIn 0.25s ease both;
+}
+.oc-loading.inline {
+	flex-direction: row;
+	padding: 8px 12px;
+	gap: 8px;
+}
+.oc-loading .oc-spinner { border-width: 3px; }
+.oc-loading .oc-loading-text {
+	line-height: 1.4;
+	letter-spacing: 0.02em;
+}
+@keyframes ocFadeIn {
+	from { opacity: 0; transform: translateY(4px); }
+	to { opacity: 1; transform: translateY(0); }
 }
 
 .custom-modal-actions .btn {
@@ -4314,6 +4474,18 @@ body::-webkit-scrollbar {
 .channel-post-text { font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 .channel-post-media { margin-top: 4px; }
 .channel-loading, .channel-empty { padding: 24px; text-align: center; color: var(--secondary-text); font-size: 13px; }
+/* 频道加载态加粉环 spinner（.channel-empty 不转圈） */
+.channel-loading::before {
+	content: "";
+	display: block;
+	width: 22px; height: 22px;
+	margin: 0 auto 10px;
+	border-radius: 50%;
+	box-sizing: border-box;
+	border: 3px solid rgba(250, 148, 166, 0.25);
+	border-top-color: var(--accent, #fa94a6);
+	animation: ocSpinnerSpin 0.9s linear infinite;
+}
 
 .channel-reactions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .channel-reaction-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 14px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); font-size: 13px; cursor: pointer; transition: background .15s, border-color .15s; }
@@ -4522,6 +4694,18 @@ body.sidebar-anim-off .sidebar-panel.side-slide-in .contact-item { animation: no
     padding: 20px;
     text-align: center;
     color: var(--secondary-text);
+}
+/* 法庭/资源广场加载态加粉环 spinner（.court-error 不转圈） */
+.court-loading::before {
+    content: "";
+    display: block;
+    width: 22px; height: 22px;
+    margin: 0 auto 10px;
+    border-radius: 50%;
+    box-sizing: border-box;
+    border: 3px solid rgba(250, 148, 166, 0.25);
+    border-top-color: var(--accent, #fa94a6);
+    animation: ocSpinnerSpin 0.9s linear infinite;
 }
 /* 会话顶部加载更早消息时的「加载中」指示器 */
 .history-loading {

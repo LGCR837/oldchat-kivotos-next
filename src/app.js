@@ -336,6 +336,17 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// 统一的「加载中」占位组件：粉环 spinner + 文案，居中、带淡入。
+// variant: 'block'(默认) 竖向居中（用于面板/列表/弹窗主体）；
+//          'inline' 横排（用于按钮、行内小区块）。
+function loadingHtml(text, variant) {
+    const cls = variant === 'inline' ? 'oc-loading inline' : 'oc-loading';
+    return '<div class="' + cls + '">' +
+        '<span class="oc-spinner"></span>' +
+        '<span class="oc-loading-text">' + escapeHtml(text || '加载中...') + '</span>' +
+        '</div>';
+}
+
 // 引用气泡里展示的引用文本：若被引用消息的 body 本身是 JSON（如按钮消息
 // {"v":2,"text":"...","buttons":[...]} 或纯按钮 {"buttons":[...]}），则提取
 // 内层可读文本，避免引用气泡里直接渲染一大坨原始 JSON。
@@ -2930,6 +2941,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (tabName === 'music' && !musicLoaded) {
             loadMusicList();
         }
+        // 进入音乐面板时同步「我的」上传表单可见性
+        if (tabName === 'music') {
+            updateMusicUploadVisibility();
+        }
 
         // 切换到公开法庭面板时加载案件列表（仅首次）
         if (tabName === 'court' && !courtLoaded) {
@@ -2995,6 +3010,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     const musicSearchBox = document.getElementById('musicSearchBox');
     const musicSearchInput = document.getElementById('musicSearchInput');
     const musicSearchBtn = document.getElementById('musicSearchBtn');
+    const musicMineUpload = document.getElementById('musicMineUpload');
+    const musicUploadDrop = document.getElementById('musicUploadDrop');
+    const musicUploadFile = document.getElementById('musicUploadFile');
+    const musicUploadName = document.getElementById('musicUploadName');
+    const musicUploadTitle = document.getElementById('musicUploadTitle');
+    const musicUploadCover = document.getElementById('musicUploadCover');
+    const musicUploadCoverName = document.getElementById('musicUploadCoverName');
+    const musicUploadLyricsFile = document.getElementById('musicUploadLyricsFile');
+    const musicUploadLyricsName = document.getElementById('musicUploadLyricsName');
+    const musicUploadLyrics = document.getElementById('musicUploadLyrics');
+    const musicUploadBtn = document.getElementById('musicUploadBtn');
+    let musicUploadDuration = 0;     // 由音频元数据计算（毫秒）
+    let musicUploadPickedFile = null; // 当前选中的音频文件（拖拽/点击）
     let musicTab = 'plaza';          // plaza / ranking / search / mine
     let musicLoaded = false;         // 是否已加载过
     let musicCurrentPage = 1;
@@ -3040,7 +3068,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             musicLoaded = true;
             return;
         }
-        musicList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--secondary-text);">加载中...</div>';
+        musicList.innerHTML = loadingHtml('加载中...');
         try {
             const offset = (musicCurrentPage - 1) * musicPageSize;
             const res = await apiFetch(musicUrl(offset));
@@ -3061,7 +3089,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     loadMoreBtn.textContent = '加载更多';
                     loadMoreBtn.style.cssText = 'padding:6px 16px;border-radius:16px;border:1px solid var(--border);background:var(--chat-bg);color:var(--text);font-size:12px;cursor:pointer;font-family:inherit;';
                     loadMoreBtn.addEventListener('click', async () => {
-                        loadMoreBtn.textContent = '加载中...';
+                        loadMoreBtn.innerHTML = '<span class="oc-spinner sm" style="vertical-align:-2px;margin-right:6px;"></span>加载中...';
                         loadMoreBtn.disabled = true;
                         musicCurrentPage++;
                         try {
@@ -3093,6 +3121,121 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
+    function updateMusicUploadVisibility() {
+        if (!musicMineUpload) return;
+        const show = musicTab === 'mine';
+        musicMineUpload.style.display = show ? '' : 'none';
+    }
+
+    // ===== 我的音乐：上传（拖拽 / 点击选文件 + 简单输入框）=====
+    function setMusicUploadFile(file) {
+        if (!file) return;
+        // 仅接受音频
+        if (file.type && !file.type.startsWith('audio/') && !/\.(mp3|wav|flac|m4a|ogg|aac|opus)$/i.test(file.name)) {
+            showAlert('请选择音频文件');
+            return;
+        }
+        musicUploadPickedFile = file;
+        try {
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            musicUploadFile.files = dt.files;
+        } catch (e) { /* 某些环境下 DataTransfer 不可写，已用变量兜底 */ }
+        musicUploadName.textContent = file.name;
+        musicUploadName.style.display = 'block';
+        // 歌名留空时默认取文件名（去扩展名）
+        if (!musicUploadTitle.value.trim()) {
+            musicUploadTitle.value = file.name.replace(/\.[^.]+$/, '');
+        }
+        // 计算时长（毫秒）
+        const url = URL.createObjectURL(file);
+        const a = new Audio();
+        a.preload = 'metadata';
+        a.onloadedmetadata = () => { musicUploadDuration = Math.round((a.duration || 0) * 1000); URL.revokeObjectURL(url); };
+        a.onerror = () => { musicUploadDuration = 0; URL.revokeObjectURL(url); };
+        a.src = url;
+    }
+
+    if (musicUploadDrop) {
+        musicUploadDrop.addEventListener('click', () => musicUploadFile.click());
+        musicUploadDrop.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            musicUploadDrop.classList.add('dragover');
+        });
+        musicUploadDrop.addEventListener('dragleave', () => {
+            musicUploadDrop.classList.remove('dragover');
+        });
+        musicUploadDrop.addEventListener('drop', (e) => {
+            e.preventDefault();
+            musicUploadDrop.classList.remove('dragover');
+            const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+            if (f) setMusicUploadFile(f);
+        });
+        musicUploadFile.addEventListener('change', () => {
+            if (musicUploadFile.files[0]) setMusicUploadFile(musicUploadFile.files[0]);
+        });
+    }
+    if (musicUploadCover) {
+        musicUploadCover.addEventListener('change', () => {
+            musicUploadCoverName.textContent = musicUploadCover.files[0] ? musicUploadCover.files[0].name : '';
+        });
+    }
+    if (musicUploadLyricsFile) {
+        musicUploadLyricsFile.addEventListener('change', async () => {
+            const f = musicUploadLyricsFile.files[0];
+            if (!f) { musicUploadLyricsName.textContent = ''; return; }
+            musicUploadLyricsName.textContent = f.name;
+            try {
+                const text = await f.text();
+                if (text && !musicUploadLyrics.value.trim()) musicUploadLyrics.value = text;
+            } catch (e) { /* 忽略，允许手动粘贴 */ }
+        });
+    }
+    if (musicUploadBtn) {
+        musicUploadBtn.addEventListener('click', async () => {
+            const file = musicUploadPickedFile || (musicUploadFile.files && musicUploadFile.files[0]);
+            if (!file) { showAlert('请先选择音频文件'); return; }
+            const title = (musicUploadTitle.value || file.name.replace(/\.[^.]+$/, '')).trim();
+            const cover = musicUploadCover.files && musicUploadCover.files[0];
+            const lyrics = musicUploadLyrics.value.trim();
+            const fd = new FormData();
+            fd.append('file', file);
+            fd.append('name', title);
+            fd.append('duration_ms', String(musicUploadDuration || 0));
+            if (cover) fd.append('cover', cover);
+            if (lyrics) fd.append('lyrics', lyrics);
+            musicUploadBtn.disabled = true;
+            musicUploadBtn.innerHTML = '<span class="oc-spinner sm" style="vertical-align:-2px;margin-right:6px;"></span>上传中...';
+            try {
+                const res = await apiFetch('/v1/music/plaza/upload', { method: 'POST', body: fd });
+                const d = await res.json();
+                if (d.error) { showAlert(d.error); }
+                else {
+                    showAlert('上传成功');
+                    // 重置表单
+                    musicUploadPickedFile = null;
+                    musicUploadFile.value = '';
+                    musicUploadCover.value = '';
+                    musicUploadLyricsFile.value = '';
+                    musicUploadTitle.value = '';
+                    musicUploadLyrics.value = '';
+                    musicUploadName.textContent = '';
+                    musicUploadName.style.display = 'none';
+                    musicUploadCoverName.textContent = '';
+                    musicUploadLyricsName.textContent = '';
+                    musicUploadDuration = 0;
+                    loadMusicList();
+                }
+            } catch (e) {
+                console.error('[music upload] failed:', e);
+                showAlert('上传失败，请重试');
+            } finally {
+                musicUploadBtn.disabled = false;
+                musicUploadBtn.textContent = '上传';
+            }
+        });
+    }
+
     if (musicTabs) {
         musicTabs.addEventListener('click', (e) => {
             const btn = e.target.closest('.music-tab-btn');
@@ -3101,6 +3244,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             btn.classList.add('active');
             musicTab = btn.dataset.musicTab;
             musicCurrentPage = 1;
+            updateMusicUploadVisibility();
             // 搜索选项卡：显示搜索框并聚焦；其余隐藏
             if (musicTab === 'search') {
                 if (musicSearchBox) musicSearchBox.style.display = '';
@@ -4141,7 +4285,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         async function loadComments() {
-            scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">加载中...</div>';
+            scrollEl.innerHTML = loadingHtml('加载中...');
             try {
                 const res = await apiFetch('/v1/moments/comments?moment_id=' + encodeURIComponent(momentId));
                 const data = await res.json();
@@ -4258,7 +4402,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         async function loadComments() {
-            scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">加载中...</div>';
+            scrollEl.innerHTML = loadingHtml('加载中...');
             try {
                 const res = await apiFetch('/v1/me/checkin/wall/comments?post_id=' + encodeURIComponent(postId));
                 const data = await res.json();
@@ -4883,7 +5027,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.body.appendChild(overlay);
         requestAnimationFrame(() => overlay.style.opacity = '1');
         const scroll = overlay.querySelector('#mp-scroll');
-        scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">加载中...</div>';
+        scroll.innerHTML = loadingHtml('加载中...');
 
         let currentProfile = null;
 
@@ -7938,7 +8082,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     }
 
     async function loadFriendRequests(container) {
-        container.innerHTML = '<div style="padding:8px 15px;font-size:12px;color:var(--secondary-text);">加载中...</div>';
+        container.innerHTML = loadingHtml('加载中...', 'inline');
         try {
             const res = await apiFetch('/v1/friends/requests');
             const data = await res.json();
@@ -11806,7 +11950,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const loadPage = async () => {
             if (plazaLoading || !plazaHasMore) return;
             plazaLoading = true;
-            loadMoreBtn.textContent = '加载中…';
+            loadMoreBtn.innerHTML = '<span class="oc-spinner sm" style="vertical-align:-2px;margin-right:6px;"></span>加载中…';
             try {
                 const res = await apiFetch(`/v1/emoji/plaza?limit=20&offset=${plazaOffset}`);
                 const data = await res.json();
@@ -12031,6 +12175,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             switchTab('music');
             musicTab = 'mine';
             if (musicSearchBox) musicSearchBox.style.display = 'none';
+            updateMusicUploadVisibility();
             musicLoaded = false;
             loadMusicList();
         });
@@ -12821,7 +12966,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
     async function renderCheckin(target) {
         target = target || settingsContent;
-        target.innerHTML = '<h3>签到墙</h3><div style="text-align:center;padding:20px;color:var(--secondary-text);">加载中...</div>';
+        target.innerHTML = '<h3>签到墙</h3>' + loadingHtml('加载中...');
         try {
             let wallData = {};
             try {
@@ -12971,7 +13116,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     async function renderScratch(main) {
         main = main || document.querySelector('.main-panel[data-panel="discover"] .discover-main');
         if (!main) return;
-        main.innerHTML = '<h3>每日刮刮乐</h3><div style="text-align:center;padding:20px;color:var(--secondary-text);">加载中...</div>';
+        main.innerHTML = '<h3>每日刮刮乐</h3>' + loadingHtml('加载中...');
         try {
             const data = await scratchLoad();
             if (!data) {
@@ -13102,7 +13247,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
     async function renderSystemNotice(target) {
         target = target || settingsContent;
-        target.innerHTML = '<h3>系统通知</h3><div style="text-align:center;padding:20px;color:var(--secondary-text);">加载中...</div>';
+        target.innerHTML = '<h3>系统通知</h3>' + loadingHtml('加载中...');
         let items = [];
         try {
             let data = {};
@@ -13660,7 +13805,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             '<div class="settings-group" style="margin-bottom:14px;">' +
                 '<button id="themeUploadBtn" class="btn primary" style="width:100%;">上传主题（.css 文件）</button>' +
             '</div>' +
-            '<div id="themeList">加载中...</div>' +
+            '<div id="themeList">' + loadingHtml('加载中...') + '</div>' +
             '<div class="settings-group" style="margin-top:14px;">' +
                 '<button id="themeResetBtn" style="display:inline-block!important;width:100%;padding:10px;border:1px solid var(--border-color);background:var(--panel-bg);color:var(--text);border-radius:8px;cursor:pointer;font-family:inherit;font-size:13px;">恢复默认主题</button>' +
             '</div>';
@@ -13963,7 +14108,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             '<div class="settings-group" style="margin-bottom:14px;">' +
                 '<button id="pluginUploadBtn" class="btn primary" style="width:100%;">添加插件（.js 文件）</button>' +
             '</div>' +
-            '<div id="pluginList">加载中...</div>';
+            '<div id="pluginList">' + loadingHtml('加载中...') + '</div>';
 
         document.getElementById('pluginUploadBtn')?.addEventListener('click', uploadPlugin);
 

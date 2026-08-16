@@ -128,6 +128,30 @@
                             <input type="text" id="musicSearchInput" class="music-search-input" placeholder="搜索音乐...">
                             <button id="musicSearchBtn" class="music-search-btn" title="搜索"><i class="fa-solid fa-magnifying-glass"></i></button>
                         </div>
+                        <div class="music-mine-upload" id="musicMineUpload" style="display:none;">
+                            <div class="music-upload-title">上传我的音乐</div>
+                            <div class="music-upload-dropzone" id="musicUploadDrop">
+                                <i class="fa-solid fa-cloud-arrow-up"></i>
+                                <div class="music-upload-hint">拖拽音频到此处，或 <span class="music-upload-link">点击选择</span></div>
+                                <div class="music-upload-filename" id="musicUploadName"></div>
+                                <input type="file" id="musicUploadFile" accept="audio/*" hidden>
+                            </div>
+                            <input type="text" id="musicUploadTitle" class="music-upload-input" placeholder="歌名（留空则取文件名）">
+                            <div class="music-upload-row">
+                                <label class="music-upload-filelabel" title="封面图片（可选）">
+                                    <i class="fa-solid fa-image"></i> 封面（可选）
+                                    <input type="file" id="musicUploadCover" accept="image/*" hidden>
+                                    <span class="music-upload-filechosen" id="musicUploadCoverName"></span>
+                                </label>
+                                <label class="music-upload-filelabel" title="歌词文件（可选，LRC）">
+                                    <i class="fa-solid fa-file-lines"></i> 歌词（可选）
+                                    <input type="file" id="musicUploadLyricsFile" accept=".lrc,text/plain" hidden>
+                                    <span class="music-upload-filechosen" id="musicUploadLyricsName"></span>
+                                </label>
+                            </div>
+                            <textarea id="musicUploadLyrics" class="music-upload-textarea" placeholder="歌词（可选，可直接粘贴 LRC 文本）"></textarea>
+                            <button id="musicUploadBtn" class="btn primary music-upload-btn">上传</button>
+                        </div>
                         <div class="contact-list" id="musicList"></div>
                     </div>
                     <div class="sidebar-panel" data-panel="court">
