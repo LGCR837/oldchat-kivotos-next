@@ -3740,6 +3740,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             badge.style.display = 'none';
         }
         schedulePriorityApply();
+        // 副标题为「自动」模式时，未读变化需同步刷新（新消息显示预览，已读回退ID）
+        if (getSidebarSubtitleMode() === 'auto') updateContactSubtitle(convKey);
     }
 
     // 重新渲染侧边栏后，把 unreadCounts 里的未读红点重新贴回新生成的 DOM 节点
@@ -6929,8 +6931,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // 数据源：① fetchLatestMessages 拉到最新页 ② WebSocket 收到新消息 ③ loadUnreadCounts 的 unreadLastMsg 作种子
     let lastMsgPreview = {};     // convKey -> { msg, ts }
 
-    function getSidebarShowPreview() {
-        try { return localStorage.getItem('oc_sidebar_show_preview') !== '0'; } catch (e) { return true; }
+    function getSidebarSubtitleMode() {
+        try {
+            const v = localStorage.getItem('oc_sidebar_subtitle');
+            if (v === 'message' || v === 'id' || v === 'none' || v === 'auto') return v;
+        } catch (e) {}
+        return 'auto';
     }
     function getSidebarSortByTime() {
         try { return localStorage.getItem('oc_sidebar_sort_by_time') !== '0'; } catch (e) { return true; }
@@ -6946,6 +6952,20 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         return preview;
     }
 
+    // 计算某会话副标题：mode=auto 时默认显示ID，有未读/新消息则显示最近消息预览
+    // 返回 null 表示不显示（none 模式）；其余返回字符串（可能为空，调用方仍渲染 .uid 以便就地更新）
+    function computeContactSubtitle(type, id, displayId) {
+        const mode = getSidebarSubtitleMode();
+        const idText = type === 'group' ? (id || '') : (displayId || '');
+        if (mode === 'none') return null;
+        if (mode === 'id') return idText;
+        const rec = lastMsgPreview[type + ':' + id];
+        const hasNew = (unreadCounts[type + ':' + id] || 0) > 0;
+        if (mode === 'auto' && !hasNew) return idText;
+        const preview = rec ? buildSidebarPreviewText(type + ':' + id, rec.msg, type) : '';
+        return preview || idText;
+    }
+
     // 就地更新某个会话的副标题（不重建整列，避免丢折叠/滚动/分区状态）
     function updateContactSubtitle(convKey) {
         if (!contactList) return;
@@ -6953,8 +6973,13 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (!item) return;
         const sub = item.querySelector('.uid');
         if (!sub) return;
-        const rec = lastMsgPreview[convKey];
-        sub.textContent = rec ? buildSidebarPreviewText(convKey, rec.msg, (convKey && convKey.split(':')[0])) : '';
+        const idx = convKey.indexOf(':');
+        const type = convKey.slice(0, idx);
+        const id = convKey.slice(idx + 1);
+        const displayId = item.dataset.displayId || '';
+        const text = computeContactSubtitle(type, id, displayId);
+        if (text === null) { sub.style.display = 'none'; sub.textContent = ''; }
+        else { sub.style.display = ''; sub.textContent = text; }
     }
 
     // 记录某会话最近一条消息（仅在更晚时覆盖），并就地刷新副标题/重排顺序
@@ -6965,7 +6990,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (!prev || ts >= (prev.ts || 0)) {
             lastMsgPreview[convKey] = { msg, ts };
         }
-        if (getSidebarShowPreview()) updateContactSubtitle(convKey);
+        updateContactSubtitle(convKey);
         repositionContactByActivity(convKey);
     }
 
@@ -8329,17 +8354,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         div.dataset.type = type;
         div.dataset.id = id;
         div.dataset.name = name;
-        // 群聊默认显示 group_id，私聊显示给人看的 displayId（旧UID）
-        // 若开启「侧边栏显示最近消息」，副标题改为最近一条消息预览（群聊带「昵称：内容」）
-        // 始终保留 .uid 元素（即使为空），便于后续新消息到达时就地填充，无需重建整列
-        let idText;
-        if (getSidebarShowPreview()) {
-            const rec = lastMsgPreview[type + ':' + id];
-            idText = rec ? buildSidebarPreviewText(type + ':' + id, rec.msg, type) : '';
-        } else {
-            idText = type === 'group' ? id : (displayId || '');
-        }
-        const idLine = idText ? `<div class="uid">${escapeHtml(idText)}</div>` : '<div class="uid"></div>';
+        // 副标题模式：auto（默认，平时显示ID，有新消息显示最近消息）/ message / id / none
+        // none 模式不渲染 .uid；其余模式始终渲染 .uid（可能为空），便于新消息到达时就地更新，无需重建整列
+        div.dataset.displayId = displayId || '';
+        const sub = computeContactSubtitle(type, id, displayId);
+        const idLine = (sub === null) ? '' : `<div class="uid">${escapeHtml(sub)}</div>`;
         const avatarUrl = avatar ? cachedResolveMediaUrl(avatar) : 'assets/default-avatar.png';
         // 查找称号：优先使用传入的 userTitle，再从缓存查找
         const titleText = userTitle || lookupTitle(id);
@@ -12817,17 +12836,19 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 <div class="settings-note">
                     开启后，有未读的会话会立即进入「重点」分组；最近打开过的群聊与私聊在「进入延迟」后进入（0=立即，31=不自动进入，默认 5 秒）；「闲置移除」控制进入后保留多久（0=立即，31=永不移除，默认 30 秒）；未读会话始终立即进入；移动时带滑动动画。
                 </div>
-                <div class="settings-item" id="settingsSidebarPreview">
-                    <span class="label">侧边栏显示最近消息</span>
+                <div class="settings-item" id="settingsSidebarSubtitle">
+                    <span class="label">侧边栏副标题</span>
                     <span class="value">
-                        <label class="oc-switch">
-                            <input type="checkbox" id="sidebarPreviewToggle">
-                            <span class="oc-switch-slider"></span>
-                        </label>
+                        <select id="sidebarSubtitleSel" style="max-width:260px;padding:4px 8px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;cursor:pointer;">
+                            <option value="auto">自动（平时显示ID，有新消息显示新消息）</option>
+                            <option value="message">显示最近消息</option>
+                            <option value="id">显示ID</option>
+                            <option value="none">不显示</option>
+                        </select>
                     </span>
                 </div>
                 <div class="settings-note">
-                    开启后，侧边栏会话副标题显示「最近一条消息」预览（群聊显示「昵称：内容」，私聊仅内容），替换原本的群号/旧 UID。关闭则恢复显示群号/旧 UID。
+                    副标题显示模式：自动（默认）= 平时显示群号/旧 UID，有未读/新消息时临时显示该消息预览；显示最近消息 = 始终显示最近一条消息（群聊「昵称：内容」，私聊仅内容）；显示ID = 始终显示群号/旧 UID；不显示 = 隐藏副标题。
                 </div>
                 <div class="settings-item" id="settingsSidebarSort">
                     <span class="label">按最近活跃排序</span>
@@ -12955,15 +12976,14 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 applyPriority(true);
             });
         }
-        // 侧边栏显示最近消息开关（设置 → 通用 → 侧边栏，默认开启）：开启时副标题显示最近一条消息预览
-        const spToggle = document.getElementById('sidebarPreviewToggle');
-        if (spToggle) {
-            spToggle.checked = getSidebarShowPreview();
-            spToggle.addEventListener('change', () => {
-                try { localStorage.setItem('oc_sidebar_show_preview', spToggle.checked ? '1' : '0'); } catch (e) {}
+        // 侧边栏副标题模式（设置 → 通用 → 侧边栏，默认 auto）：auto/message/id/none 四选一
+        const subSel = document.getElementById('sidebarSubtitleSel');
+        if (subSel) {
+            subSel.value = getSidebarSubtitleMode();
+            subSel.addEventListener('change', () => {
+                try { localStorage.setItem('oc_sidebar_subtitle', subSel.value); } catch (e) {}
                 renderContacts();
                 reapplyUnreadBadges();
-                if (typeof showAlert === 'function') showAlert('侧边栏显示最近消息已' + (spToggle.checked ? '开启' : '关闭'));
             });
         }
         // 按最近活跃排序开关（设置 → 通用 → 侧边栏，默认开启）：开启时分区内按最后消息时间倒序
