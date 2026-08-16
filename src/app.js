@@ -2635,9 +2635,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!fromUid) return false;
         return uidEq(fromUid, myUid) || uidEq(fromUid, myDisplayUid);
     }
-    // 构建加好友参数：ncuid 优先，旧 uid 降级（双写）
+    // 构建加好友参数：ncuid 优先，旧 uid 降级（双写）。
+    // 注意：v2 friends/request 的字段是 to_uid + to_ncuid（不是 friend_ncuid，
+    // friend_* 前缀只用于 delete/remark 这种「操作好友」的场景）。曾误用 friend_ncuid
+    // 导致后端严格校验失败并返回 {error:"invalid json"}，已修正。
     function toUidParam(id) {
-        return { to_uid: id, friend_ncuid: id };
+        return { to_uid: id, to_ncuid: id };
     }
     // 构建已读参数：ncuid 优先，旧 uid 降级（双写）
     function withUidParam(id) {
