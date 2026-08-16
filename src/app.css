@@ -264,7 +264,12 @@ body::-webkit-scrollbar {
 
 .contact-item .uid {
 	font-size: 12px;
-	color: var(--secondary-text)
+	color: var(--secondary-text);
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	display: block;
 }
 
 .contact-item {

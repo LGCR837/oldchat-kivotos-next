@@ -3742,6 +3742,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         schedulePriorityApply();
     }
 
+    // 重新渲染侧边栏后，把 unreadCounts 里的未读红点重新贴回新生成的 DOM 节点
+    function reapplyUnreadBadges() {
+        for (const [k, c] of Object.entries(unreadCounts)) {
+            if (c > 0) updateUnreadBadge(k, c);
+        }
+    }
+
     function openSpacePanel(uid, ncuid) {
         // uid 基本校验：非空且非纯空白
         if (!uid && !ncuid) {
@@ -6123,7 +6130,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 if (currentConv && currentConv.key === convKey) continue; // 当前正在查看的会话不显示未读红点
                 unreadCounts[convKey] = count;
                 updateUnreadBadge(convKey, count);
-                if (directLast[uid]) unreadLastMsg[convKey] = directLast[uid];
+                if (directLast[uid]) { unreadLastMsg[convKey] = directLast[uid]; recordLastMessage(convKey, directLast[uid], 'direct'); }
             }
             // 统计群聊未读（按 group_id 分组），同样缓存最新一条
             const groupCount = {};
@@ -6138,7 +6145,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 if (currentConv && currentConv.key === convKey) continue; // 当前正在查看的会话不显示未读红点
                 unreadCounts[convKey] = count;
                 updateUnreadBadge(convKey, count);
-                if (groupLast[groupId]) unreadLastMsg[convKey] = groupLast[groupId];
+                if (groupLast[groupId]) { unreadLastMsg[convKey] = groupLast[groupId]; recordLastMessage(convKey, groupLast[groupId], 'group'); }
             }
         } catch (e) { console.error(e); }
     }
@@ -6918,6 +6925,69 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         return body;
     }
 
+    // ===== 侧边栏「最近一条消息」预览缓存（纯前端，零后端改动）=====
+    // 数据源：① fetchLatestMessages 拉到最新页 ② WebSocket 收到新消息 ③ loadUnreadCounts 的 unreadLastMsg 作种子
+    let lastMsgPreview = {};     // convKey -> { msg, ts }
+
+    function getSidebarShowPreview() {
+        try { return localStorage.getItem('oc_sidebar_show_preview') !== '0'; } catch (e) { return true; }
+    }
+    function getSidebarSortByTime() {
+        try { return localStorage.getItem('oc_sidebar_sort_by_time') !== '0'; } catch (e) { return true; }
+    }
+
+    // 构造侧边栏副标题文本：群聊带「昵称：内容」，私聊仅内容（频道不调用此函数）
+    function buildSidebarPreviewText(convKey, msg, type) {
+        const preview = messagePreview(msg) || '';
+        if (type === 'group') {
+            const sender = msg.from_name || lookupName(msg.from_ncuid || msg.from_uid) || '';
+            return (sender ? sender + '：' : '') + preview;
+        }
+        return preview;
+    }
+
+    // 就地更新某个会话的副标题（不重建整列，避免丢折叠/滚动/分区状态）
+    function updateContactSubtitle(convKey) {
+        if (!contactList) return;
+        const item = contactList.querySelector('.contact-item[data-conv-key="' + (window.CSS && CSS.escape ? CSS.escape(convKey) : convKey) + '"]');
+        if (!item) return;
+        const sub = item.querySelector('.uid');
+        if (!sub) return;
+        const rec = lastMsgPreview[convKey];
+        sub.textContent = rec ? buildSidebarPreviewText(convKey, rec.msg, (convKey && convKey.split(':')[0])) : '';
+    }
+
+    // 记录某会话最近一条消息（仅在更晚时覆盖），并就地刷新副标题/重排顺序
+    function recordLastMessage(convKey, msg, type) {
+        if (!convKey || !msg) return;
+        const ts = Number(msg.created_at) || 0;
+        const prev = lastMsgPreview[convKey];
+        if (!prev || ts >= (prev.ts || 0)) {
+            lastMsgPreview[convKey] = { msg, ts };
+        }
+        if (getSidebarShowPreview()) updateContactSubtitle(convKey);
+        repositionContactByActivity(convKey);
+    }
+
+    // 按最近活跃排序（开关②开启时）：在该会话所在分区内按 lastMsgPreview.ts 倒序移动节点，并保持置顶/折叠分区
+    function repositionContactByActivity(convKey) {
+        if (!getSidebarSortByTime() || !contactList) return;
+        const item = contactList.querySelector('.contact-item[data-conv-key="' + (window.CSS && CSS.escape ? CSS.escape(convKey) : convKey) + '"]');
+        if (!item) return;
+        const sec = item.closest('.contact-section');
+        if (!sec) return;
+        const ts = (lastMsgPreview[convKey] && lastMsgPreview[convKey].ts) || 0;
+        const sibs = Array.from(sec.querySelectorAll(':scope > .contact-item'));
+        let inserted = false;
+        for (const s of sibs) {
+            if (s === item) continue;
+            const sk = s.dataset.convKey;
+            const sts = (lastMsgPreview[sk] && lastMsgPreview[sk].ts) || 0;
+            if (sts < ts) { sec.insertBefore(item, s); inserted = true; break; }
+        }
+        if (inserted) applyPriority(false);
+    }
+
     // 撤回消息后打断连消息链：前后消息重新重组
     function breakRecallChain(target, sep) {
         const prevSibling = sep.previousElementSibling;
@@ -7065,6 +7135,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             if (isSelfUid(fromUid)) return;
             const convKey = `direct:${fromUid}`;
             notifyNewMessage(lookupName(fromUid), messagePreview(d), convKey);
+            recordLastMessage(convKey, d, 'direct');
             // 只在当前会话匹配时才显示消息
             if (!currentConv || currentConv.key !== convKey) {
                 // 多会话消息接受：先暂存消息到后台，切到该会话时秒开
@@ -7105,6 +7176,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const _grp = contacts.groups.find(g => g.id === groupId);
             const convKey = `group:${groupId}`;
             notifyNewMessage(((_grp && _grp.name) || groupId) + ' · ' + lookupName(fromUid), messagePreview(d), convKey);
+            recordLastMessage(convKey, d, 'group');
             // 只在当前会话匹配时才显示消息
             if (!currentConv || currentConv.key !== convKey) {
                 // 多会话消息接受：先暂存消息到后台，切到该会话时秒开
@@ -7453,17 +7525,28 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const groupSection = document.createElement('div');
         groupSection.className = 'contact-section';
         groupSection.dataset.section = 'group';
-        if (contacts.groups.length > 0) {
+        // 按最近活跃排序（开关②）：分区内按最后消息时间倒序；未读/有消息的会话排前，从未打开过的保持原序
+        const groupsArr = getSidebarSortByTime()
+            ? contacts.groups.slice().sort((a, b) =>
+                ((lastMsgPreview['group:' + b.id] && lastMsgPreview['group:' + b.id].ts) || 0) -
+                ((lastMsgPreview['group:' + a.id] && lastMsgPreview['group:' + a.id].ts) || 0))
+            : contacts.groups;
+        if (groupsArr.length > 0) {
             groupSection.appendChild(makeSectionHeader('群聊', ''));
-            contacts.groups.forEach(g => groupSection.appendChild(createContactItem(g.id, g.name, 'group', g.avatar)));
+            groupsArr.forEach(g => groupSection.appendChild(createContactItem(g.id, g.name, 'group', g.avatar)));
         }
         // 私聊分区
         const directSection = document.createElement('div');
         directSection.className = 'contact-section';
         directSection.dataset.section = 'direct';
-        if (contacts.friends.length > 0) {
+        const friendsArr = getSidebarSortByTime()
+            ? contacts.friends.slice().sort((a, b) =>
+                ((lastMsgPreview['direct:' + b.uid] && lastMsgPreview['direct:' + b.uid].ts) || 0) -
+                ((lastMsgPreview['direct:' + a.uid] && lastMsgPreview['direct:' + a.uid].ts) || 0))
+            : contacts.friends;
+        if (friendsArr.length > 0) {
             directSection.appendChild(makeSectionHeader('私聊', ''));
-            contacts.friends.forEach(f => directSection.appendChild(createContactItem(f.uid, f.name, 'direct', f.avatar, f.displayUid, f.user_title)));
+            friendsArr.forEach(f => directSection.appendChild(createContactItem(f.uid, f.name, 'direct', f.avatar, f.displayUid, f.user_title)));
         }
         // 频道分区（已订阅频道，位于私聊之下、折叠之上）
         const channelSection = document.createElement('div');
@@ -8246,9 +8329,17 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         div.dataset.type = type;
         div.dataset.id = id;
         div.dataset.name = name;
-        // 群聊显示 group_id，私聊显示给人看的 displayId（旧UID），未提供则不显示
-        const showId = type === 'group' ? id : (displayId || '');
-        const idLine = showId ? `<div class="uid">${escapeHtml(showId)}</div>` : '';
+        // 群聊默认显示 group_id，私聊显示给人看的 displayId（旧UID）
+        // 若开启「侧边栏显示最近消息」，副标题改为最近一条消息预览（群聊带「昵称：内容」）
+        // 始终保留 .uid 元素（即使为空），便于后续新消息到达时就地填充，无需重建整列
+        let idText;
+        if (getSidebarShowPreview()) {
+            const rec = lastMsgPreview[type + ':' + id];
+            idText = rec ? buildSidebarPreviewText(type + ':' + id, rec.msg, type) : '';
+        } else {
+            idText = type === 'group' ? id : (displayId || '');
+        }
+        const idLine = idText ? `<div class="uid">${escapeHtml(idText)}</div>` : '<div class="uid"></div>';
         const avatarUrl = avatar ? cachedResolveMediaUrl(avatar) : 'assets/default-avatar.png';
         // 查找称号：优先使用传入的 userTitle，再从缓存查找
         const titleText = userTitle || lookupTitle(id);
@@ -8375,6 +8466,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 msgs.length = 0;
                 Array.prototype.push.apply(msgs, deduped);
             }
+
+            // 记录该会话最近一条消息用于侧边栏预览（最新页最后一格 = 最新消息）
+            if (msgs.length) recordLastMessage(convKey, msgs[msgs.length - 1], type);
 
             // ====== 增量更新：检查是否已有缓存 DOM，尝试增量追加新消息 ======
             const existingMsgEls = messagesContainer.querySelectorAll('.message[data-msg-id]');
@@ -10067,6 +10161,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
         appendMessage(tempMsg, currentConv.key, seenMsgIds[currentConv.key]);
         scrollToBottom(true, true);
+        // 侧边栏「最近消息」预览：自己发的消息也更新对应会话副标题
+        recordLastMessage(currentConv.key, tempMsg, currentConv.type);
 
         // 找到临时消息元素，设置半透明
         const tempEl = messagesContainer.querySelector(`[data-msg-id="${tempId}"]`);
@@ -12721,6 +12817,30 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 <div class="settings-note">
                     开启后，有未读的会话会立即进入「重点」分组；最近打开过的群聊与私聊在「进入延迟」后进入（0=立即，31=不自动进入，默认 5 秒）；「闲置移除」控制进入后保留多久（0=立即，31=永不移除，默认 30 秒）；未读会话始终立即进入；移动时带滑动动画。
                 </div>
+                <div class="settings-item" id="settingsSidebarPreview">
+                    <span class="label">侧边栏显示最近消息</span>
+                    <span class="value">
+                        <label class="oc-switch">
+                            <input type="checkbox" id="sidebarPreviewToggle">
+                            <span class="oc-switch-slider"></span>
+                        </label>
+                    </span>
+                </div>
+                <div class="settings-note">
+                    开启后，侧边栏会话副标题显示「最近一条消息」预览（群聊显示「昵称：内容」，私聊仅内容），替换原本的群号/旧 UID。关闭则恢复显示群号/旧 UID。
+                </div>
+                <div class="settings-item" id="settingsSidebarSort">
+                    <span class="label">按最近活跃排序</span>
+                    <span class="value">
+                        <label class="oc-switch">
+                            <input type="checkbox" id="sidebarSortToggle">
+                            <span class="oc-switch-slider"></span>
+                        </label>
+                    </span>
+                </div>
+                <div class="settings-note">
+                    开启后，群聊区与私聊区各自按「最近一条消息」时间倒序排列（最近活跃的排前面，未打开过的会话保持原顺序）；置顶/折叠分组仍优先。关闭则保持原有联系人顺序。
+                </div>
             </div>
             <h3 style="margin-top:20px;">服务器配置</h3>
             <div class="settings-group">
@@ -12833,6 +12953,28 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 try { localStorage.setItem(PRIORITY_LS_KEY, pToggle.checked ? '1' : '0'); } catch (e) {}
                 updatePrioSliderVisibility();
                 applyPriority(true);
+            });
+        }
+        // 侧边栏显示最近消息开关（设置 → 通用 → 侧边栏，默认开启）：开启时副标题显示最近一条消息预览
+        const spToggle = document.getElementById('sidebarPreviewToggle');
+        if (spToggle) {
+            spToggle.checked = getSidebarShowPreview();
+            spToggle.addEventListener('change', () => {
+                try { localStorage.setItem('oc_sidebar_show_preview', spToggle.checked ? '1' : '0'); } catch (e) {}
+                renderContacts();
+                reapplyUnreadBadges();
+                if (typeof showAlert === 'function') showAlert('侧边栏显示最近消息已' + (spToggle.checked ? '开启' : '关闭'));
+            });
+        }
+        // 按最近活跃排序开关（设置 → 通用 → 侧边栏，默认开启）：开启时分区内按最后消息时间倒序
+        const stToggle = document.getElementById('sidebarSortToggle');
+        if (stToggle) {
+            stToggle.checked = getSidebarSortByTime();
+            stToggle.addEventListener('change', () => {
+                try { localStorage.setItem('oc_sidebar_sort_by_time', stToggle.checked ? '1' : '0'); } catch (e) {}
+                renderContacts();
+                reapplyUnreadBadges();
+                if (typeof showAlert === 'function') showAlert('按最近活跃排序已' + (stToggle.checked ? '开启' : '关闭'));
             });
         }
         // 重点分区时长设置（滑块：进入延迟 0~31s（0=立即，31=不自动进入）；闲置移除 0~31s（0=立即，31=永不移除））
