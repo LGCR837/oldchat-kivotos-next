@@ -336,6 +336,62 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// 引用气泡里展示的引用文本：若被引用消息的 body 本身是 JSON（如按钮消息
+// {"v":2,"text":"...","buttons":[...]} 或纯按钮 {"buttons":[...]}），则提取
+// 内层可读文本，避免引用气泡里直接渲染一大坨原始 JSON。
+// 兼容三种异常结构：
+//  ① 没有 text 字段只有 buttons 的按钮消息（走 JSON.text 缺失分支）；
+//  ② 首行是昵称、JSON 在后面的引用（如 "昵称\n{...}"），此时截取首个 { 再解析；
+//  ③ 服务端存的 body JSON 被裁断（如 ...,"tid"... 末尾被截成残 JSON），
+//     JSON.parse 抛错时改用正则从 "buttons" 之后抽取所有 button.text 标签。
+function extractQuoteText(qtext) {
+    if (typeof qtext !== 'string') return qtext;
+    let candidate = qtext.trim();
+
+    // ① 若首段不是 {，尝试从首个 { 开始解析（兼容 "昵称\n{...}"）
+    if (!candidate.startsWith('{')) {
+        const idx = candidate.indexOf('{');
+        if (idx >= 0) candidate = candidate.slice(idx);
+        else return tryRegexButtonLabels(qtext) || qtext;
+    }
+
+    // ② 尝试 JSON 解析
+    let parsed = null;
+    try { parsed = JSON.parse(candidate); } catch (e) { /* 残 JSON 走兜底 */ }
+    if (parsed && typeof parsed === 'object') {
+        if (typeof parsed.text === 'string' && parsed.text.length) return parsed.text;
+        if (Array.isArray(parsed.buttons) && parsed.buttons.length) {
+            const labels = parsed.buttons.map(b => (b && b.text != null ? String(b.text) : '')).filter(Boolean);
+            if (labels.length) return labels.join(' / ');
+        }
+    }
+
+    // ③ 残 JSON 兜底：直接从字符串里抽 button.text 标签
+    const regexLabels = tryRegexButtonLabels(qtext);
+    if (regexLabels) return regexLabels;
+
+    return qtext;
+}
+
+// 即使 JSON 残缺/不闭合，只要原文里有 "buttons": [...，就在 "buttons" 之后
+// 用正则逐个匹配 "text":"..." 标签并拼接。这是最后一道防线，避免引用气泡里
+// 显示半截 JSON。
+function tryRegexButtonLabels(s) {
+    const btnsIdx = s.indexOf('"buttons"');
+    if (btnsIdx === -1) return null;
+    const afterBtns = s.slice(btnsIdx);
+    const labels = [];
+    const re = /"text"\s*:\s*"((?:\\.|[^"\\])*)"/g;
+    let m;
+    while ((m = re.exec(afterBtns)) !== null) {
+        let label = m[1];
+        label = label.replace(/\\"/g, '"').replace(/\\\\/g, '\\').replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+        if (label) labels.push(label);
+        if (labels.length >= 20) break;  // 安全上限，避免异常字符串爆炸
+    }
+    return labels.length ? labels.join(' / ') : null;
+}
+
 // 从「音乐分享」消息解析出音乐广场播放器所需的对象
 // 触发条件：msg.media_kind === 'music' 或 body 内 obj.media_kind === 'music'
 // body.text 形如：歌曲: X\n歌手: Y\n时长: 03:46\n封面: ...\n歌曲ID: ...\n歌词: ...\n点击播放
@@ -5476,6 +5532,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 .chat-header .chat-title,
 .chat-header .chat-status,
 .chat-header .chat-subtitle { color: var(--text) !important; }
+/* 聊天标题文字可点击（群→管理面板），用「手指」指针；no-drag 避免触发窗口拖动 */
+#chatHeader .chat-title { cursor: pointer !important; -webkit-app-region: no-drag; }
 .chat-header .icon-btn,
 .chat-header .header-menu-btn,
 .chat-header .win-ctrl-btn,
@@ -7045,10 +7103,22 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     function updatePresence(uid, isOnline, status) {
         if (!uid) return;
         const up = String(uid).toUpperCase();
-        presenceMap.set(up, {
+        const rec = {
             isOnline: isOnline === true || isOnline === 'true' || status === 'online',
             status: status || (isOnline ? 'online' : 'offline')
-        });
+        };
+        presenceMap.set(up, rec);
+        // 根治：presence 事件的 key 可能是 uid 也可能是 ncuid/displayUid，
+        // 与 currentConv.id(_sendToUid) 不一定一致。把同一联系人的两个标识都写入，确保标题栏点必中。
+        if (contacts && contacts.friends) {
+            const f = contacts.friends.find(fr =>
+                (fr.uid && fr.uid.toUpperCase() === up) ||
+                (fr.displayUid && fr.displayUid.toUpperCase() === up));
+            if (f) {
+                if (f.uid) presenceMap.set(String(f.uid).toUpperCase(), rec);
+                if (f.displayUid) presenceMap.set(String(f.displayUid).toUpperCase(), rec);
+            }
+        }
         renderPresenceIndicators();
     }
     function ensureChatPresenceDot() {
@@ -7062,33 +7132,26 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     }
     function renderPresenceIndicators() {
         try {
-            // 会话列表卡片：右下角小圆点表示在线，默认隐藏，hover 才显示（带过渡动画，见 app.css .presence-dot）
-            // 仅私聊卡片有意义（对方是在线用户）；群/频道不显示在线点
-            document.querySelectorAll('.contact-item[data-type="direct"]').forEach(item => {
-                const uid = String(item.dataset.id || '').toUpperCase();
-                const st = uid ? presenceMap.get(uid) : null;
-                let dot = item.querySelector('.presence-dot');
-                if (!st || !st.isOnline) { if (dot) dot.remove(); return; }
-                const color = st.status === 'busy' ? '#ef4444' : st.status === 'away' ? '#f59e0b' : '#22c55e';
-                if (!dot) {
-                    dot = document.createElement('span');
-                    dot.className = 'presence-dot';
-                    item.appendChild(dot);
-                }
-                dot.style.background = color;
-                dot.title = st.status === 'busy' ? '忙碌' : st.status === 'away' ? '离开' : '在线';
-            });
-            // 当前私聊头部在线点（保留原有的小圆点，不属于卡片 hover 形态）
+            // 侧边栏卡片在线状态点已移除（需求：只保留标题栏，且仅 hover 标题文字时显示）。
+            // 此处仅处理当前私聊头部在线点（#chatPresenceDot）。
             const dot = document.getElementById('chatPresenceDot');
-            if (dot && currentConv && currentConv.type === 'direct') {
-                const st = presenceMap.get(String(currentConv.id || '').toUpperCase());
-                if (st && st.isOnline) {
-                    const color = st.status === 'busy' ? '#ef4444' : st.status === 'away' ? '#f59e0b' : '#22c55e';
-                    dot.style.display = 'inline-block';
-                    dot.style.background = color;
-                    dot.title = st.status === 'busy' ? '忙碌' : st.status === 'away' ? '离开' : '在线';
-                } else { dot.style.display = 'none'; }
-            } else if (dot) { dot.style.display = 'none'; }
+            if (!dot) return;
+            let online = false, color = '#22c55e', label = '在线';
+        if (currentConv && currentConv.type === 'direct') {
+            // 兼容 presence 事件可能以 uid 或 ncuid 作为 key：两种都尝试命中
+            const keyA = String(currentConv.id || '').toUpperCase();
+            const keyB = String(currentConv._sendToUid || '').toUpperCase();
+            const st = presenceMap.get(keyA) || (keyB && keyB !== keyA ? presenceMap.get(keyB) : null);
+            if (st && st.isOnline) {
+                    online = true;
+                    color = st.status === 'busy' ? '#ef4444' : st.status === 'away' ? '#f59e0b' : '#22c55e';
+                    label = st.status === 'busy' ? '忙碌' : st.status === 'away' ? '离开' : '在线';
+                }
+            }
+            // 可见性由 JS 直接控制：在线即显示，离线隐藏（恢复原始行为，不依赖 hover）
+            dot.style.background = color;
+            dot.title = label;
+            dot.style.display = online ? 'inline-block' : 'none';
         } catch (e) {}
     }
 
@@ -8597,7 +8660,17 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         // API 查询用：ncuid 走 ?ncuid=，旧 uid 走 ?uid=
         const apiUid = profileUid || '';
         const apiNcuid = profileNcuid || '';
-        const msgType = msg.msg_type || 'text';
+        let msgType = msg.msg_type || 'text';
+        // 兜底：部分实时推送（如 WS 红包）可能 msg_type 缺漏/不一致，
+        // 若 body 是含 packet_id 的 JSON，则按红包渲染，避免退化成「[红包] {json}」纯文本导致右键菜单错位
+        if (msgType !== 'red_packet' && msg && msg.body) {
+            try {
+                const _b = typeof msg.body === 'string'
+                    ? (msg.body.trim().startsWith('{') ? JSON.parse(msg.body) : null)
+                    : (msg.body && typeof msg.body === 'object' ? msg.body : null);
+                if (_b && _b.packet_id) msgType = 'red_packet';
+            } catch (e) {}
+        }
 
         if (msgType === 'system') {
             const div = document.createElement('div');
@@ -8806,7 +8879,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 qs.className = 'quote-sender';
                 qs.textContent = quote.from_name || '';
                 const qt = document.createElement('div');
-                qt.textContent = quote.text || '';
+                qt.textContent = extractQuoteText(quote.text) || '';
                 qb.appendChild(qs);
                 qb.appendChild(qt);
                 msgDiv.appendChild(qb);
@@ -8860,7 +8933,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                             const quote = obj.quote;
                             displayText = `<div class="quote-block" data-quoted-id="${escapeHtml(quote.id || '')}">
                                 <div class="quote-sender">${escapeHtml(quote.from_name || quote.from_ncuid || quote.from_uid || '')}</div>
-                                <div>${escapeHtml(quote.text || '')}</div>
+                                <div>${escapeHtml(extractQuoteText(quote.text) || '')}</div>
                             </div>` + (displayText ? `<div style="white-space: pre-wrap; word-break: break-word;">${displayText}</div>` : '');
                         }
                         if (obj.mentions && Array.isArray(obj.mentions)) {
@@ -8974,7 +9047,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                             quoteHtml = `
                                 <div class="quote-block" data-quoted-id="${escapeHtml(quote.id || '')}">
                                     <div class="quote-sender">${escapeHtml(quote.from_name || quote.from_ncuid || quote.from_uid || '')}</div>
-                                    <div>${escapeHtml(quote.text || '')}</div>
+                                    <div>${escapeHtml(extractQuoteText(quote.text) || '')}</div>
                                 </div>`;
                         }
                         if (obj.mentions && Array.isArray(obj.mentions)) {
@@ -9071,8 +9144,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         } else if (msgType === 'red_packet') {
             let packetData = null;
             try {
-                if (msg.body && msg.body.trim().startsWith('{')) {
-                    packetData = JSON.parse(msg.body);
+                if (typeof msg.body === 'string') {
+                    if (msg.body.trim().startsWith('{')) packetData = JSON.parse(msg.body);
+                } else if (msg.body && typeof msg.body === 'object') {
+                    packetData = msg.body;
                 }
             } catch (e) {}
             if (packetData && packetData.packet_id) {
@@ -10325,6 +10400,17 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // 已领取红包集合：跨消息重渲染保留「已领取」状态，避免点击领取后状态丢失 / 卡在「领取中…」
     const claimedRedPackets = new Set();
     const claimedRpAmount = Object.create(null);
+    // 已领取状态持久化到 localStorage：刷新后仍标记为已领取，避免重复领取被服务器限流/拉黑
+    const CLAIMED_RP_KEY = 'oc_claimed_redpackets';
+    function saveClaimedRedPackets() {
+        try { localStorage.setItem(CLAIMED_RP_KEY, JSON.stringify(Array.from(claimedRedPackets))); } catch (e) {}
+    }
+    (function loadClaimedRedPackets() {
+        try {
+            const arr = JSON.parse(localStorage.getItem(CLAIMED_RP_KEY) || '[]');
+            if (Array.isArray(arr)) arr.forEach(id => { if (id) claimedRedPackets.add(id); });
+        } catch (e) {}
+    })();
     function setRpStatus(pid, text) {
         const nodes = document.querySelectorAll('.red-packet-card');
         for (const n of nodes) {
@@ -10344,9 +10430,13 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         menu.className = 'custom-context-menu';
         menu.style.left = x + 'px';
         menu.style.top = y + 'px';
+        const msgDiv = card.closest('.message');
         menu.innerHTML =
             '<div class="context-menu-item" data-action="detail">查看红包详细</div>' +
-            '<div class="context-menu-item" data-action="copy-id">复制红包ID</div>';
+            '<div class="context-menu-item" data-action="copy-id">复制红包ID</div>' +
+            '<div class="context-menu-divider"></div>' +
+            '<div class="context-menu-item" data-action="copy-raw">复制原始消息</div>' +
+            '<div class="context-menu-item" data-action="quote">引用</div>';
         document.body.appendChild(menu);
         requestAnimationFrame(() => { clampContextMenu(menu, x, y); menu.classList.add('show'); });
         contextMenu = menu;
@@ -10358,6 +10448,25 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 const text = packetId || '';
                 if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(() => fallbackCopyText(text));
                 else fallbackCopyText(text);
+            } else if (action === 'copy-raw') {
+                const raw = (msgDiv && msgDiv.dataset.rawBody) || JSON.stringify({ packet_id: packetId });
+                if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(raw).catch(() => fallbackCopyText(raw));
+                else fallbackCopyText(raw);
+            } else if (action === 'quote') {
+                if (msgDiv) {
+                    pendingQuote = {
+                        id: msgDiv.dataset.msgId,
+                        from_uid: msgDiv.dataset.fromUid,
+                        from_name: msgDiv.dataset.fromName,
+                        type: msgDiv.dataset.msgType,
+                        text: (msgDiv.dataset.plainText || '').substring(0, 200)
+                    };
+                    if (typeof quotePreviewText !== 'undefined' && quotePreviewText && typeof quotePreview !== 'undefined' && quotePreview) {
+                        quotePreviewText.textContent = `引用: ${msgDiv.dataset.fromName || ''} - ${(msgDiv.dataset.plainText || '').substring(0, 50)}`;
+                        quotePreview.style.display = 'flex';
+                        if (typeof messageInput !== 'undefined' && messageInput) messageInput.focus();
+                    }
+                }
             }
             hideContextMenu();
         });
@@ -10426,11 +10535,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     html += `<div class="rp-detail-claims-title">领取记录（${claims.length}）</div><div class="rp-detail-claims">`;
                     claims.forEach(c => {
                         const nm = c.display_name || c.username || c.uid || '匿名';
-                        const av = c.avatar_url ? cachedResolveMediaUrl(c.avatar_url) : 'assets/default-avatar.png';
                         const amt = c.amount != null ? c.amount : '';
                         const tm = c.created_at ? new Date(c.created_at * 1000).toLocaleString() : '';
                         html += `<div class="rp-claim-item">` +
-                            `<img src="${av}" onerror="this.src='assets/default-avatar.png'">` +
                             `<div class="rp-claim-info"><div class="rp-claim-name">${escapeHtml(nm)}</div><div class="rp-claim-time">${escapeHtml(tm)}</div></div>` +
                             `<div class="rp-claim-amt">${escapeHtml(String(amt))}</div></div>`;
                     });
@@ -10453,9 +10560,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                             if (d2.error) { showAlert(d2.error); claimBtn.disabled = false; claimBtn.textContent = '领取红包'; return; }
                 if (cardEl) {
                     claimedRedPackets.add(packetId);
+                    saveClaimedRedPackets();
                     if (d2.amount != null) claimedRpAmount[packetId] = d2.amount;
                     cardEl.dataset.claimed = 'true';
-                    cardEl.style.pointerEvents = 'none';
+                    cardEl.dataset.claiming = '';
                     const st = cardEl.querySelector('.rp-status');
                     const amt = d2.amount != null ? d2.amount : '';
                     if (st) st.textContent = amt ? `已领取 ${amt}` : '已领取';
@@ -10519,6 +10627,29 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 try { data = JSON.parse(text); } catch (e) {}
                 if (data.error) { showAlert(data.error); return; }
                 rpDialogOverlay.style.display = 'none';
+                // 发送成功后本地立即追加一条红包消息，避免必须刷新页面才显示
+                try {
+                    const pid = data.packet_id || data.id || '';
+                    const rb = JSON.stringify({
+                        packet_id: pid,
+                        title: data.title || title,
+                        total_amount: data.total_amount != null ? data.total_amount : amount,
+                        total_count: data.total_count != null ? data.total_count : count,
+                        cover_url: data.cover_url || data.cover || ''
+                    });
+                    const tempMsg = {
+                        id: data.id || data.packet_id || ('rp_local_' + Date.now()),
+                        from_uid: myUid,
+                        from_name: myName || myUid,
+                        from_avatar: typeof myAvatar !== 'undefined' ? myAvatar : '',
+                        body: rb,
+                        msg_type: 'red_packet',
+                        created_at: Math.floor(Date.now() / 1000),
+                        group_id: currentConv.type === 'group' ? currentConv.id : undefined
+                    };
+                    appendMessage(tempMsg, currentConv.key, seenMsgIds[currentConv.key]);
+                    scheduleAutoScroll();
+                } catch (e) {}
             } catch (e) { showAlert('发送失败'); }
         });
     }
@@ -11305,11 +11436,14 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         sidebar.classList.remove('collapsed');
     });
 
-    // 点击群聊标题进入群聊管理
+    // 点击标题：群聊 → 群管理面板；直聊 → 对方资料/主页
     const chatTitleEl = chatHeader.querySelector('.chat-title');
     chatTitleEl.addEventListener('click', () => {
-        if (currentConv && currentConv.type === 'group') {
+        if (!currentConv) return;
+        if (currentConv.type === 'group') {
             openGroupManagePanel(currentConv.id, currentConv.name);
+        } else if (currentConv.type === 'direct') {
+            openSpacePanel(currentConv.id, currentConv._sendToUid);
         }
     });
     chatTitleEl.style.cssText = 'cursor:pointer;-webkit-app-region:no-drag;';
@@ -11366,17 +11500,16 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const packetId = card.dataset.packetId;
         if (!packetId) return;
 
-        // 已领取：再次点击打开详情（领取后查看详细）
+        // 已领取（含刷新后从 localStorage 恢复）：再次点击直接打开详情，绝不重复领取
         if (claimedRedPackets.has(packetId)) {
             openRedPacketDetail(packetId, card);
             return;
         }
+        // 进行中：防止并发重复点击
+        if (card.dataset.claiming === '1') return;
+        card.dataset.claiming = '1';
 
-        // 立即禁用，避免重复点击；并记录到集合（跨重渲染保留状态）
-        claimedRedPackets.add(packetId);
         setRpStatus(packetId, '领取中...');
-        card.style.pointerEvents = 'none';
-
         try {
             const res = await apiFetch('/v1/redpackets/claim', {
                 method: 'POST',
@@ -11385,30 +11518,31 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             });
             const data = await res.json();
             if (data.error) {
-                // 已领过 → 直接进入详情（而非报错）
+                // 已领过 → 标记已领取并进入详情（而非报错 / 重复领取被拉黑）
                 if (String(data.error).toLowerCase().includes('already')) {
                     claimedRedPackets.add(packetId);
+                    saveClaimedRedPackets();
+                    card.dataset.claimed = 'true';
                     setRpStatus(packetId, '已领取');
                     openRedPacketDetail(packetId, card);
                     return;
                 }
-                claimedRedPackets.delete(packetId);
                 setRpStatus(packetId, data.error);
-                card.style.pointerEvents = '';
-                card.style.opacity = '0.7';
+                card.dataset.claiming = '';
             } else {
-                // 领取成功，显示金额（如果接口返回 amount 字段）
+                // 领取成功：标记已领取（持久化），再次点击即查看详情
+                claimedRedPackets.add(packetId);
+                saveClaimedRedPackets();
                 const amount = data.amount !== undefined ? data.amount : '';
                 claimedRpAmount[packetId] = amount;
+                card.dataset.claimed = 'true';
                 setRpStatus(packetId, amount ? `已领取 ${amount}` : '已领取');
                 card.style.opacity = '0.7';
                 card.style.cursor = 'default';
             }
         } catch (err) {
-            claimedRedPackets.delete(packetId);
             setRpStatus(packetId, '网络错误');
-            card.style.pointerEvents = '';
-            card.style.opacity = '0.7';
+            card.dataset.claiming = '';
         }
     });
 
