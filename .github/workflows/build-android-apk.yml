@@ -11,10 +11,14 @@
 #   ANDROID_KEY_PASSWORD         （见备份文件）
 #   ANDROID_KEYSTORE_PASSWORD    （见备份文件）
 #
-# 签名机制（关键）：Tauri 的 gradle 模板靠 src-tauri/gen/android/keystore.properties
-# 决定 release 是否签名，而非 TAURI_ANDROID_KEY_* 环境变量。本工作流在 android init
-# 之后显式生成该文件（password/keyAlias/storeFile），并用 apksigner verify 兜底校验，
-# 未签名则直接令构建失败，避免再次产出装不上的裸包。
+# 签名机制（关键，已踩两次坑）：
+#  - Tauri 的 gradle 模板在我们的 CLI 版本下不会自动对 release 签名：无论设
+#    TAURI_ANDROID_KEY_* 环境变量还是手写 keystore.properties，产出仍是裸包
+#    （实测两次均 INSTALL_PARSE_FAILED_NO_CERTIFICATES）。
+#  - 因此改为：构建照常产出「未签名」APK，随后用 Android SDK 自带的 apksigner
+#    直接拿本工作流从 Secret 还原的 jks 现场签名（--ks / --ks-key-alias / 密码），
+#    再用 apksigner verify 兜底校验，未签上则直接令构建失败。
+#  - 这样彻底绕开 Tauri gradle 签名黑箱，签的是我们自己的 alias(ockn)。
 # =============================================================================
 
 name: Android APK (manual)
@@ -37,11 +41,6 @@ jobs:
     env:
       # 非交互：tauri android init 不因缺参而卡住询问
       CI: 'true'
-      # —— 签名（双保险）：环境变量 + 下文显式生成的 keystore.properties ——
-      TAURI_ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/src-tauri/android-release-key.jks
-      TAURI_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      TAURI_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-      TAURI_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
 
     steps:
       - name: Checkout (main)
@@ -104,23 +103,25 @@ jobs:
           echo "--- patched defaultConfig ---"
           sed -n '/defaultConfig {/,/^    }/p' src-tauri/gen/android/app/build.gradle.kts
 
-      - name: 写入 keystore.properties（Tauri gradle 据此对 release 签名）
-        run: |
-          cd src-tauri/gen/android
-          cat > keystore.properties <<'EOF'
-          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-          password=${{ secrets.ANDROID_KEY_PASSWORD }}
-          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
-          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          storeFile=${{ github.workspace }}/src-tauri/android-release-key.jks
-          EOF
-          echo "--- keystore.properties（密码已打码，确认字段齐全）---"
-          sed -E 's/(password=).*/\1****/' keystore.properties
-
-      - name: 构建 Android APK（arm64-v8a, 签名）
+      - name: 构建 Android APK（arm64-v8a，先产出未签名包）
         run: npm run tauri -- android build --target aarch64 --apk
 
-      - name: 校验 APK 签名（未签名则令构建失败）
+      - name: 用 apksigner 对 APK 签名（绕开 Tauri gradle 签名黑箱）
+        run: |
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" | head -1)
+          DIR=$(dirname "$APK")
+          echo "待签名 APK: $APK"
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" sign \
+            --ks src-tauri/android-release-key.jks \
+            --ks-key-alias "${{ secrets.ANDROID_KEY_ALIAS }}" \
+            --ks-pass pass:"${{ secrets.ANDROID_KEY_PASSWORD }}" \
+            --key-pass pass:"${{ secrets.ANDROID_KEY_PASSWORD }}" \
+            "$APK"
+          # 去掉文件名里误导性的 'unsigned'，便于识别
+          mv "$APK" "$DIR/oldchat-kivotos-arm64-v8a-release.apk"
+          echo "已签名 → $DIR/oldchat-kivotos-arm64-v8a-release.apk"
+
+      - name: 校验 APK 签名（签的不是我们的 key 则令构建失败）
         run: |
           APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" | head -1)
           echo "待校验 APK: $APK"
