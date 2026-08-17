@@ -10,6 +10,11 @@
 #   ANDROID_KEY_ALIAS            ockn
 #   ANDROID_KEY_PASSWORD         （见备份文件）
 #   ANDROID_KEYSTORE_PASSWORD    （见备份文件）
+#
+# 签名机制（关键）：Tauri 的 gradle 模板靠 src-tauri/gen/android/keystore.properties
+# 决定 release 是否签名，而非 TAURI_ANDROID_KEY_* 环境变量。本工作流在 android init
+# 之后显式生成该文件（password/keyAlias/storeFile），并用 apksigner verify 兜底校验，
+# 未签名则直接令构建失败，避免再次产出装不上的裸包。
 # =============================================================================
 
 name: Android APK (manual)
@@ -32,7 +37,7 @@ jobs:
     env:
       # 非交互：tauri android init 不因缺参而卡住询问
       CI: 'true'
-      # —— 签名：由仓库 Secrets 注入，Tauri 据此生成 keystore.properties ——
+      # —— 签名（双保险）：环境变量 + 下文显式生成的 keystore.properties ——
       TAURI_ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/src-tauri/android-release-key.jks
       TAURI_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       TAURI_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -99,8 +104,27 @@ jobs:
           echo "--- patched defaultConfig ---"
           sed -n '/defaultConfig {/,/^    }/p' src-tauri/gen/android/app/build.gradle.kts
 
+      - name: 写入 keystore.properties（Tauri gradle 据此对 release 签名）
+        run: |
+          cd src-tauri/gen/android
+          cat > keystore.properties <<'EOF'
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          password=${{ secrets.ANDROID_KEY_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          storeFile=${{ github.workspace }}/src-tauri/android-release-key.jks
+          EOF
+          echo "--- keystore.properties（密码已打码，确认字段齐全）---"
+          sed -E 's/(password=).*/\1****/' keystore.properties
+
       - name: 构建 Android APK（arm64-v8a, 签名）
         run: npm run tauri -- android build --target aarch64 --apk
+
+      - name: 校验 APK 签名（未签名则令构建失败）
+        run: |
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" | head -1)
+          echo "待校验 APK: $APK"
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs "$APK"
 
       - name: 上传 APK 产物
         uses: actions/upload-artifact@v4
