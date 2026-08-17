@@ -1010,6 +1010,32 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init());
 
+    // 禁用浏览器级默认快捷键（Ctrl+P/F/G/J、Ctrl+Shift+I、F3、F7）：仅桌面端。
+    // 跨平台走 flags + 自定义 shortcuts（Linux/macOS WebKit 层拦截）；
+    // Windows 额外关闭 WebView2 的 browser_accelerator_keys，彻底掐掉 JS 拦不住的
+    // 浏览器级组合键（Ctrl+P / Ctrl+Shift+I 等）。
+    #[cfg(desktop)]
+    let builder = builder.plugin({
+        let p = tauri_plugin_prevent_default::Builder::new()
+            .with_flags(
+                tauri_plugin_prevent_default::Flags::PRINT
+                    | tauri_plugin_prevent_default::Flags::FIND
+                    | tauri_plugin_prevent_default::Flags::DOWNLOADS
+                    | tauri_plugin_prevent_default::Flags::DEV_TOOLS,
+            )
+            .shortcut(tauri_plugin_prevent_default::KeyboardShortcut::new("F3"))
+            .shortcut(tauri_plugin_prevent_default::KeyboardShortcut::new("F7"))
+            .shortcut(tauri_plugin_prevent_default::KeyboardShortcut::with_modifiers(
+                "G",
+                &[tauri_plugin_prevent_default::ModifierKey::CtrlKey],
+            ));
+        #[cfg(windows)]
+        let p = p.platform(
+            tauri_plugin_prevent_default::PlatformOptions::new().browser_accelerator_keys(false),
+        );
+        p.build()
+    });
+
     // 单实例：仅桌面端（移动端无此概念，且该插件 API 为桌面专属）
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
