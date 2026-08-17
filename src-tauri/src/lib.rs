@@ -1,12 +1,16 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod preflight;
 
-use tauri::{
-    menu::{Menu, MenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WebviewWindow,
-};
-use tauri_plugin_dialog::{DialogExt, FilePath};
+// 托盘/菜单/桌面专属对话框 API 仅桌面端存在，移动端不引入以免编译失败
+#[cfg(desktop)]
+use tauri::menu::{Menu, MenuItem};
+#[cfg(desktop)]
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, WebviewWindow};
+#[cfg(desktop)]
+use tauri_plugin_dialog::DialogExt;
+#[cfg(desktop)]
+use tauri_plugin_dialog::FilePath;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -143,30 +147,39 @@ fn flash_taskbar_windows(hwnd_val: isize) {
 }
 
 // 弹出原生保存对话框，写入二进制数据（filename 可选默认文件名；filter 可选扩展名过滤）
+// 仅桌面端有阻塞式保存对话框；移动端无此能力，返回「不支持」。
 fn save_with_dialog(
     app: &tauri::AppHandle,
     data: &[u8],
     filename: Option<&str>,
     filter: Option<(&str, &[&str])>,
 ) -> Result<(), String> {
-    let mut builder = app.dialog().file();
-    if let Some((name, exts)) = filter {
-        builder = builder.add_filter(name, exts);
-    }
-    if let Some(name) = filename {
-        builder = builder.set_file_name(name);
-    }
-    let file_path = builder.blocking_save_file();
-
-    if let Some(path) = file_path {
-        match path {
-            FilePath::Path(p) => {
-                std::fs::write(&p, data).map_err(|e| format!("保存失败: {}", e))?;
-            }
-            _ => return Err("不支持的路径类型".into()),
+    #[cfg(desktop)]
+    {
+        let mut builder = app.dialog().file();
+        if let Some((name, exts)) = filter {
+            builder = builder.add_filter(name, exts);
         }
+        if let Some(name) = filename {
+            builder = builder.set_file_name(name);
+        }
+        let file_path = builder.blocking_save_file();
+
+        if let Some(path) = file_path {
+            match path {
+                FilePath::Path(p) => {
+                    std::fs::write(&p, data).map_err(|e| format!("保存失败: {}", e))?;
+                }
+                _ => return Err("不支持的路径类型".into()),
+            }
+        }
+        Ok(())
     }
-    Ok(())
+    #[cfg(not(desktop))]
+    {
+        let _ = (app, data, filename, filter);
+        Err("移动端暂不支持保存对话框".into())
+    }
 }
 
 // 下载进度上报消息（经 Tauri Channel 推到前端）
@@ -423,8 +436,10 @@ fn sanitize_theme_id(id: &str) -> String {
 }
 
 // 原生文件选择框挑选 .css → 解析元数据 → 写入 themes/<id>.css → 返回元数据（含 css）
-#[tauri::command]
-fn import_theme(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    // 仅桌面端：依赖阻塞式文件选择框（移动端无 blocking_pick_file）
+    #[cfg(desktop)]
+    #[tauri::command]
+    fn import_theme(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let picked = app
         .dialog()
         .file()
@@ -547,8 +562,10 @@ fn parse_plugin_meta(src: &str) -> serde_json::Value {
 }
 
 // 原生文件选择框挑选 .js → 解析元数据 → 写入 plugins/<id>.js → 返回元数据
-#[tauri::command]
-fn import_plugin(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    // 仅桌面端：依赖阻塞式文件选择框
+    #[cfg(desktop)]
+    #[tauri::command]
+    fn import_plugin(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let picked = app
         .dialog()
         .file()
@@ -772,8 +789,10 @@ fn build_cip_meta(
 }
 
 // 原生文件选择框挑选 .cip/.zip → 解包 → 写入 cip/<id>/ → 返回 meta
-#[tauri::command]
-fn import_cip_app(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    // 仅桌面端：依赖阻塞式文件选择框
+    #[cfg(desktop)]
+    #[tauri::command]
+    fn import_cip_app(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let picked = app
         .dialog()
         .file()
@@ -958,8 +977,10 @@ fn read_cip_assets(app: tauri::AppHandle, id: String) -> Vec<serde_json::Value> 
 }
 
 // 桌面端相机替代：弹文件框选图片，返回 data URI（取消则返回 null）
-#[tauri::command]
-fn cip_pick_image(app: tauri::AppHandle) -> Option<String> {
+    // 仅桌面端：依赖阻塞式文件选择框
+    #[cfg(desktop)]
+    #[tauri::command]
+    fn cip_pick_image(app: tauri::AppHandle) -> Option<String> {
     let picked = app
         .dialog()
         .file()
@@ -982,97 +1003,102 @@ pub fn run() {
     #[cfg(desktop)]
     preflight::check();
 
-    let run_result = tauri::Builder::default()
+    // 基础插件：跨平台（opener/http/notification/dialog 在 Android 上均受支持）
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_dialog::init())
-        // 单实例：防止重复启动（很多人关窗进托盘后忘了，会重复开好几个）。
-        // 第二个实例启动时自动退出，并把已存在实例的主窗口调出来。
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }))
-        .invoke_handler(tauri::generate_handler![
-            greet,
-            toggle_devtools,
-            minimize_window,
-            toggle_maximize_window,
-            close_window,
-            is_window_maximized,
-            notify_new_message,
-            save_image,
-            save_download,
-            cancel_download,
-            save_image_data,
-            fetch_media,
-            env_report,
-            app_version,
-            import_theme,
-            list_user_themes,
-            delete_user_theme,
-            import_plugin,
-            list_user_plugins,
-            read_plugin_source,
-            delete_user_plugin,
-            import_cip_app,
-            list_cip_apps,
-            read_cip_app,
-            delete_cip_app,
-            read_cip_assets,
-            cip_pick_image
-        ])
-        // 拦截窗口关闭请求：改为隐藏到托盘
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
-            }
-        })
-        .setup(|app| {
-            // 托盘菜单：显示窗口 / 退出
-            let show_item = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+        .plugin(tauri_plugin_dialog::init());
 
-            TrayIconBuilder::with_id("main-tray")
-                .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("OldChat For Kivotos")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| {
-                    match event.id.as_ref() {
-                        "show" => {
+    // 单实例：仅桌面端（移动端无此概念，且该插件 API 为桌面专属）
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }));
+
+    // 拦截窗口关闭请求改为隐藏到托盘：仅桌面端
+    #[cfg(desktop)]
+    let builder = builder.on_window_event(|window, event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = window.hide();
+        }
+    });
+
+    // 命令注册：桌面端包含全部；移动端仅保留跨平台命令（桌面专属命令不参与编译）。
+    // 注意：generate_handler! 返回不透明类型，不能直接赋给 let，必须就地调用 .invoke_handler()。
+    let builder = {
+        #[cfg(desktop)]
+        {
+            builder.invoke_handler(tauri::generate_handler![
+                greet, toggle_devtools, minimize_window, toggle_maximize_window, close_window,
+                is_window_maximized, notify_new_message, save_image, save_download, cancel_download,
+                save_image_data, fetch_media, env_report, app_version, import_theme, list_user_themes,
+                delete_user_theme, import_plugin, list_user_plugins, read_plugin_source, delete_user_plugin,
+                import_cip_app, list_cip_apps, read_cip_app, delete_cip_app, read_cip_assets, cip_pick_image
+            ])
+        }
+        #[cfg(not(desktop))]
+        {
+            builder.invoke_handler(tauri::generate_handler![
+                greet, save_image, save_download, cancel_download, save_image_data, fetch_media,
+                env_report, app_version, list_user_themes, delete_user_theme, list_user_plugins,
+                read_plugin_source, delete_user_plugin, list_cip_apps, read_cip_app, delete_cip_app,
+                read_cip_assets
+            ])
+        }
+    };
+
+    let run_result = builder
+        .setup(|app| {
+            // 托盘与菜单：仅桌面端
+            #[cfg(desktop)]
+            {
+                // 托盘菜单：显示窗口 / 退出
+                let show_item = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
+                let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+                TrayIconBuilder::with_id("main-tray")
+                    .icon(app.default_window_icon().unwrap().clone())
+                    .tooltip("OldChat For Kivotos")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| {
+                        match event.id.as_ref() {
+                            "show" => {
+                                if let Some(window) = app.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                            "quit" => {
+                                app.exit(0);
+                            }
+                            _ => {}
+                        }
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        // 单击托盘图标显示窗口
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            let app = tray.app_handle();
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.show();
                                 let _ = window.set_focus();
                             }
                         }
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        _ => {}
-                    }
-                })
-                .on_tray_icon_event(|tray, event| {
-                    // 单击托盘图标显示窗口
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                })
-                .build(app)?;
+                    })
+                    .build(app)?;
+            }
             Ok(())
         })
         .run(tauri::generate_context!());

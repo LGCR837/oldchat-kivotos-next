@@ -23,7 +23,6 @@ tauri-plugin-opener = "2"
 tauri-plugin-http = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-single-instance = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -42,6 +41,12 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Registry",
     "Win32_UI_Shell",
 ] }
+
+# 单实例防重复启动：仅桌面端（移动端无此概念，其 API 为桌面专属）。
+# 注意：Tauri 的 `cfg(desktop)` 由 build script 注入，Cargo 解析依赖时不认；
+# 这里用 Cargo 能识别的标准 cfg：非 android 且非 ios 即视为桌面端。
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

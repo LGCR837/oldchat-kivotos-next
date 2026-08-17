@@ -1,0 +1,110 @@
+# =============================================================================
+# Android APK 手动构建（独立于桌面端 CI）
+# -----------------------------------------------------------------------------
+# 仅手动触发：在 GitHub 仓库 Actions 页选 "Android APK (manual)" → Run workflow。
+# 从 main 分支拉取并构建，只产出 arm64-v8a 的测试用 APK（用户要求：先能编译、仅 armv8 测试）。
+# 不接入桌面端的 release 矩阵，互不干扰。
+#
+# 需要先在仓库 Settings → Secrets 配置 4 项：
+#   ANDROID_KEYSTORE_BASE64      本地签名密钥的 base64（见桌面「OCKN安卓签名备份.txt」）
+#   ANDROID_KEY_ALIAS            ockn
+#   ANDROID_KEY_PASSWORD         （见备份文件）
+#   ANDROID_KEYSTORE_PASSWORD    （见备份文件）
+# =============================================================================
+
+name: Android APK (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: '构建备注（仅记录用，不影响构建）'
+        required: false
+        default: 'arm64-v8a 测试构建'
+
+jobs:
+  android-apk:
+    name: Build Android APK (arm64-v8a)
+    runs-on: ubuntu-22.04
+    # 仅手动触发；不随 push / release 自动跑
+    if: github.event_name == 'workflow_dispatch'
+
+    env:
+      # 非交互：tauri android init 不因缺参而卡住询问
+      CI: 'true'
+      # —— 签名：由仓库 Secrets 注入，Tauri 据此生成 keystore.properties ——
+      TAURI_ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/src-tauri/android-release-key.jks
+      TAURI_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      TAURI_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      TAURI_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+
+    steps:
+      - name: Checkout (main)
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Setup JDK 17 (Android Gradle Plugin 需要)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Rust stable + aarch64-linux-android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        # 该 action 安装 command-line tools 并设置 ANDROID_HOME / ANDROID_SDK_ROOT
+
+      - name: Install Android platform, build-tools and NDK
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          # 先装一个 NDK 作为兜底；随后按 Tauri 生成工程里 pin 的 ndkVersion 精确安装
+          sdkmanager "ndk;27.0.12077973"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: 还原签名密钥（从 base64 Secret）
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > src-tauri/android-release-key.jks
+          ls -la src-tauri/android-release-key.jks
+
+      - name: 初始化 Android 工程（生成 src-tauri/gen/android）
+        run: npm run tauri -- android init
+
+      - name: 按 Tauri pin 的 ndkVersion 精确安装 NDK
+        run: |
+          NDK_PIN=$(sed -n 's/.*ndkVersion *= *"\([^"]*\)".*/\1/p' src-tauri/gen/android/app/build.gradle.kts | head -1)
+          echo "Tauri pinned ndkVersion: ${NDK_PIN:-<none>}"
+          if [ -n "$NDK_PIN" ]; then
+            yes | sdkmanager "ndk;$NDK_PIN"
+            echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_PIN" >> "$GITHUB_ENV"
+          else
+            echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          fi
+
+      - name: 限制 ABI 为 arm64-v8a（仅测试用，缩小体积）
+        run: |
+          sed -i 's/\(defaultConfig {\)/\1\n        ndk { abiFilters += listOf("arm64-v8a") }/' \
+            src-tauri/gen/android/app/build.gradle.kts
+          echo "--- patched defaultConfig ---"
+          sed -n '/defaultConfig {/,/^    }/p' src-tauri/gen/android/app/build.gradle.kts
+
+      - name: 构建 Android APK（arm64-v8a, 签名）
+        run: npm run tauri -- android build --target aarch64 --apk
+
+      - name: 上传 APK 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: oldchat-android-arm64-apk
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
