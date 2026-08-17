@@ -11,8 +11,40 @@ const MIRROR = 'https://gh.jasonzeng.dev/';
 // KV 未刷新时的兜底标签（按 GitHub 实时数据：v6 / v5 / v4）
 const FALLBACK_TAGS = ['v6', 'v5', 'v4'];
 
-// 每个 tag 对应的 5 个产物（命名已与 GitHub Release 资产逐一对齐）
+// 解析 tag 主版本号（v13 / 13 / v12 → 13 / 12）
+function parseVer(tag) {
+    const m = String(tag || '').match(/^v?(\d+)/);
+    return m ? parseInt(m[1], 10) : 0;
+}
+// v13 起启用全新统一命名，老 release（v1–v12）沿用旧命名
+function useNewNaming(tag) {
+    return parseVer(tag) >= 13;
+}
+
+// 兜底：KV 尚未刷新资产时，按 tag 版本生成预期产物列表
 function buildAssets(tag) {
+    const base = 'oldchat-kivotos-next-app-' + tag + '-';
+    if (useNewNaming(tag)) {
+        return [
+            ['Windows amd64',        base + 'windows-amd64.exe'],
+            ['Windows aarch64',      base + 'windows-aarch64.exe'],
+            ['Windows i386',         base + 'windows-i386.exe'],
+            ['Windows amd64 安装包',  base + 'windows-amd64-setup.exe'],
+            ['Windows aarch64 安装包', base + 'windows-aarch64-setup.exe'],
+            ['Windows i386 安装包',    base + 'windows-i386-setup.exe'],
+            ['Linux amd64',          base + 'linux-amd64'],
+            ['Linux aarch64',        base + 'linux-aarch64'],
+            ['Linux amd64 AppImage', base + 'linux-amd64-appimage.AppImage'],
+            ['Linux amd64 deb',      base + 'linux-amd64-deb.deb'],
+            ['Linux amd64 rpm',      base + 'linux-amd64-rpm.rpm'],
+            ['Linux aarch64 AppImage', base + 'linux-aarch64-appimage.AppImage'],
+            ['Linux aarch64 deb',    base + 'linux-aarch64-deb.deb'],
+            ['Linux aarch64 rpm',    base + 'linux-aarch64-rpm.rpm'],
+            ['macOS Apple Silicon',  base + 'macos-applesilicon.dmg'],
+            ['macOS Intel',          base + 'macos-intel.dmg']
+        ];
+    }
+    // 旧命名（v1–v12）：仅 5 个免安装单文件
     return [
         ['Windows amd64', 'oldchat-kivotos-next-app-' + tag + '-windows-amd64.exe'],
         ['Windows arm64', 'oldchat-kivotos-next-app-' + tag + '-windows-arm64.exe'],
@@ -43,45 +75,78 @@ function renderNotes(body) {
 }
 
 // 按文件名分类为 {os, arch, fmt, label}，未知格式返回 null（自动跳过）
+// 兼容两套命名：旧（v1–v12，含 arm64/x86_64 等词）与新（v13+，amd64/aarch64/i386/applesilicon/intel）
 function classify(name) {
     const n = String(name).toLowerCase();
     let os = '', arch = '', fmt = '';
+
     if (/\.dmg$/.test(n)) { os = 'macOS'; fmt = 'dmg'; }
-    else if (/setup\.exe$/.test(n)) { os = 'Windows'; fmt = '安装包'; }
+    else if (/-setup\.exe$/.test(n)) { os = 'Windows'; fmt = '安装包'; }
     else if (/\.msi$/.test(n)) { os = 'Windows'; fmt = 'MSI'; }
-    else if (/windows-amd64\.exe$/.test(n)) { os = 'Windows'; arch = 'amd64'; }
-    else if (/windows-arm64\.exe$/.test(n)) { os = 'Windows'; arch = 'arm64'; }
-    else if (/windows-i386\.exe$/.test(n)) { os = 'Windows'; arch = 'i386'; }
+    else if (/\.exe$/.test(n)) { os = 'Windows'; }                          // 免安装单文件
     else if (/\.appimage$/.test(n)) { os = 'Linux'; fmt = 'AppImage'; }
     else if (/\.deb$/.test(n)) { os = 'Linux'; fmt = 'deb'; }
     else if (/\.rpm$/.test(n)) { os = 'Linux'; fmt = 'rpm'; }
-    else if (/linux-amd64$/.test(n)) { os = 'Linux'; arch = 'amd64'; }
-    else if (/linux-arm64$/.test(n)) { os = 'Linux'; arch = 'arm64'; }
+    else if (/-linux-([a-z0-9]+)$/.test(n)) { os = 'Linux'; arch = RegExp.$1; }  // 免安装单文件（无后缀）
     else return null;
-    if (!arch) {
-        if (/aarch64/.test(n) || /arm64/.test(n)) arch = 'arm64';
-        else if (/x86_64/.test(n) || /x64/.test(n) || /amd64/.test(n)) arch = 'amd64';
+
+    // 显式抽取架构（新/旧命名都覆盖）
+    if (os === 'Windows' && !arch) {
+        const m = n.match(/windows-([a-z0-9]+)(?:-setup)?\.exe$/);
+        if (m) arch = m[1];
     }
+    if (os === 'Linux' && fmt && !arch) {
+        const m = n.match(/-linux-([a-z0-9]+)-/);
+        if (m) arch = m[1];
+    }
+    if (os === 'macOS' && !arch) {
+        if (/applesilicon/.test(n)) arch = 'applesilicon';
+        else if (/intel/.test(n)) arch = 'intel';
+        else if (/aarch64|arm64/.test(n)) arch = 'arm64';
+        else if (/x86_64|x64|amd64/.test(n)) arch = 'amd64';
+    }
+
+    // 兜底：任何未解析到的架构，按关键字推断（兼容旧 Tauri 默认命名等）
+    if (!arch) {
+        if (/aarch64|arm64/.test(n)) arch = 'arm64';
+        else if (/x86_64|x64|amd64/.test(n)) arch = 'amd64';
+    }
+
+    // macOS 架构标签特殊化
     let archLabel = arch;
-    if (os === 'macOS') archLabel = (arch === 'arm64') ? 'Apple Silicon' : 'Intel';
+    if (os === 'macOS') {
+        archLabel = (arch === 'applesilicon' || arch === 'arm64' || arch === 'aarch64') ? 'Apple Silicon' : 'Intel';
+    }
+
     const label = os + (archLabel ? (' ' + archLabel) : '') + (fmt ? (' ' + fmt) : '');
     return { os: os, arch: archLabel, fmt: fmt, label: label };
 }
 
 // 渲染顺序（与下载页「不限制一行个数」一致，仅决定先后）
+// 同时保留旧命名（arm64）与新命名（aarch64/i386/applesilicon/intel）的档位
 const RANK = {
     'Windows|amd64|': 1,
     'Windows|amd64|安装包': 2,
+    'Windows|aarch64|': 3,
+    'Windows|aarch64|安装包': 4,
     'Windows|arm64|': 3,
     'Windows|arm64|安装包': 4,
     'Windows|i386|': 5,
-    'Linux|amd64|': 6,
-    'Linux|amd64|AppImage': 7,
-    'Linux|amd64|deb': 8,
-    'Linux|amd64|rpm': 9,
-    'Linux|arm64|': 10,
-    'macOS|Apple Silicon|dmg': 11,
-    'macOS|Intel|dmg': 12
+    'Windows|i386|安装包': 6,
+    'Linux|amd64|': 7,
+    'Linux|amd64|AppImage': 8,
+    'Linux|amd64|deb': 9,
+    'Linux|amd64|rpm': 10,
+    'Linux|aarch64|': 11,
+    'Linux|aarch64|AppImage': 12,
+    'Linux|aarch64|deb': 13,
+    'Linux|aarch64|rpm': 14,
+    'Linux|arm64|': 11,
+    'Linux|arm64|AppImage': 12,
+    'Linux|arm64|deb': 13,
+    'Linux|arm64|rpm': 14,
+    'macOS|Apple Silicon|dmg': 15,
+    'macOS|Intel|dmg': 16
 };
 
 // 从真实资产渲染按钮；无资产时返回空串（交由调用方回退 buildAssets）

@@ -43,7 +43,7 @@ jobs:
             asset_suffix: windows-i386.exe
           - platform: windows-latest
             target: aarch64-pc-windows-msvc
-            asset_suffix: windows-arm64.exe
+            asset_suffix: windows-aarch64.exe
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
@@ -85,7 +85,7 @@ jobs:
             asset_suffix: linux-amd64
           - platform: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
-            asset_suffix: linux-arm64
+            asset_suffix: linux-aarch64
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
@@ -163,6 +163,8 @@ jobs:
     name: Build and Upload Linux Bundles (amd64 · AppImage/deb/rpm)
     if: github.event_name == 'release' || inputs.linux_only == true || inputs.build_all == true
     runs-on: ubuntu-22.04
+    env:
+      TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -186,13 +188,106 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build and upload Tauri bundles (AppImage + deb + rpm)
-        uses: tauri-apps/tauri-action@v1
+      # tauri-action 不支持对「打包产物」使用自定义 asset 名，故改为手动构建 + 重命名 + gh 上传
+      - name: Build Tauri bundles (AppImage + deb + rpm)
+        run: npm run tauri build -- --bundles appimage,deb,rpm --target x86_64-unknown-linux-gnu
+
+      - name: Rename and upload bundles
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ env.TAG }}"
+          ROOT=src-tauri/target/x86_64-unknown-linux-gnu/release/bundle
+          APPIMAGE=$(ls "$ROOT"/appimage/*.AppImage | head -n1)
+          DEB=$(ls "$ROOT"/deb/*.deb | head -n1)
+          RPM=$(ls "$ROOT"/rpm/*.rpm | head -n1)
+          OUT=$(mktemp -d)
+          mv "$APPIMAGE" "$OUT/oldchat-kivotos-next-app-${TAG}-linux-amd64-appimage.AppImage"
+          mv "$DEB" "$OUT/oldchat-kivotos-next-app-${TAG}-linux-amd64-deb.deb"
+          mv "$RPM" "$OUT/oldchat-kivotos-next-app-${TAG}-linux-amd64-rpm.rpm"
+          gh release upload "$TAG" \
+            "$OUT/oldchat-kivotos-next-app-${TAG}-linux-amd64-appimage.AppImage" \
+            "$OUT/oldchat-kivotos-next-app-${TAG}-linux-amd64-deb.deb" \
+            "$OUT/oldchat-kivotos-next-app-${TAG}-linux-amd64-rpm.rpm"
+
+  # ---------------------------------------------------------------------------
+  # Linux aarch64 打包产物：交叉编译 AppImage / deb / rpm（命名同 amd64 方案）
+  # 注意：aarch64 的 AppImage 需经 QEMU 运行 aarch64 版 appimagetool；deb/rpm 更稳。
+  #       若 CI 中 AppImage 步骤失败，可去掉 appimage 只留 deb,rpm。
+  linux-arm64-bundles:
+    name: Build and Upload Linux Bundles (aarch64 · AppImage/deb/rpm)
+    if: github.event_name == 'release' || inputs.linux_only == true || inputs.build_all == true
+    runs-on: ubuntu-22.04
+    env:
+      TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          releaseId: ${{ github.event_name == 'release' && github.event.release.id || inputs.release_id }}
-          args: --bundles appimage,deb,rpm --target x86_64-unknown-linux-gnu
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Install Linux system dependencies (cross aarch64)
+        run: |
+          apt_source=/etc/apt/sources.list.d/ubuntu-cross-arch.list
+          apt_opts=(
+            -o Dir::Etc::sourcelist="$apt_source"
+            -o Dir::Etc::sourceparts=-
+            -o APT::Get::List-Cleanup=0
+          )
+          sudo dpkg --add-architecture arm64
+          sources='deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-backports main restricted universe multiverse'
+          packages='gcc g++ gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libwebkit2gtk-4.1-dev:arm64 libappindicator3-dev:arm64 librsvg2-dev:arm64 patchelf xdg-utils libfuse2 appstream qemu-user-static'
+          printf '%s\n' "$sources" | sudo tee "$apt_source" >/dev/null
+          sudo apt-get update "${apt_opts[@]}"
+          sudo apt-get install -y "${apt_opts[@]}" $packages
+          sudo update-binfmts --enable || true
+
+      - name: Configure Linux cross-compilation (aarch64)
+        run: |
+          echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc' >> "$GITHUB_ENV"
+          echo 'PKG_CONFIG_ALLOW_CROSS=1' >> "$GITHUB_ENV"
+          echo 'PKG_CONFIG_SYSROOT_DIR=/' >> "$GITHUB_ENV"
+          echo 'PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig' >> "$GITHUB_ENV"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri bundles (aarch64 AppImage + deb + rpm)
+        run: npm run tauri build -- --bundles appimage,deb,rpm --target aarch64-unknown-linux-gnu
+
+      - name: Rename and upload bundles
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ env.TAG }}"
+          ROOT=src-tauri/target/aarch64-unknown-linux-gnu/release/bundle
+          APPIMAGE=$(ls "$ROOT"/appimage/*.AppImage | head -n1)
+          DEB=$(ls "$ROOT"/deb/*.deb | head -n1)
+          RPM=$(ls "$ROOT"/rpm/*.rpm | head -n1)
+          OUT=$(mktemp -d)
+          mv "$APPIMAGE" "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-appimage.AppImage"
+          mv "$DEB" "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-deb.deb"
+          mv "$RPM" "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-rpm.rpm"
+          gh release upload "$TAG" \
+            "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-appimage.AppImage" \
+            "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-deb.deb" \
+            "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-rpm.rpm"
 
   windows-installer:
     name: Build and Upload Windows Installer (${{ matrix.asset_suffix }})
@@ -203,11 +298,19 @@ jobs:
         include:
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            arch: amd64
             asset_suffix: windows-amd64-setup
           - platform: windows-latest
             target: aarch64-pc-windows-msvc
-            asset_suffix: windows-arm64-setup
+            arch: aarch64
+            asset_suffix: windows-aarch64-setup
+          - platform: windows-latest
+            target: i686-pc-windows-msvc
+            arch: i386
+            asset_suffix: windows-i386-setup
     runs-on: ${{ matrix.platform }}
+    env:
+      TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -228,13 +331,21 @@ jobs:
 
       # 产出 NSIS 安装包（已在 tauri.conf.json 设 webviewInstallMode=EmbedBootstrapper 内嵌 WebView2 引导）
       # 保留上方 windows 任务产出的免安装单文件 .exe，两种形态并存
-      - name: Build and upload Tauri installer (NSIS)
-        uses: tauri-apps/tauri-action@v1
+      # tauri-action 不支持自定义 NSIS asset 名，故手动构建 + 重命名 + gh 上传
+      - name: Build Tauri installer (NSIS)
+        run: npm run tauri build -- --bundles nsis --target ${{ matrix.target }}
+
+      - name: Rename and upload installer
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          releaseId: ${{ github.event_name == 'release' && github.event.release.id || inputs.release_id }}
-          args: --bundles nsis --target ${{ matrix.target }}
+        run: |
+          TAG="${{ env.TAG }}"
+          ARCH="${{ matrix.arch }}"
+          ROOT=src-tauri/target/${{ matrix.target }}/release/bundle/nsis
+          SETUP=$(ls "$ROOT"/*.exe | head -n1)
+          OUT=$(mktemp -d)
+          mv "$SETUP" "$OUT/oldchat-kivotos-next-app-${TAG}-windows-${ARCH}-setup.exe"
+          gh release upload "$TAG" "$OUT/oldchat-kivotos-next-app-${TAG}-windows-${ARCH}-setup.exe"
 
   macos:
     name: Build and Upload macOS (${{ matrix.asset_suffix }})
@@ -245,11 +356,15 @@ jobs:
         include:
           - platform: macos-latest
             target: aarch64-apple-darwin
-            asset_suffix: macos-aarch64
+            archlabel: applesilicon
+            asset_suffix: macos-applesilicon
           - platform: macos-latest
             target: x86_64-apple-darwin
-            asset_suffix: macos-x64
+            archlabel: intel
+            asset_suffix: macos-intel
     runs-on: ${{ matrix.platform }}
+    env:
+      TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -269,10 +384,18 @@ jobs:
         run: npm ci
 
       # 未签名 dmg：用户首次打开需右键→打开（或终端 xattr -cr 放行），后续有 Apple 证书再补 notarize
-      - name: Build and upload Tauri bundle (unsigned dmg)
-        uses: tauri-apps/tauri-action@v1
+      # tauri-action 不支持自定义 dmg asset 名，故手动构建 + 重命名 + gh 上传
+      - name: Build Tauri bundle (unsigned dmg)
+        run: npm run tauri build -- --bundles dmg --target ${{ matrix.target }}
+
+      - name: Rename and upload dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          releaseId: ${{ github.event_name == 'release' && github.event.release.id || inputs.release_id }}
-          args: --bundles dmg --target ${{ matrix.target }}
+        run: |
+          TAG="${{ env.TAG }}"
+          ARCH="${{ matrix.archlabel }}"
+          ROOT=src-tauri/target/${{ matrix.target }}/release/bundle/dmg
+          DMG=$(ls "$ROOT"/*.dmg | head -n1)
+          OUT=$(mktemp -d)
+          mv "$DMG" "$OUT/oldchat-kivotos-next-app-${TAG}-macos-${ARCH}.dmg"
+          gh release upload "$TAG" "$OUT/oldchat-kivotos-next-app-${TAG}-macos-${ARCH}.dmg"
