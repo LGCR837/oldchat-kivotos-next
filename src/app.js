@@ -11769,6 +11769,52 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         header.insertBefore(btn, header.firstChild);
     });
 
+    // ===== 安卓物理返回键：MainActivity 捕获后 evaluateJavascript 调用本函数 =====
+    // 仅小屏幕有意义。优先级：侧边栏打开 → 收起；顶层 .show 弹窗 → 关闭；顶层 overlay → 关闭；面板返回按钮 → 触发。
+    // 消费式：未命中任何目标返回 false（外层 callback 仍消费，不会误退 app）。
+    window.__handleAndroidBack = function() {
+        try {
+            if (!isMobile()) return false;
+            // 1) 侧边栏打开 → 收起
+            const sb = document.querySelector('.sidebar');
+            if (sb && !sb.classList.contains('collapsed')) {
+                sb.classList.add('collapsed');
+                expandChat();
+                return true;
+            }
+            // 2) 顶层 .show 弹窗/菜单/对话框
+            const popups = document.querySelectorAll(
+                '.more-menu.show, .context-menu.show, .emoticon-picker.show, .mention-popup.show, ' +
+                '.msg-search.show, .forward-dialog.show, .image-viewer.show, .video-modal.show, ' +
+                '.red-packet-detail.show, .alert-dialog.show, .confirm-dialog.show, .user-card.show, ' +
+                '.contact-info.show, .music-detail.show, .plaza-edit.show, .plaza-add.show, ' +
+                '.user-popup.show, .image-preview.show, .emoji-popup.show, .gif-popup.show'
+            );
+            if (popups.length) {
+                popups[popups.length - 1].classList.remove('show');
+                return true;
+            }
+            // 3) 顶层 overlay/modal
+            const overlays = document.querySelectorAll(
+                '.modal-overlay, .overlay, [class*="-overlay"], .dialog'
+            );
+            if (overlays.length) {
+                const last = overlays[overlays.length - 1];
+                const closeBtn = last.querySelector('.close, [data-close], .gm-back, .space-back, .sp-back');
+                if (closeBtn) { closeBtn.click(); return true; }
+                last.click();
+                return true;
+            }
+            // 4) 各面板的返回按钮（群管理/空间等）
+            const backBtn = document.querySelector('.gm-back, .space-back, .sp-back');
+            if (backBtn) { backBtn.click(); return true; }
+            return false;
+        } catch (e) {
+            console.error('__handleAndroidBack error:', e);
+            return false;
+        }
+    };
+
     // 点击标题：群聊 → 群管理面板；直聊 → 对方资料/主页
     const chatTitleEl = chatHeader.querySelector('.chat-title');
     chatTitleEl.addEventListener('click', () => {

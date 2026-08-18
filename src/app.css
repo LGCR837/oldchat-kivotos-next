@@ -44,6 +44,8 @@
 	--overlay: rgba(0,0,0,0.5);
 	--discover-icon-bg: rgba(250,148,166,0.18);
 	--discover-icon-fg: #fa94a6;
+	/* 状态栏覆盖层条带颜色（移动端 box-shadow inset 用），浅色 = MomoTalk 粉 */
+	--sat-bar: #fa94a6;
 }
 
 [data-theme-mode="dark"] {
@@ -80,6 +82,8 @@
 	--overlay: rgba(0,0,0,0.6);
 	--discover-icon-bg: rgba(255,255,255,0.10);
 	--discover-icon-fg: #b8c2d0;
+	/* 深色模式：覆盖层条带跟随深色（fallback 仍可用 --header-bg 自定义主题时自动跟随） */
+	--sat-bar: #101a30;
 }
 
 body, .sidebar, .chat-area, .messages, .input-area, .contact-list, .chat-header, .sidebar-header, .message-bubble, .message-time, .contact-item, .more-menu, .custom-context-menu, .emoticon-picker {
@@ -3229,12 +3233,13 @@ body::-webkit-scrollbar {
 
     /* 顶部状态栏安全区：用 JS 注入的 --sat / --sab（env() 在 Tauri Android WebView 常返 0，故用 JS 兜底）
        - 头部高度 = 原高度 + 顶部安全区；内容区仍保持 --header-height，不被挤。
-       - 用 inset box-shadow 渲染粉色条带，避免 ::before 被不透明背景(z-index)盖住导致看不见。 */
+       - 用 inset box-shadow 渲染条带，避免 ::before 被不透明背景(z-index)盖住导致看不见。
+         颜色 = --sat-bar；自定义主题若未定义则 fallback 到 --header-bg（天然跟随主题色）。 */
     .chat-header,
     .sidebar-header {
         height: calc(var(--header-height) + var(--sat, 0px));
         padding-top: var(--sat, 0px);
-        box-shadow: inset 0 var(--sat, 0px) 0 0 #fa94a6;
+        box-shadow: inset 0 var(--sat, 0px) 0 0 var(--sat-bar, var(--header-bg));
     }
 
     /* 音乐面板无 .chat-header，返回键绝对定位浮在左上角（与窗口控制键不冲突） */
@@ -3255,6 +3260,18 @@ body::-webkit-scrollbar {
     }
     .contact-list {
         padding-bottom: var(--sab, 0px);
+    }
+
+    /* 小屏幕：侧边栏整块禁用文本选择（平板/PC 走 .tauri-env 那套不受影响）。
+       输入框/可编辑元素保留 text，否则搜索框无法长按光标定位。 */
+    .sidebar, .sidebar * {
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+    }
+    .sidebar input, .sidebar textarea, .sidebar [contenteditable="true"] {
+        -webkit-user-select: text;
+        user-select: text;
     }
 }
 
