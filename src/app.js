@@ -177,6 +177,9 @@ const IS_TAURI = _detectIsTauri();
     syncMaximizeState();
 
     // Ctrl+Alt+Shift+F12 切换 DevTools；拦截 F12 单键（WebView2 默认会打开 DevTools）
+    // F5 / Ctrl+R / Ctrl+Shift+R：浏览器加速键已被 native 全禁（browser_accelerator_keys=false，
+    // 会连刷新一起禁掉），这里在前端自己接管刷新逻辑——登录态在 localStorage，
+    // location.reload() 后会自动从本地恢复，等效原生刷新。
     window.addEventListener('keydown', function(e) {
         if (e.key === 'F12') {
             if (e.ctrlKey && e.altKey && e.shiftKey) {
@@ -188,6 +191,12 @@ const IS_TAURI = _detectIsTauri();
                 // 拦截 F12 单键，避免与 Ctrl+Alt+Shift+F12 冲突
                 e.preventDefault();
             }
+            return;
+        }
+        // 自刷新：F5 / Ctrl+F5 / Shift+F5 / Ctrl+R / Ctrl+Shift+R
+        if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && (e.key === 'r' || e.key === 'R'))) {
+            e.preventDefault();
+            location.reload();
         }
     });
     console.log('[Tauri] 已注册 Ctrl+Alt+Shift+F12 切换 DevTools');
@@ -3203,7 +3212,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             fd.append('name', title);
             fd.append('duration_ms', String(musicUploadDuration || 0));
             if (cover) fd.append('cover', cover);
-            if (lyrics) fd.append('lyrics', lyrics);
+            // 歌词必须作为「文件 part」上传（与 cover 同机制：服务端读其内容存为文本并生成歌词 URL）。
+            // 不能传纯文本字符串，否则服务端会忽略该字段（表现为上传成功但取不到歌词）。
+            if (lyrics) fd.append('lyrics', new File([lyrics], 'lyrics.lrc', { type: 'text/plain' }));
             musicUploadBtn.disabled = true;
             musicUploadBtn.innerHTML = '<span class="oc-spinner sm" style="vertical-align:-2px;margin-right:6px;"></span>上传中...';
             try {
@@ -3212,6 +3223,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (d.error) { showAlert(d.error); }
                 else {
                     showAlert('上传成功');
+                    // 歌词随上传表单的 lyrics 字段一起提交（与官方客户端行为一致：
+                    // /v1/music/plaza/upload 接受 lyrics 字段并存为歌词）。
+                    // 不再单独调用 POST /v1/music/plaza/lyrics —— 该独立接口在本服务器会把条目
+                    // 写成不一致状态，导致后续 GET /detail 返回 400（官方与本客户端都取不到歌词）。
                     // 重置表单
                     musicUploadPickedFile = null;
                     musicUploadFile.value = '';
@@ -3615,20 +3630,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         ul.appendChild(frag);
     }
 
-    // 按 item_id 拉取歌词（v1.4.x 新接口兜底：/v1/music/plaza/lyrics?item_id=）
-    // 响应兼容三种形态：歌词文本(lyrics/lrc/lyrics_text) / lyrics_url / 空
+    // 按 item_id 拉取歌词：取歌曲详情（含 lyrics_url）。
+    // 注意：/v1/music/plaza/lyrics 是 POST-only（专用于「上传歌词」），不能 GET，否则 405；
+    // 部分旧版安卓逆向文档写的是 GET /lyrics?item_id=，但当前 oc.mcl0.dpdns.org 已改为 POST-only，
+    // 取歌词必须用 GET /v1/music/plaza/detail?id=（in_api.md:1074「歌曲详情（含歌词 URL）」）。
+    // 响应兼容：嵌套 {item}/{data} 或直接对象；歌词文本(lyrics/lrc/lyrics_text) 或 lyrics_url。
     async function fetchMusicLyricsById(itemId) {
         const lrcContainer = musicWorkspace?.querySelector('.music-lyrics-container');
         if (!itemId) { if (lrcContainer) lrcContainer.style.display = 'none'; return; }
         try {
-            const res = await apiFetch('/v1/music/plaza/lyrics?item_id=' + encodeURIComponent(itemId));
+            const res = await apiFetch('/v1/music/plaza/detail?id=' + encodeURIComponent(itemId));
             const data = await res.json();
             if (data.error) { if (lrcContainer) lrcContainer.style.display = 'none'; return; }
-            const lrcText = data.lyrics || data.lrc || data.lyrics_text || (typeof data === 'string' ? data : '');
-            if (lrcText) {
+            // 兼容响应嵌套：详情可能包在 item/data 字段里
+            const song = data.item || data.data || data;
+            const lrcText = song.lyrics || song.lrc || song.lyrics_text || '';
+            if (song.lyrics_url) {
+                loadMusicLyrics(song.lyrics_url);
+            } else if (lrcText) {
                 renderLyricsText(lrcText);
-            } else if (data.lyrics_url) {
-                loadMusicLyrics(data.lyrics_url);
             } else if (lrcContainer) {
                 lrcContainer.style.display = 'none';
             }
@@ -3661,7 +3681,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (e) {
             console.warn('[music] play failed:', e);
         }
-        // 加载歌词：优先数据自带的 lyrics_url；没有则用 v1.4.x 新接口按 item_id 兜底
+        // 加载歌词：优先数据自带的 lyrics_url；没有则按 item_id 取歌曲详情（含歌词 URL）兜底
         if (m.lyrics_url) {
             loadMusicLyrics(m.lyrics_url);
         } else {
@@ -11693,6 +11713,60 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     mobileMenuBtn.addEventListener('click', () => {
         if (!isMobile()) return;
         sidebar.classList.remove('collapsed');
+    });
+
+    // 小屏幕视图：点击侧边栏任意导航项后自动收起（统一委托，补齐所有页面）
+    // 避免逐页重复写 isMobile() 收起逻辑；plaza-section-add 是侧边栏内「新建分区」动作按钮，不收起
+    sidebar.addEventListener('click', (e) => {
+        if (!isMobile()) return;
+        const item = e.target.closest('.contact-item');
+        if (item && !item.classList.contains('plaza-section-add') && sidebar.contains(item)) {
+            sidebar.classList.add('collapsed');
+            expandChat();
+        }
+    });
+
+    // ===== 安卓安全区：JS 探测并注入 --sat / --sab =====
+    // Tauri Android 的 WebView 常不喂 env(safe-area-inset-*)，导致 env() 返 0、状态栏/导航栏无留白。
+    // 用探针元素读取 env() 真实值；若为 0 则用安卓经验值兜底（28px ≈ 状态栏高度）。
+    function applySafeArea() {
+        const root = document.documentElement;
+        if (!isMobile()) {
+            root.style.setProperty('--sat', '0px');
+            root.style.setProperty('--sab', '0px');
+            return;
+        }
+        const probe = document.createElement('div');
+        probe.style.cssText = 'position:fixed;left:-9999px;top:-9999px;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);';
+        document.body.appendChild(probe);
+        const cs = getComputedStyle(probe);
+        let top = parseFloat(cs.paddingTop) || 0;
+        let bottom = parseFloat(cs.paddingBottom) || 0;
+        document.body.removeChild(probe);
+        if (top <= 0) top = 28;       // 状态栏约 24~30px
+        if (bottom <= 0) bottom = 0;  // 系统导航栏已隐藏，无需留白
+        root.style.setProperty('--sat', top + 'px');
+        root.style.setProperty('--sab', bottom + 'px');
+    }
+    applySafeArea();
+    window.addEventListener('resize', applySafeArea);
+    window.addEventListener('orientationchange', applySafeArea);
+
+    // ===== 各面板顶部左上加返回键（小屏幕）=====
+    // 聊天面板自带 #mobileMenuBtn；其余面板头部缺返回键，这里统一注入，
+    // 点击即展开侧边栏（与聊天行为一致）。音乐面板用 .music-workspace，返回键绝对定位。
+    document.querySelectorAll('.main-panel').forEach((panel) => {
+        if (panel.querySelector('.mobile-menu-btn')) return; // 已有（聊天）
+        const header = panel.querySelector('.chat-header') || panel.querySelector('.music-workspace');
+        if (!header) return;
+        const btn = document.createElement('button');
+        btn.className = 'mobile-menu-btn';
+        btn.innerHTML = '<i class="fa-solid fa-chevron-left"></i>';
+        btn.addEventListener('click', () => {
+            if (!isMobile()) return;
+            sidebar.classList.remove('collapsed');
+        });
+        header.insertBefore(btn, header.firstChild);
     });
 
     // 点击标题：群聊 → 群管理面板；直聊 → 对方资料/主页

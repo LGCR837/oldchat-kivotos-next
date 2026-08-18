@@ -1014,6 +1014,9 @@ pub fn run() {
     // 跨平台走 flags + 自定义 shortcuts（Linux/macOS WebKit 层拦截）；
     // Windows 额外关闭 WebView2 的 browser_accelerator_keys，彻底掐掉 JS 拦不住的
     // 浏览器级组合键（Ctrl+P / Ctrl+Shift+I 等）。
+    // 注意：browser_accelerator_keys(false) 会连同 F5 / Ctrl+R / Ctrl+Shift+R 刷新一起禁掉
+    //（这些键 JS preventDefault 拦不住，只能这样兜底），刷新功能由前端 app.js keydown
+    // 自行接管（location.reload()，登录态存 localStorage 可自动恢复），勿在 JS 里删掉那部分。
     #[cfg(desktop)]
     let builder = builder.plugin({
         let p = tauri_plugin_prevent_default::Builder::new()
