@@ -13537,6 +13537,150 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         });
     }
 
+    // ===== 蔚蓝档案风格抽卡界面（设置>主题 开关，默认关闭）=====
+    // 开启后：发现页「每日刮刮乐」入口改名「抽卡」，右侧只显示「5 连抽 (600 青辉石)」，
+    // 点击进入占满窗口的全屏抽卡页（无返回按钮），进入即向服务器请求刮刮乐，
+    // 横向展示 5 个结果（0~5 蓝 / 6~14 金 / 15+ 彩），点屏一次变黑色数字，再点返回。
+    function isBaGachaEnabled() {
+        try { return localStorage.getItem('oc_ba_gacha') === '1'; } catch (e) { return false; }
+    }
+
+    function gachaTier(v) {
+        v = Number(v) || 0;
+        return v >= 15 ? 'rainbow' : (v >= 6 ? 'gold' : 'blue');
+    }
+
+    function normalizeGachaSlots(arr) {
+        const s = Array.isArray(arr) ? arr.slice(0, 5).map(function (x) { return Number(x) || 0; }) : [];
+        while (s.length < 5) s.push(0);
+        return s;
+    }
+
+    // 向服务器请求刮刮乐结果：优先 POST 执行，失败回退 GET 取当日状态
+    async function gachaPull() {
+        let arr = null;
+        try {
+            const res = await apiFetch('/v1/me/scratch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}'
+            });
+            const text = await res.text();
+            let rd = {};
+            try { rd = JSON.parse(text); } catch (e) {}
+            if (rd && typeof rd.body === 'string') { try { rd = JSON.parse(rd.body); } catch (e) {} }
+            if (res.status < 400 && !rd.error && Array.isArray(rd.slots)) arr = rd.slots;
+        } catch (e) { console.warn('[gacha] pull failed', e); }
+        if (!arr) {
+            const data = await scratchLoad();
+            if (data && Array.isArray(data.slots)) arr = data.slots;
+        }
+        return normalizeGachaSlots(arr || []);
+    }
+
+    // 同步发现页入口文案（每日刮刮乐 <-> 抽卡），并更新启动器缓存字符串
+    function refreshScratchEntryLabel() {
+        const label = isBaGachaEnabled() ? '抽卡' : '每日刮刮乐';
+        const el = document.querySelector('.contact-item[data-discover="scratch"] .name');
+        if (el) el.textContent = label;
+        try {
+            if (typeof _discoverLauncherHTML === 'string') {
+                _discoverLauncherHTML = _discoverLauncherHTML.replace(/每日刮刮乐|抽卡/g, label);
+            }
+        } catch (e) {}
+    }
+
+    // 开关变化后：刷新入口文案；若当前正在看该面板则切换形态
+    function applyBaGacha() {
+        refreshScratchEntryLabel();
+        const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
+        const active = document.querySelector('.sidebar-panel[data-panel="discover"] .contact-item.active');
+        if (main && active && active.dataset.discover === 'scratch') {
+            if (isBaGachaEnabled()) renderGachaEntry(main); else renderScratch(main);
+        }
+    }
+
+    // 右侧面板：仅显示一个「5 连抽 (600 青辉石)」按钮
+    function renderGachaEntry(main) {
+        main = main || document.querySelector('.main-panel[data-panel="discover"] .discover-main');
+        if (!main) return;
+        main.innerHTML =
+            '<div class="gacha-entry">' +
+                '<button class="gacha-pull-btn" id="gachaPullBtn">5 连抽 (600 青辉石)</button>' +
+            '</div>';
+        const btn = document.getElementById('gachaPullBtn');
+        if (btn) btn.addEventListener('click', function () { openGachaPage(); });
+    }
+
+    // 全屏抽卡页：loading -> images(点) -> numbers(点) -> 返回
+    function openGachaPage() {
+        const overlay = document.createElement('div');
+        overlay.className = 'gacha-overlay';
+        overlay.innerHTML =
+            '<div class="gacha-stage">' +
+                '<div class="gacha-loading" id="gachaLoading"><span class="oc-spinner xl"></span><span>抽卡中...</span></div>' +
+                '<div class="gacha-results" id="gachaResults" style="display:none;"></div>' +
+            '</div>';
+        document.body.appendChild(overlay);
+        requestAnimationFrame(function () { overlay.classList.add('show'); });
+
+        // 进入抽卡即播放激昂音乐（位于用户点击手势链内，通常允许自动播放）
+        let gachaAudio = null;
+        try {
+            gachaAudio = new Audio('assets/gacha/connected_sky.ogg');
+            gachaAudio.loop = true;
+            gachaAudio.volume = 0.9;
+            const _ap = gachaAudio.play();
+            if (_ap && _ap.catch) _ap.catch(function (e) { console.warn('[gacha] audio autoplay blocked', e); });
+        } catch (e) { console.warn('[gacha] audio init failed', e); }
+
+        let slots = [];
+        let phase = 'loading'; // loading | images | numbers
+        const loadingEl = overlay.querySelector('#gachaLoading');
+        const resultsEl = overlay.querySelector('#gachaResults');
+
+        function showImages() {
+            phase = 'images';
+            loadingEl.style.display = 'none';
+            resultsEl.style.display = 'flex';
+            resultsEl.innerHTML = '';
+            slots.forEach(function (v) {
+                const item = document.createElement('div');
+                item.className = 'gacha-item';
+                const img = document.createElement('img');
+                img.className = 'gacha-img';
+                img.src = 'assets/gacha/' + gachaTier(v) + '.png';
+                img.alt = '';
+                item.appendChild(img);
+                resultsEl.appendChild(item);
+            });
+        }
+        function showNumbers() {
+            phase = 'numbers';
+            resultsEl.innerHTML = '';
+            slots.forEach(function (v) {
+                const item = document.createElement('div');
+                item.className = 'gacha-item gacha-num-item';
+                item.textContent = String(Number(v) || 0);
+                resultsEl.appendChild(item);
+            });
+        }
+        function closePage() {
+            if (gachaAudio) { try { gachaAudio.pause(); gachaAudio.currentTime = 0; } catch (e) {} gachaAudio = null; }
+            overlay.classList.remove('show');
+            setTimeout(function () { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }, 200);
+        }
+
+        overlay.addEventListener('click', function () {
+            if (phase === 'images') showNumbers();
+            else if (phase === 'numbers') closePage();
+        });
+
+        // 进入即向服务器请求刮刮乐
+        gachaPull().then(function (s) { slots = s; showImages(); })
+            .catch(function () { slots = [0, 0, 0, 0, 0]; showImages(); });
+    }
+
     // ===== 系统通知页（入口在发现页，设计参考签到墙） =====
     // 从多个候选字段名中取第一个非空值（兼容不同版本后端字段命名）
     function noticePick(obj, names) {
@@ -14063,6 +14207,15 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     '<span class="label">Lite 详细效果配置</span>' +
                     '<span class="value"><i class="fa-solid fa-chevron-right" style="color:var(--secondary-text);"></i></span>' +
                 '</div>' +
+                '<div class="settings-item" id="settingsBaGacha">' +
+                    '<span class="label">蔚蓝档案风格抽卡界面</span>' +
+                    '<span class="value">' +
+                        '<label class="oc-switch">' +
+                            '<input type="checkbox" id="baGachaToggle">' +
+                            '<span class="oc-switch-slider"></span>' +
+                        '</label>' +
+                    '</span>' +
+                '</div>' +
                 '<div class="settings-item" id="settingsSidebarBar">' +
                     '<span class="label">侧边栏竖线</span>' +
                     '<span class="value">' +
@@ -14210,6 +14363,16 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (baLiteDetailEntry) {
             baLiteDetailEntry.style.display = isBaClickFxLiteEnabled() ? '' : 'none';
             baLiteDetailEntry.addEventListener('click', () => { openBaFxLiteModal(); });
+        }
+
+        // 蔚蓝档案风格抽卡界面开关（默认关闭）
+        const baGachaToggle = document.getElementById('baGachaToggle');
+        if (baGachaToggle) {
+            baGachaToggle.checked = isBaGachaEnabled();
+            baGachaToggle.addEventListener('change', () => {
+                try { localStorage.setItem('oc_ba_gacha', baGachaToggle.checked ? '1' : '0'); } catch (e) {}
+                applyBaGacha();
+            });
         }
 
         // 侧边栏竖线（总开关，默认开启）：关闭后全部竖条（含 hover 与选中常驻）都不显示
@@ -14682,6 +14845,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         el.classList.remove('channel-side-active');
         if (_discoverLauncherHTML == null) _discoverLauncherHTML = el.innerHTML;
         el.innerHTML = _discoverLauncherHTML;
+        // 同步抽卡入口文案（蔚蓝档案风格抽卡界面开关）
+        if (typeof refreshScratchEntryLabel === 'function') refreshScratchEntryLabel();
     }
     // 重放侧边栏条目入场动画（切换选项卡 / 进入频道形态时调用）
     function replaySidebarAnimation(panel) {
@@ -15207,7 +15372,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
             if (main) {
                 main.classList.add('discover-has-content');
-                renderScratch(main);
+                if (isBaGachaEnabled()) renderGachaEntry(main);
+                else renderScratch(main);
             }
         } else if (target === 'notice') {
             const main = document.querySelector('.main-panel[data-panel="discover"] .discover-main');
