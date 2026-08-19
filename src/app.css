@@ -1011,7 +1011,7 @@ body::-webkit-scrollbar {
     border: 7px solid transparent;
 }
 .message.other .message-bubble::before {
-    left: -7px;
+    left: -6px;
     border-right-color: var(--bubble-other);
     border-left: 0;
 }
@@ -1027,7 +1027,7 @@ body::-webkit-scrollbar {
 }
 
 .message.self .message-bubble::before {
-    right: -7px;
+    right: -6px;
     border-left-color: var(--bubble-self);
     border-right: 0;
 }
@@ -1035,7 +1035,7 @@ body::-webkit-scrollbar {
 .message.self .message-bubble::before {
 	content: '';
 	position: absolute;
-	right: -7px;
+	right: -6px;
 	top: 10px;
 	width: 0;
 	height: 0;
@@ -3273,6 +3273,24 @@ body::-webkit-scrollbar {
         -webkit-user-select: text;
         user-select: text;
     }
+
+    /* 手机视图：侧边栏选中态与未选中态视觉一致（PC/HD 不变）。
+       用 !important + 提高特异性，确保覆盖深色模式 / 选中竖条常驻等更晚/更高特异性的规则。
+       仅中和 active 的背景/字重/左侧竖条，不影响交互与未选中项。 */
+    body .sidebar .contact-item.active {
+        background: transparent !important;
+        font-weight: 400 !important;
+    }
+    body.sidebar-active-bar .sidebar .contact-item.active::before {
+        transform: scaleY(0) !important;
+    }
+
+    /* 手机视图：隐藏自绘窗口控制键（最小化/最大化/关闭）。安卓/手机无窗口概念，
+       这些键无意义且与状态栏覆盖层/返回键逻辑冲突。平板(>768px)与 PC 保持显示。 */
+    .tauri-env .window-controls,
+    .tauri-env .music-win-controls {
+        display: none !important;
+    }
 }
 
 /* 群聊管理面板 */
@@ -3806,6 +3824,13 @@ body::-webkit-scrollbar {
 /* Tauri 环境下显示三大金刚键 */
 .tauri-env .window-controls {
     display: flex;
+}
+
+/* 安卓（手机/平板）无窗口概念：隐藏自绘窗口控件（最小化/最大化/关闭）。
+   用 body.android 标记拦截，不卡宽度——平板(>768px)也能正确隐藏，桌面保持显示。 */
+body.android .window-controls,
+body.android .music-win-controls {
+    display: none !important;
 }
 
 /* 拖动区域：header 可拖动，按钮可点击 */

@@ -115,6 +115,11 @@ const IS_TAURI = _detectIsTauri();
     // 标记 Tauri 环境（CSS 据此启用圆角阴影、三大金刚键、拖动区域）
     document.body.classList.add('tauri-env');
 
+    // 安卓（手机/平板）无窗口概念：标记 body.android，CSS 据此隐藏自绘窗口控件（最小化/最大化/关闭）
+    if (/android/i.test(navigator.userAgent)) {
+        document.body.classList.add('android');
+    }
+
     // 三大金刚键：最小化 / 最大化切换 / 关闭
     const winMinBtn = document.getElementById('winMinBtn');
     const winMaxBtn = document.getElementById('winMaxBtn');
@@ -2891,6 +2896,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (sidebarPanelsTrack) sidebarPanelsTrack.style.width = (sidebarPanelCount * 100) + '%';
     sidebarPanels.forEach(p => { p.style.width = (100 / sidebarPanelCount) + '%'; });
 
+    // 暴露给安卓物理返回键：__handleAndroidBack 从子面板返回时调用 switchTab('chat')
+    window.__switchTab = switchTab;
+
     function switchTab(tabName) {
         if (!sidebarPanelsTrack) return;
 
@@ -5485,6 +5493,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 主题切换
     function applyTheme(theme) {
         document.documentElement.setAttribute('data-theme-mode', theme);
+        // 安卓：同步状态栏图标明暗（浅色主题→深色图标，深色主题→浅色图标）
+        try { if (window.AndroidThemeBridge) window.AndroidThemeBridge.onThemeChanged(theme); } catch (e) {}
         localStorage.setItem('theme', theme);
         // 更新图标
         const icon = themeToggleBtn.querySelector('i');
@@ -11731,7 +11741,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // 用探针元素读取 env() 真实值；若为 0 则用安卓经验值兜底（28px ≈ 状态栏高度）。
     function applySafeArea() {
         const root = document.documentElement;
-        if (!isMobile()) {
+        // 安全区(状态栏额头)只针对真·安卓设备；PC 即使把窗口缩到 ≤768px 也按 0 处理，
+        // 否则 PC 小窗口模式会误触发移动端额头。
+        const isAndroid = document.body.classList.contains('android');
+        if (!isAndroid) {
             root.style.setProperty('--sat', '0px');
             root.style.setProperty('--sab', '0px');
             return;
@@ -11770,19 +11783,20 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     });
 
     // ===== 安卓物理返回键：MainActivity 捕获后 evaluateJavascript 调用本函数 =====
-    // 仅小屏幕有意义。优先级：侧边栏打开 → 收起；顶层 .show 弹窗 → 关闭；顶层 overlay → 关闭；面板返回按钮 → 触发。
-    // 消费式：未命中任何目标返回 false（外层 callback 仍消费，不会误退 app）。
+    // 仅小屏幕有意义。移动端模型：侧栏=联系人列表(首页)，进聊天/面板后侧栏收起(collapsed)。
+    // 优先级（从最“浅”的浮层到最“深”的视图）：
+    //   1) 打开的弹窗/菜单 → 关闭
+    //   2) 打开的模态浮层(.show) → 关闭
+    //   3) 动态 body 浮层（群管理 .gm-back / 空间 #sp-close-btn）→ 关闭
+    //   4) 子面板(非聊天的 main-panel 激活) → 返回聊天(点面板返回键或 switchTab('chat'))
+    //   5) 在聊天里(侧栏收起) → 打开侧栏回到联系人列表
+    //   6) 已在首页(侧栏展开) → 返回 false（外层 callback 仍消费，等效无操作，防误退）
+    // 注意：旧逻辑把“侧栏打开→收起”作为第 1 优先级，导致在聊天/面板里按返回键完全无反应，已修正。
     window.__handleAndroidBack = function() {
         try {
             if (!isMobile()) return false;
-            // 1) 侧边栏打开 → 收起
-            const sb = document.querySelector('.sidebar');
-            if (sb && !sb.classList.contains('collapsed')) {
-                sb.classList.add('collapsed');
-                expandChat();
-                return true;
-            }
-            // 2) 顶层 .show 弹窗/菜单/对话框
+
+            // 1) 关闭任何打开的弹窗/菜单/模态（最高优先级）
             const popups = document.querySelectorAll(
                 '.more-menu.show, .context-menu.show, .emoticon-picker.show, .mention-popup.show, ' +
                 '.msg-search.show, .forward-dialog.show, .image-viewer.show, .video-modal.show, ' +
@@ -11794,20 +11808,42 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 popups[popups.length - 1].classList.remove('show');
                 return true;
             }
-            // 3) 顶层 overlay/modal
-            const overlays = document.querySelectorAll(
-                '.modal-overlay, .overlay, [class*="-overlay"], .dialog'
-            );
-            if (overlays.length) {
-                const last = overlays[overlays.length - 1];
-                const closeBtn = last.querySelector('.close, [data-close], .gm-back, .space-back, .sp-back');
+
+            // 2) 关闭打开的模态浮层（对话框/遮罩）
+            const overlay = document.querySelector('.modal-overlay.show, .dialog.show, .overlay.show');
+            if (overlay) {
+                const closeBtn = overlay.querySelector('.close, [data-close], .gm-back, .space-back, .sp-back, .cancel-btn');
                 if (closeBtn) { closeBtn.click(); return true; }
-                last.click();
+                overlay.click();
                 return true;
             }
-            // 4) 各面板的返回按钮（群管理/空间等）
-            const backBtn = document.querySelector('.gm-back, .space-back, .sp-back');
-            if (backBtn) { backBtn.click(); return true; }
+
+            // 3) 动态 body 浮层：群管理面板(.gm-back) 与 用户空间面板(#sp-close-btn)。
+            //    这两者是 openGroupManagePanel / openSpacePanel 用 div append 到 body 的全屏浮层，
+            //    不在 .main-panel 体系内，必须单独处理。
+            const gmBack = document.querySelector('.gm-back');
+            if (gmBack) { gmBack.click(); return true; }
+            const spClose = document.querySelector('#sp-close-btn, #spWinCloseBtn');
+            if (spClose) { spClose.click(); return true; }
+
+            // 4) 子面板（非聊天的 main-panel 激活）→ 返回上一视图（聊天）
+            const activePanel = document.querySelector('.main-panel.active');
+            if (activePanel && activePanel.dataset && activePanel.dataset.panel && activePanel.dataset.panel !== 'chat') {
+                // 优先点面板自带返回键（注入的 .mobile-menu-btn 等）
+                const backBtn = activePanel.querySelector('.mobile-menu-btn');
+                if (backBtn) { backBtn.click(); return true; }
+                // 否则切回聊天 tab（暴露的 switchTab）
+                if (window.__switchTab) { window.__switchTab('chat'); return true; }
+            }
+
+            // 5) 在聊天里（侧栏收起）→ 打开侧栏回到联系人列表
+            const sb = document.querySelector('.sidebar');
+            if (sb && sb.classList.contains('collapsed')) {
+                sb.classList.remove('collapsed');
+                return true;
+            }
+
+            // 6) 已在首页（侧栏展开）→ 交给系统（当前 OnBackPressedCallback 仍消费，等效无操作，防误退）
             return false;
         } catch (e) {
             console.error('__handleAndroidBack error:', e);

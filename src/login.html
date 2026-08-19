@@ -66,6 +66,16 @@
         .tauri-env .login-win-controls {
             display: flex;
         }
+        /* 安卓（手机/平板）无窗口概念：隐藏自绘窗口控制键，不卡宽度（平板也能命中）。 */
+        body.android .login-win-controls {
+            display: none !important;
+        }
+        /* 手机视图：隐藏自绘窗口控制键（最小化/关闭）。安卓/手机无窗口概念，这些键无意义。 */
+        @media (max-width: 768px) {
+            .tauri-env .login-win-controls {
+                display: none !important;
+            }
+        }
         .tauri-env .login-header {
             -webkit-app-region: drag;
         }
@@ -329,6 +339,11 @@
                 }
             });
             document.body.classList.add('tauri-env');
+
+            // 安卓（手机/平板）无窗口概念：标记 body.android，CSS 据此隐藏自绘窗口控件
+            if (/android/i.test(navigator.userAgent)) {
+                document.body.classList.add('android');
+            }
 
             var loginWinMinBtn = document.getElementById('loginWinMinBtn');
             var loginWinCloseBtn = document.getElementById('loginWinCloseBtn');
