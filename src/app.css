@@ -825,6 +825,12 @@ body::-webkit-scrollbar {
 }
 .message.bare-image .chat-image-wrap.loaded { min-width: 0; min-height: 0; background: transparent; }
 .message.bare-image .chat-image-wrap.loaded .chat-image { opacity: 1; }
+/* 聊天图片最小显示尺寸：防止极小图显示为微观缩略（覆盖 DM 与频道帖中的 .chat-image） */
+.chat-image {
+	min-width: 48px;
+	min-height: 48px;
+	object-fit: cover;
+}
 .message.bare-image .chat-image-wrap .img-loading {
 	position: absolute;
 	inset: 0;
