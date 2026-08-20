@@ -38,10 +38,10 @@ fn env_report() -> serde_json::Value {
     })
 }
 
-// 当前应用版本：本地写死为 v9，不再由 CI 动态注入。
+// 当前应用版本：本地写死，不再由 CI 动态注入。
 #[tauri::command]
 fn app_version() -> String {
-    "v12".to_string()
+    "v13".to_string()
 }
 
 // 切换 DevTools：前端在 Ctrl+Alt+Shift+F12 时调用

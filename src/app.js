@@ -14335,6 +14335,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     <span class="label">官方网站</span>
                     <span class="value" style="color:var(--accent);text-decoration:underline;">ockn.reverie.dpdns.org</span>
                 </div>
+                <div class="settings-item" style="cursor:pointer;" id="aboutFeedbackLink">
+                    <span class="label">问题反馈</span>
+                    <span class="value" style="color:var(--accent);text-decoration:underline;">ockn.reverie.dpdns.org/feedback</span>
+                </div>
                 <div class="settings-item" style="cursor:pointer;" id="aboutVersionRow" title="点击检查更新">
                     <span class="label">版本号</span>
                     <span class="value" id="aboutVersionValue" style="color:var(--accent);text-decoration:underline;">获取中…</span>
@@ -14386,6 +14390,14 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         });
         document.getElementById('aboutSiteLink')?.addEventListener('click', () => {
             const url = 'https://ockn.reverie.dpdns.org';
+            if (IS_TAURI && tauriInvoke) {
+                tauriInvoke('plugin:opener|open_url', { url }).catch(() => { window.open(url, '_blank'); });
+            } else {
+                window.open(url, '_blank');
+            }
+        });
+        document.getElementById('aboutFeedbackLink')?.addEventListener('click', () => {
+            const url = 'https://ockn.reverie.dpdns.org/feedback';
             if (IS_TAURI && tauriInvoke) {
                 tauriInvoke('plugin:opener|open_url', { url }).catch(() => { window.open(url, '_blank'); });
             } else {

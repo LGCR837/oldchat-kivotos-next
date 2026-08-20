@@ -248,6 +248,7 @@ function render(releases) {
         '  <p>\n' +
         '    <a class="btn" href="/">查看官网</a>\n' +
         '    <a class="btn" href="https://github.com/' + REPO + '/releases" target="_blank" rel="noopener">GitHub Releases</a>\n' +
+        '    <a class="btn" href="/feedback">问题反馈</a>\n' +
         '  </p>\n' +
         blocks +
         '  <h2>说明</h2>\n' +
