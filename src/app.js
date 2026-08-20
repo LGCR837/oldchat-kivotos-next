@@ -13109,6 +13109,23 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     <span id="settingsCacheSize">计算中...</span>
                 </div>
             </div>
+            <h3 style="margin-top:20px;">数据迁移</h3>
+            <div class="settings-group">
+                <div class="settings-item">
+                    <span class="label">导出配置</span>
+                    <span class="value">
+                        <button class="btn" id="exportConfigBtn">导出配置</button>
+                    </span>
+                </div>
+                <div class="settings-note">将本机绝大多数设置/置顶/喜好等本地数据（不含登录凭据与各类缓存）备份为 JSON 文件。</div>
+                <div class="settings-item">
+                    <span class="label">导入配置</span>
+                    <span class="value">
+                        <button class="btn" id="importConfigBtn">导入配置</button>
+                    </span>
+                </div>
+                <div class="settings-note">从导出的 JSON 文件恢复配置，导入后需重启应用生效。</div>
+            </div>
         `;
         // 接口版本开关（设置 → 通用 → 接口版本）
         const apiSel = document.getElementById('apiVersionSelect');
@@ -13314,6 +13331,75 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         });
         // 加载缓存大小
         loadCacheSize();
+
+        // ===== 数据迁移：导出/导入配置 =====
+        const CONFIG_EXCLUDE_KEYS = new Set([
+            'oc_access_token', 'oc_refresh_token', 'oc_user', 'oc_ws_pts',
+            'oldchat_device_id', 'oc_contacts_cache'
+        ]);
+        function isExcludedConfigKey(k) {
+            if (CONFIG_EXCLUDE_KEYS.has(k)) return true;
+            if (k.indexOf('cip_cache_') === 0) return true; // 小程序脚本缓存
+            return false;
+        }
+        function collectConfigData() {
+            const data = {};
+            try {
+                for (let i = 0; i < localStorage.length; i++) {
+                    const k = localStorage.key(i);
+                    if (!k || isExcludedConfigKey(k)) continue;
+                    data[k] = localStorage.getItem(k);
+                }
+            } catch (e) {}
+            return data;
+        }
+        document.getElementById('exportConfigBtn')?.addEventListener('click', async () => {
+            const _invoke = getInvoke();
+            if (!_invoke) { showAlert('当前环境不支持该功能（需在 Tauri 中运行）'); return; }
+            try {
+                const pkg = {
+                    app: 'OldChatForKivotos',
+                    kind: 'config-backup',
+                    version: 'v12',
+                    exportedAt: new Date().toISOString(),
+                    data: collectConfigData()
+                };
+                const fn = 'oldchat-config-' + new Date().toISOString().slice(0, 10) + '.json';
+                await _invoke('save_text_file', { data: JSON.stringify(pkg, null, 2), filename: fn });
+                showAlert('配置已导出');
+            } catch (e) {
+                showAlert('导出失败：' + ((e && e.message) || e));
+            }
+        });
+        document.getElementById('importConfigBtn')?.addEventListener('click', async () => {
+            const _invoke = getInvoke();
+            if (!_invoke) { showAlert('当前环境不支持该功能（需在 Tauri 中运行）'); return; }
+            let text;
+            try {
+                text = await _invoke('open_text_file');
+            } catch (e) {
+                const m = String((e && e.message) || e);
+                if (m.indexOf('未选择') === -1) showAlert('导入失败：' + m);
+                return;
+            }
+            try {
+                const pkg = JSON.parse(text);
+                if (!pkg || typeof pkg !== 'object' || !pkg.data || typeof pkg.data !== 'object') {
+                    throw new Error('文件格式不正确（不是有效的配置备份）');
+                }
+                let n = 0;
+                Object.keys(pkg.data).forEach(k => {
+                    if (isExcludedConfigKey(k)) return;
+                    const v = pkg.data[k];
+                    if (typeof v !== 'string') return;
+                    try { localStorage.setItem(k, v); n++; } catch (e) {}
+                });
+                const ok = await showConfirm('已导入 ' + n + ' 项配置。重启后全部生效，现在重启吗？', '导入完成');
+                if (ok) { try { window.location.reload(); } catch (e) {} }
+            } catch (e) {
+                showAlert('导入失败：' + ((e && e.message) || e));
+            }
+        });
     }
 
     async function loadCacheSize() {

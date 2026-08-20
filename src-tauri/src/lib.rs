@@ -342,6 +342,40 @@ async fn save_image_data(app: tauri::AppHandle, data: Vec<u8>) -> Result<(), Str
     save_with_dialog(&app, &data, None, None)
 }
 
+// 导出配置：弹保存框写入 JSON 文本（桌面）
+#[tauri::command]
+fn save_text_file(app: tauri::AppHandle, data: String, filename: String) -> Result<(), String> {
+    save_with_dialog(
+        &app,
+        data.as_bytes(),
+        Some(filename.as_str()),
+        Some(("JSON 配置", &["json"])),
+    )
+}
+
+// 导入配置：弹打开框读取 JSON 文本（桌面）
+#[tauri::command]
+fn open_text_file(app: tauri::AppHandle) -> Result<String, String> {
+    #[cfg(desktop)]
+    {
+        let picked = app
+            .dialog()
+            .file()
+            .add_filter("JSON 配置", &["json"])
+            .blocking_pick_file();
+        let path = match picked {
+            Some(FilePath::Path(p)) => p,
+            _ => return Err("未选择文件".into()),
+        };
+        std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败: {}", e))
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = app;
+        Err("移动端暂不支持".into())
+    }
+}
+
 // 拉取媒体字节并返回（频道私有媒体等需 Bearer 鉴权的场景）。
 // 不复用 plugin-http：该插件对跨域/重定向目标做 scope 校验，且对 files.mcl0 前置的 Cloudflare 预检无法通过；
 // 这里直接用 reqwest（与 save_download/save_image 同款客户端），跟随重定向、可带鉴权头，返回原始字节交由前端转 blob。
@@ -1068,7 +1102,8 @@ pub fn run() {
                 is_window_maximized, notify_new_message, save_image, save_download, cancel_download,
                 save_image_data, fetch_media, env_report, app_version, import_theme, list_user_themes,
                 delete_user_theme, import_plugin, list_user_plugins, read_plugin_source, delete_user_plugin,
-                import_cip_app, list_cip_apps, read_cip_app, delete_cip_app, read_cip_assets, cip_pick_image
+                import_cip_app, list_cip_apps, read_cip_app, delete_cip_app, read_cip_assets, cip_pick_image,
+                save_text_file, open_text_file
             ])
         }
         #[cfg(not(desktop))]
