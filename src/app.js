@@ -6016,9 +6016,6 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     loadBuiltinThemeMeta();   // 读取 app.css 头部的 @theme 名称/简介，供设置页显示
     refreshUserPlugins();     // 启动加载已启用的用户插件
 
-    // 数据云同步：若已开启（设置>通用>数据迁移>数据云同步）且已登录（myUid=ncuid 就绪）则启动上传心跳与轮询
-    if (getSyncSettings().enabled && myUid) initConfigSync();
-
     // 超时保护：promise 超过 ms 毫秒仍未 settle 则 reject，避免单条请求卡死导致整段逻辑挂起
     function withTimeout(promise, ms, label) {
         return new Promise((resolve, reject) => {
@@ -12444,6 +12441,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             renderSettingsTheme();
         } else if (tab === 'plugin') {
             renderSettingsPlugins();
+        } else if (tab === 'data') {
+            renderSettingsData();
         }
     }
 
@@ -12944,7 +12943,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // ===== 配置采集（模块级，数据迁移导出/导入与数据云同步共用）=====
     const CONFIG_EXCLUDE_KEYS = new Set([
         'oc_access_token', 'oc_refresh_token', 'oc_user', 'oc_ws_pts',
-        'oldchat_device_id', 'oc_contacts_cache'
+        'oldchat_device_id', 'oc_contacts_cache',
+        'lastConversation',   // 会话状态：每设备不同且频繁变化，非可同步偏好
+        'oc_sync_known_ts'    // 云同步自身状态：每次同步都更新，导出会形成自反馈永不收敛
     ]);
     function isExcludedConfigKey(k) {
         if (CONFIG_EXCLUDE_KEYS.has(k)) return true;
@@ -12980,6 +12981,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     let _syncUploadTimer = null;
     let _syncPollTimer = null;
     let _syncLastUploadHash = '';
+    let _syncKnownTs = '';  // 上次成功同步时服务器返回的 meta.updatedAt（X-Base-Ts 乐观锁基准）
     let _syncPollStopped = false;
     let _syncBadge = null;
 
@@ -13027,13 +13029,18 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const json = stableStringify(pkg);
         const hash = await _sha256Hex(json);
         if (!force && hash === _syncLastUploadHash) return false;
+        // 乐观锁：心跳上传带 X-Base-Ts（上次同步时服务器返回的 updatedAt）。
+        // 服务器据此判断云端是否已被其它设备更新 → 409 拒绝覆盖（不覆盖，交由轮询提示）
+        const headers = { 'Content-Type': 'application/json' };
+        if (!force && _syncKnownTs) headers['X-Base-Ts'] = _syncKnownTs;
         try {
-            const res = await _syncFetch(_syncApiUrl(''), {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: json
-            });
-            if (!res.ok) return false;
+            const res = await _syncFetch(_syncApiUrl(''), { method: 'PUT', headers: headers, body: json });
+            if (!res.ok) return false; // 含 409 conflict
+            const j = await res.json().catch(() => null);
+            if (j && j.ok && j.meta && j.meta.updatedAt) {
+                _syncKnownTs = j.meta.updatedAt;
+                try { localStorage.setItem('oc_sync_known_ts', _syncKnownTs); } catch (e) {}
+            }
             _syncLastUploadHash = hash;
             return true;
         } catch (e) { return false; }
@@ -13086,43 +13093,54 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         requestAnimationFrame(function () { _syncBadge.classList.add('shown'); });
     }
 
-    // 轮询：先同步本地变化（本地比云端新则上传），再对比云端 hash——
-    // 若仍不同说明云端确实比本地新 → 停止轮询 + 云朵
+    // 轮询：云端 hash 与本地不同 → 停止轮询 + 云朵提示。
+    // 关键：先执行一次同步（本地有未上传改动先传），避免把「本地新」误报为「云端新」；
+    // 上传成功则差异已消除，直接跳过本次（同时避开 KV 最终一致滞后读到旧 meta 的窗口）。
+    // 覆盖仲裁由服务器 X-Base-Ts 乐观锁完成（409 拒绝），此处只需报真实差异。
     async function syncPollOnce() {
         if (_syncPollStopped || !getSyncSettings().enabled) return;
-        await syncUpload(false); // 本地有变化先上传，避免把「本地新」误判为「云端新」
+        const uploaded = await syncUpload(false);
+        if (uploaded) return; // 刚上传成功，云端=本地，不提示
         const meta = await syncFetchMeta();
-        if (!meta) return;
+        if (!meta || !meta.hash) return;
         const localHash = await localConfigHash();
-        if (meta.hash && localHash && meta.hash !== localHash) {
-            _syncPollStopped = true;
-            if (_syncPollTimer) { clearInterval(_syncPollTimer); _syncPollTimer = null; }
-            showSyncBadge();
-        }
+        if (!localHash) return;
+        if (localHash === meta.hash) return; // 两端一致
+        _syncPollStopped = true;
+        if (_syncPollTimer) { clearInterval(_syncPollTimer); _syncPollTimer = null; }
+        showSyncBadge();
     }
 
-    // 通用自定义弹窗（对比弹窗用；actions: [{label, cls, fn}]）
-    function showCustomDialog(html, title, actions) {
+    // 云朵点击/「立即同步」：先立即弹出对比窗（loading），拉取完成后再填充内容——
+    // 避免网络等待期间无反馈导致用户反复点击。opts.uploadFirst=true 时先强制上传本地再拉取。
+    async function openSyncCompare(opts) {
         const ov = document.createElement('div');
         ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:21000;display:flex;align-items:center;justify-content:center;';
         const box = document.createElement('div');
         box.style.cssText = 'background:var(--panel-bg,#fff);border:1px solid var(--border-color,#e0e0e0);border-radius:14px;padding:20px;max-width:440px;width:92%;box-shadow:0 12px 40px rgba(0,0,0,0.3);color:var(--text,#222);box-sizing:border-box;';
-        box.innerHTML = '<div style="font-size:16px;font-weight:700;margin-bottom:12px;">' + title + '</div>' + html +
-            '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px;">' + actions.map(function (a, i) {
-                return '<button class="' + a.cls + '" data-i="' + i + '">' + a.label + '</button>';
-            }).join('') + '</div>';
+        box.innerHTML = '<div style="font-size:16px;font-weight:700;margin-bottom:12px;">云端配置对比</div>' +
+            '<div style="padding:24px 0;text-align:center;color:var(--secondary-text,#888);"><span class="oc-spinner"></span><div style="margin-top:10px;font-size:13px;">正在从云端加载配置…</div></div>';
         ov.appendChild(box);
         ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
-        box.querySelectorAll('button').forEach(function (b) {
-            b.addEventListener('click', function () { ov.remove(); const a = actions[Number(b.dataset.i)]; if (a && a.fn) a.fn(); });
-        });
         document.body.appendChild(ov);
-    }
 
-    // 云朵点击：重新拉取 → 对比弹窗
-    async function openSyncCompare() {
+        if (opts && opts.uploadFirst) {
+            const s = getSyncSettings();
+            if (s.enabled && s.url) {
+                await syncUpload(true);
+                await new Promise(r => setTimeout(r, 600)); // KV 最终一致
+            }
+        }
         const remote = await syncFetchFull();
-        if (!remote) { showAlert('拉取云端配置失败，请检查同步地址与密钥'); return; }
+        if (!ov.parentNode) return; // 已被用户关闭
+        if (!remote) {
+            box.innerHTML = '<div style="font-size:16px;font-weight:700;margin-bottom:12px;">云端配置对比</div>' +
+                '<div style="padding:12px 0;color:var(--secondary-text,#888);font-size:13px;">拉取云端配置失败，请检查同步地址与网络。</div>' +
+                '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px;"><button class="btn" id="cmpCloseBtn">关闭</button></div>';
+            const cb = box.querySelector('#cmpCloseBtn');
+            if (cb) cb.addEventListener('click', function () { ov.remove(); });
+            return;
+        }
         const localData = collectConfigData();
         let remoteData = {};
         try {
@@ -13141,17 +13159,30 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const row = function (label, v) {
             return '<div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid var(--border-color,#eee);font-size:13px;"><span style="color:var(--secondary-text,#888);">' + label + '</span><span>' + v + '</span></div>';
         };
+        const changedNames = changed.slice(0, 5).join('、') + (changed.length > 5 ? ' …' : '');
         const html =
             row('云端更新时间', ts) +
             row('本地配置项', localKeys.length + ' 项 · ' + _fmtBytes(localSize)) +
             row('云端配置项', remoteKeys.length + ' 项 · ' + _fmtBytes(remoteSize)) +
             row('云端新增', added.length + ' 项') +
             row('云端删除', removed.length + ' 项') +
-            row('值有变化', changed.length + ' 项');
-        showCustomDialog(html, '云端配置对比', [
-            { label: '本次跳过', cls: 'btn', fn: function () { hideSyncBadge(); _syncPollStopped = false; _syncPollTimer = setInterval(syncPollOnce, SYNC_POLL_MS); setTimeout(syncPollOnce, 5000); } },
-            { label: '同步', cls: 'btn primary', fn: function () { applyRemoteConfig(remoteData, meta); } }
-        ]);
+            row('值有变化', changed.length + ' 项' + (changedNames ? '（' + changedNames + '）' : ''));
+        const hasDiff = added.length > 0 || removed.length > 0 || changed.length > 0;
+        const btns = hasDiff
+            ? '<button class="btn" id="cmpSkipBtn">本次跳过</button>' +
+              '<button class="btn primary" id="cmpSyncBtn">同步</button>'
+            : '<button class="btn" id="cmpCloseBtn">关闭</button>';
+        box.innerHTML = '<div style="font-size:16px;font-weight:700;margin-bottom:12px;">云端配置对比</div>' + html +
+            '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px;">' + btns + '</div>';
+        if (hasDiff) {
+            const skip = box.querySelector('#cmpSkipBtn');
+            if (skip) skip.addEventListener('click', function () { ov.remove(); hideSyncBadge(); /* 保持轮询停止避免循环提示；可点「立即同步」再查 */ });
+            const syncBtn = box.querySelector('#cmpSyncBtn');
+            if (syncBtn) syncBtn.addEventListener('click', function () { ov.remove(); applyRemoteConfig(remoteData, meta); });
+        } else {
+            const closeBtn = box.querySelector('#cmpCloseBtn');
+            if (closeBtn) closeBtn.addEventListener('click', function () { ov.remove(); });
+        }
     }
 
     // 应用云端配置到本地
@@ -13165,6 +13196,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         });
         // 更新上传基线，避免立刻回传
         if (meta && meta.hash) _syncLastUploadHash = meta.hash;
+        if (meta && meta.updatedAt) {
+            _syncKnownTs = meta.updatedAt;
+            try { localStorage.setItem('oc_sync_known_ts', _syncKnownTs); } catch (e) {}
+        }
         hideSyncBadge();
         _syncPollStopped = false;
         _syncPollTimer = setInterval(syncPollOnce, SYNC_POLL_MS);
@@ -13173,19 +13208,57 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         });
     }
 
+    // 首次启用：云端已有配置则记住基准并提示（不覆盖）；云端为空则上传本地建立基线
+    async function firstSync() {
+        const meta = await syncFetchMeta();
+        if (meta && meta.hash) {
+            if (meta.updatedAt) {
+                _syncKnownTs = meta.updatedAt;
+                try { localStorage.setItem('oc_sync_known_ts', _syncKnownTs); } catch (e) {}
+            }
+            const localHash = await localConfigHash();
+            if (meta.hash !== localHash) {
+                // 云端有且与本地不同：不自动覆盖，提示用户对比
+                _syncLastUploadHash = localHash; // 本地认账，心跳不再尝试上传覆盖
+                _syncPollStopped = true;
+                showSyncBadge();
+                return;
+            }
+            _syncLastUploadHash = meta.hash; // 一致
+        } else {
+            await syncUpload(true); // 云端空：上传建立基线
+        }
+    }
+
     // 开启/关闭/配置变化时调用
-    function initConfigSync() {
+    async function initConfigSync() {
         _stopSyncTimers();
         hideSyncBadge();
         _syncPollStopped = false;
         const s = getSyncSettings();
-        if (!s.enabled) { _syncLastUploadHash = ''; return; }
+        if (!s.enabled) { _syncLastUploadHash = ''; _syncKnownTs = ''; try { localStorage.removeItem('oc_sync_known_ts'); } catch (e) {} return; }
         if (!s.url) return; // 未配置地址先不启动
-        syncUpload(true); // 立即上传建立基线
+        try { _syncKnownTs = localStorage.getItem('oc_sync_known_ts') || ''; } catch (e) { _syncKnownTs = ''; }
+        await firstSync();
+        if (!getSyncSettings().enabled) return;
         _syncUploadTimer = setInterval(function () { syncUpload(false); }, SYNC_UPLOAD_MS);
-        _syncPollTimer = setInterval(syncPollOnce, SYNC_POLL_MS);
-        setTimeout(syncPollOnce, 2000);
+        if (!_syncPollStopped) {
+            _syncPollTimer = setInterval(syncPollOnce, SYNC_POLL_MS);
+            setTimeout(syncPollOnce, 2000);
+        }
     }
+
+    // 「立即同步」：立即弹出对比窗（loading），上传与拉取在弹窗打开后执行，反馈即时
+    async function syncNow() {
+        const s = getSyncSettings();
+        if (!s.enabled) { showAlert('请先在「数据云同步」开启云同步'); return; }
+        if (!s.url) { showAlert('请先配置同步地址'); return; }
+        openSyncCompare({ uploadFirst: true });
+    }
+
+    // 启动时若已开启云同步且已登录（myUid=ncuid 就绪）则启动上传心跳与轮询。
+    // 必须置于本控制器所有 let/const 声明之后（上方 6020 处调用会触发 TDZ 报错）。
+    if (getSyncSettings().enabled && myUid) initConfigSync();
 
     function renderSettingsAppearance() {
         settingsContent.innerHTML = `
@@ -13348,48 +13421,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     <button id="settingsResetUrls" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border-color);background:transparent;color:var(--text);font-size:13px;cursor:pointer;font-family:inherit;">恢复默认</button>
                 </div>
             </div>
-            <h3 style="margin-top:20px;">缓存管理</h3>
-            <div class="settings-group">
-                <div class="settings-item" id="settingsClearMediaCache" style="color:#ff6b6b;">
-                    <span class="label">清除媒体缓存（图片/音频/头像）</span>
-                    <span class="value"><i class="fa-solid fa-trash-can"></i></span>
-                </div>
-                <div class="settings-note">
-                    <span id="settingsCacheSize">计算中...</span>
-                </div>
-            </div>
-            <h3 style="margin-top:20px;">数据迁移</h3>
-            <div class="settings-group">
-                <div class="settings-item">
-                    <span class="label">导出配置</span>
-                    <span class="value">
-                        <button class="btn" id="exportConfigBtn">导出配置</button>
-                    </span>
-                </div>
-                <div class="settings-note">将本机绝大多数设置/置顶/喜好等本地数据（不含登录凭据与各类缓存）备份为 JSON 文件。</div>
-                <div class="settings-item">
-                    <span class="label">导入配置</span>
-                    <span class="value">
-                        <button class="btn" id="importConfigBtn">导入配置</button>
-                    </span>
-                </div>
-                <div class="settings-note">从导出的 JSON 文件恢复配置，导入后需重启应用生效。</div>
-            </div>
-            <h3 style="margin-top:20px;">数据云同步</h3>
-            <div class="settings-group">
-                <div class="settings-item">
-                    <span class="label">启用云同步</span>
-                    <span class="value">
-                        <label class="oc-switch"><input type="checkbox" id="syncToggle"><span class="oc-switch-slider"></span></label>
-                    </span>
-                </div>
-                <div class="settings-note">开启后本地配置修改将在 20 秒内自动上传；每 90 秒检查云端是否有更新，有则在左下角显示云朵提示。以 ncuid 为同步标识。</div>
-                <div class="settings-item">
-                    <span class="label">同步地址</span>
-                    <span class="value"><input type="text" id="syncUrlInput" placeholder="https://ockn.reverie.dpdns.org/api/cfg" style="max-width:280px;padding:4px 8px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;"></span>
-                </div>
-            </div>
         `;
+        // 缓存管理 / 数据迁移 / 数据云同步已分离到「数据」分类（renderSettingsData）
         // 接口版本开关（设置 → 通用 → 接口版本）
         const apiSel = document.getElementById('apiVersionSelect');
         if (apiSel) {
@@ -13571,6 +13604,62 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 window.location.reload();
             });
         }
+        // 缓存管理 / 数据迁移 / 数据云同步的绑定已移至 renderSettingsData（「数据」分类）
+    }
+
+    // ===== 设置页「数据」分类：缓存管理 / 数据迁移 / 数据云同步（自「通用」分离）=====
+    function renderSettingsData() {
+        settingsContent.innerHTML = `
+            <h3>缓存管理</h3>
+            <div class="settings-group">
+                <div class="settings-item" id="settingsClearMediaCache" style="color:#ff6b6b;">
+                    <span class="label">清除媒体缓存（图片/音频/头像）</span>
+                    <span class="value"><i class="fa-solid fa-trash-can"></i></span>
+                </div>
+                <div class="settings-note">
+                    <span id="settingsCacheSize">计算中...</span>
+                </div>
+            </div>
+            <h3 style="margin-top:20px;">数据迁移</h3>
+            <div class="settings-group">
+                <div class="settings-item">
+                    <span class="label">导出配置</span>
+                    <span class="value">
+                        <button class="btn" id="exportConfigBtn">导出配置</button>
+                    </span>
+                </div>
+                <div class="settings-note">将本机绝大多数设置/置顶/喜好等本地数据（不含登录凭据与各类缓存）备份为 JSON 文件。</div>
+                <div class="settings-item">
+                    <span class="label">导入配置</span>
+                    <span class="value">
+                        <button class="btn" id="importConfigBtn">导入配置</button>
+                    </span>
+                </div>
+                <div class="settings-note">从导出的 JSON 文件恢复配置，导入后需重启应用生效。</div>
+            </div>
+            <h3 style="margin-top:20px;">数据云同步</h3>
+            <div class="settings-group">
+                <div class="settings-item">
+                    <span class="label">启用云同步</span>
+                    <span class="value">
+                        <label class="oc-switch"><input type="checkbox" id="syncToggle"><span class="oc-switch-slider"></span></label>
+                    </span>
+                </div>
+                <div class="settings-note">开启后本地配置修改将在 20 秒内自动上传；每 90 秒检查云端是否有更新，有则在左下角显示云朵提示。以 ncuid 为同步标识。</div>
+                <div class="settings-item">
+                    <span class="label">手动同步</span>
+                    <span class="value" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <button class="btn" id="syncForceBtn">强制上传本地配置</button>
+                        <button class="btn" id="syncNowBtn">立即同步</button>
+                    </span>
+                </div>
+                <div class="settings-note">「强制上传本地配置」直接用本机配置覆盖云端（需二次确认）；「立即同步」上传后弹出云端对比窗口。</div>
+                <div class="settings-item">
+                    <span class="label">同步地址</span>
+                    <span class="value"><input type="text" id="syncUrlInput" placeholder="https://ockn.reverie.dpdns.org/api/cfg" style="max-width:280px;padding:4px 8px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;"></span>
+                </div>
+            </div>
+        `;
         // 清除媒体缓存
         document.getElementById('settingsClearMediaCache')?.addEventListener('click', async () => {
             if (!await showConfirm('确定清除所有媒体缓存吗？下次访问图片/音频/头像会重新下载。')) return;
@@ -13595,7 +13684,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         // 加载缓存大小
         loadCacheSize();
 
-        // ===== 数据迁移：导出/导入配置（isExcludedConfigKey/collectConfigData 为模块级，见云同步控制器上方）=====
+        // ===== 数据迁移：导出/导入配置 =====
         document.getElementById('exportConfigBtn')?.addEventListener('click', async () => {
             const _invoke = getInvoke();
             if (!_invoke) { showAlert('当前环境不支持该功能（需在 Tauri 中运行）'); return; }
@@ -13654,6 +13743,15 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 initConfigSync();
             });
         }
+        document.getElementById('syncNowBtn')?.addEventListener('click', syncNow);
+        document.getElementById('syncForceBtn')?.addEventListener('click', async () => {
+            const s = getSyncSettings();
+            if (!s.enabled) { showAlert('请先在「数据云同步」开启云同步'); return; }
+            if (!s.url) { showAlert('请先配置同步地址'); return; }
+            if (!await showConfirm('将用本地配置直接覆盖云端配置（云端现有内容会被替换）。确定继续吗？', '强制上传')) return;
+            const ok = await syncUpload(true);
+            showAlert(ok ? '已强制上传本地配置到云端' : '上传失败：请检查同步地址与网络');
+        });
         if (syncUrlInput) {
             syncUrlInput.value = getSyncSettings().url;
             syncUrlInput.addEventListener('change', () => {
