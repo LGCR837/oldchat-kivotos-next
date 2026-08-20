@@ -13309,6 +13309,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // 必须置于本控制器所有 let/const 声明之后（上方 6020 处调用会触发 TDZ 报错）。
     if (getSyncSettings().enabled && myUid) initConfigSync();
 
+    // 启动约 18s 后后台自动检查更新（绕过启动请求风暴期）；有更新才显示左下角图标。
+    setTimeout(function () { backgroundCheckUpdate(); }, 18000);
+
     function renderSettingsAppearance() {
         settingsContent.innerHTML = `
             <h3>通用</h3>
@@ -14446,8 +14449,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
     // 检查更新：点击版本号 → 立即弹出弹窗并转圈加载 → 拉取数据后填充结果
     // 最新 tag 与当前版本不一致 → 有更新；当前版本在列表中 → 展示其后的全部更新内容，否则只提示最新版本
-    async function checkForUpdates() {
-        const dlg = createUpdateDialog('检查更新');
+    async function checkForUpdates(opts) {
+        const dlg = createUpdateDialog('检查更新', opts);
         dlg.setLoading('正在检查更新…');
 
         const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
@@ -14477,13 +14480,16 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const entries = idx >= 0 ? releases.slice(0, idx) : [latest];
         dlg.showResult('发现新版本 ' + latestTag + '！', entries, currentVersion, idx >= 0, () => {
             dlg.close();
+            if (opts && opts.fromBadge) hideUpdateBadge();
             openExternal(UPDATE_DOWNLOAD_URL);
         });
     }
 
     // 更新弹窗：复用 .custom-modal-overlay/.custom-modal 的淡入+下滑动画；
     // 先以 loading 态弹出，数据到达后由控制器切换到结果/错误态。纯文本渲染防注入。
-    function createUpdateDialog(title) {
+    // opts.fromBadge=true 时由左下角更新图标打开：「关闭」/点遮罩会同时移除图标，「稍后」仅关弹窗保留图标。
+    function createUpdateDialog(title, opts) {
+        opts = opts || {};
         const overlay = document.createElement('div');
         overlay.className = 'custom-modal-overlay';
         const box = document.createElement('div');
@@ -14499,9 +14505,14 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         head.style.cssText = 'font-size:15px;font-weight:600;margin-bottom:12px;color:var(--text);flex-shrink:0;';
         head.textContent = title;
         const body = document.createElement('div');
+        body.className = 'oc-update-dlg-body';
         body.style.cssText = 'overflow-y:auto;flex:1;font-size:13px;line-height:1.6;color:var(--text);';
         const foot = document.createElement('div');
         foot.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-shrink:0;';
+        const laterBtn = document.createElement('button');
+        laterBtn.className = 'btn';
+        laterBtn.textContent = '稍后';
+        laterBtn.style.display = 'none';
         const cancelBtn = document.createElement('button');
         cancelBtn.className = 'btn';
         cancelBtn.textContent = '关闭';
@@ -14509,6 +14520,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         goBtn.className = 'btn primary';
         goBtn.textContent = '前往下载';
         goBtn.style.display = 'none';
+        foot.appendChild(laterBtn);
         foot.appendChild(cancelBtn);
         foot.appendChild(goBtn);
         box.appendChild(head);
@@ -14518,8 +14530,14 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         document.body.appendChild(overlay);
 
         function close() { overlay.remove(); }
-        cancelBtn.addEventListener('click', close);
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+        // 来自左下角图标：关闭/点遮罩 → 移除图标；稍后 → 仅关弹窗，图标保留
+        function closeAndDismissBadge() {
+            close();
+            if (opts.fromBadge) hideUpdateBadge();
+        }
+        cancelBtn.addEventListener('click', closeAndDismissBadge);
+        laterBtn.addEventListener('click', close);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeAndDismissBadge(); });
 
         return {
             close,
@@ -14527,6 +14545,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             setLoading(msg) {
                 head.textContent = title;
                 goBtn.style.display = 'none';
+                laterBtn.style.display = 'none';
                 body.innerHTML = '';
                 const wrap = document.createElement('div');
                 wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:12px;padding:28px 0;color:var(--secondary-text);';
@@ -14543,6 +14562,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             setError(msg) {
                 head.textContent = title;
                 goBtn.style.display = 'none';
+                laterBtn.style.display = 'none';
                 body.innerHTML = '';
                 body.style.whiteSpace = 'pre-wrap';
                 const t = document.createElement('div');
@@ -14576,6 +14596,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     if (onDownload) {
                         goBtn.style.display = '';
                         goBtn.onclick = () => onDownload();
+                        // 有可更新版本且来自图标时才显示「稍后」
+                        if (opts.fromBadge) laterBtn.style.display = '';
                     }
                 } else {
                     body.appendChild(infoLine(heading));
@@ -14589,6 +14611,43 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         el.style.cssText = 'margin-bottom:12px;color:var(--secondary-text);';
         el.textContent = text;
         return el;
+    }
+
+    // ===== 左下角「有新版本」图标（复用后台下载 dock / 云同步云朵的样式）=====
+    var _updateBadge = null;
+    function hideUpdateBadge() {
+        if (_updateBadge) {
+            const b = _updateBadge;
+            _updateBadge = null;
+            b.classList.remove('shown');
+            setTimeout(function () { if (b.parentNode) b.parentNode.removeChild(b); }, 250);
+        }
+    }
+    function showUpdateBadge() {
+        if (_updateBadge && _updateBadge.parentNode) return;
+        _updateBadge = document.createElement('div');
+        _updateBadge.id = 'oc-update-badge';
+        _updateBadge.className = 'oc-update-badge';
+        _updateBadge.innerHTML = '<i class="fa-solid fa-arrow-up-from-bracket"></i><span>有新版本</span>';
+        _updateBadge.addEventListener('click', () => checkForUpdates({ fromBadge: true }));
+        document.body.appendChild(_updateBadge);
+        requestAnimationFrame(function () { _updateBadge.classList.add('shown'); });
+    }
+
+    // 启动后延迟自动后台检查更新（绕过启动请求风暴期）；静默失败，仅在确有更新时显示左下角图标。
+    // 仅桌面端（有 Tauri invoke 可取到本地版本）执行，避免网页端误报。
+    async function backgroundCheckUpdate() {
+        const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+        if (!invoke) return;
+        let currentVersion = '';
+        try { currentVersion = (await invoke('app_version')) || ''; } catch (e) {}
+        let releases;
+        try { releases = await fetchReleases(); } catch (e) { return; }
+        const latest = releases[0] || {};
+        const latestTag = latest.tag || '';
+        if (!latestTag) return;
+        if (currentVersion === latestTag) return; // 已是最新，不提示
+        showUpdateBadge();
     }
 
     // 设置 → 本地收藏（与输入框表情选择器共用同一份 localStorage 数据）
