@@ -11928,30 +11928,34 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     const urlInputTitle = document.querySelector('.url-input-title');
 
     const urlMusicNameInput = document.getElementById('urlMusicNameInput');
+    const urlMusicArtistInput = document.getElementById('urlMusicArtistInput');
+    const urlMusicDurInput = document.getElementById('urlMusicDurInput');
+    const urlMusicCoverInput = document.getElementById('urlMusicCoverInput');
     const urlAudioDurInput = document.getElementById('urlAudioDurInput');
 
     function showUrlInput(mode) {
         urlInputMode = mode;
+        const musicInputs = [urlMusicNameInput, urlMusicArtistInput, urlMusicDurInput, urlMusicCoverInput];
         if (mode === 'image') {
             urlInputTitle.textContent = '输入图片链接';
             urlImageInput.placeholder = 'https://...';
-            urlMusicNameInput.style.display = 'none';
+            musicInputs.forEach(el => { el.style.display = 'none'; });
             urlAudioDurInput.style.display = 'none';
         } else if (mode === 'voice') {
             urlInputTitle.textContent = '输入音频链接';
             urlImageInput.placeholder = 'https://...（音频直链）';
-            urlMusicNameInput.style.display = 'none';
+            musicInputs.forEach(el => { el.style.display = 'none'; });
             urlAudioDurInput.style.display = '';
         } else if (mode === 'music') {
-            urlInputTitle.textContent = '输入音乐名称与链接';
+            urlInputTitle.textContent = '输入音乐信息';
             urlImageInput.placeholder = 'https://...（音频直链）';
-            urlMusicNameInput.style.display = '';
+            musicInputs.forEach(el => { el.style.display = ''; });
             urlAudioDurInput.style.display = 'none';
         }
         urlInputOverlay.style.display = 'flex';
         urlImageInput.value = '';
         urlAudioDurInput.value = '';
-        urlMusicNameInput.value = '';
+        musicInputs.forEach(el => { el.value = ''; });
         if (mode === 'music') urlMusicNameInput.focus();
         else urlImageInput.focus();
     }
@@ -11979,16 +11983,25 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const durSec = raw > 0 ? Math.min(raw, 60) : 60; // 留空默认 60 秒
             sendMessage('', 'voice', url, null, 0, durSec * 1000);
         } else if (urlInputMode === 'music') {
-            // 音乐卡片：resource 消息，body 为 media_kind=music 的 JSON（参考 MCL0 格式）
+            // 音乐卡片：resource 消息，body 为 media_kind=music 的 JSON（兼容两种 MCL0 格式：
+            // ① body 带 audio_url/url；② text 多行含歌手/时长/封面 + 顶层 thumb_url）
             const name = urlMusicNameInput.value.trim() || '音乐';
+            const artist = urlMusicArtistInput.value.trim();
+            const durText = urlMusicDurInput.value.trim();
+            const cover = urlMusicCoverInput.value.trim();
+            const lines = ['歌曲: ' + name];
+            if (artist) lines.push('歌手: ' + artist);
+            if (durText) lines.push('时长: ' + durText);
+            if (cover) lines.push('封面: ' + cover);
+            lines.push('点击播放');
             const body = JSON.stringify({
+                v: 2,
+                text: lines.join('\n'),
                 media_kind: 'music',
                 audio_url: url,
-                text: '歌曲: ' + name + '\n点击播放',
-                url: url,
-                v: 2
+                url: url
             });
-            sendMessage(body, 'resource', url);
+            sendMessage(body, 'resource', url, cover || null);
         } else {
             sendMessage('', 'image', url);
         }
