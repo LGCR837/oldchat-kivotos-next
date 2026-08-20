@@ -11289,9 +11289,21 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 const action = event.target.dataset.action;
                 if (action === 'mention') {
                     if (currentConv && currentConv.type === 'group' && !isOwn) {
-                        const insertText = `@${fromName} `;
-                        messageInput.value = (messageInput.value || '') + insertText;
+                        // 与 @ 弹窗插入一致：@名字 + 零宽字符(\u200B) + 空格。
+                        // 发送端用 /@([^\u200B@]+)/ 提取名字并与成员表精确匹配；
+                        // 若只写普通空格会把尾随空格/后续文字一并吞入导致匹配失败(退化为纯文本)。
+                        let mName = fromName;
+                        const mTarget = (Array.isArray(mentionMembers) ? mentionMembers : []).find(m =>
+                            (m.uid && String(m.uid).toUpperCase() === String(fromUid).toUpperCase()) ||
+                            (m.ncuid && String(m.ncuid).toUpperCase() === String(fromUid).toUpperCase())
+                        );
+                        if (mTarget && mTarget.name) mName = mTarget.name;
+                        messageInput.value = (messageInput.value || '') + '@' + mName + '\u200B ';
                         messageInput.focus();
+                        // 抑制 @ 输入监听的弹窗误开，并同步高度/typing
+                        mentionJustInserted = true;
+                        messageInput.dispatchEvent(new Event('input'));
+                        mentionJustInserted = false;
                     } else if (isOwn) {
                         openSpacePanel(fromUid);
                     } else {
