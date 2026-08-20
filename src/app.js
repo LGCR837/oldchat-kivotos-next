@@ -6016,6 +6016,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     loadBuiltinThemeMeta();   // 读取 app.css 头部的 @theme 名称/简介，供设置页显示
     refreshUserPlugins();     // 启动加载已启用的用户插件
 
+    // 数据云同步：若已开启（设置>通用>数据迁移>数据云同步）且已登录（myUid=ncuid 就绪）则启动上传心跳与轮询
+    if (getSyncSettings().enabled && myUid) initConfigSync();
+
     // 超时保护：promise 超过 ms 毫秒仍未 settle 则 reject，避免单条请求卡死导致整段逻辑挂起
     function withTimeout(promise, ms, label) {
         return new Promise((resolve, reject) => {
@@ -12938,6 +12941,252 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (le) le.style.display = isBaClickFxLiteEnabled() ? '' : 'none';
     }
 
+    // ===== 配置采集（模块级，数据迁移导出/导入与数据云同步共用）=====
+    const CONFIG_EXCLUDE_KEYS = new Set([
+        'oc_access_token', 'oc_refresh_token', 'oc_user', 'oc_ws_pts',
+        'oldchat_device_id', 'oc_contacts_cache'
+    ]);
+    function isExcludedConfigKey(k) {
+        if (CONFIG_EXCLUDE_KEYS.has(k)) return true;
+        if (k.indexOf('cip_cache_') === 0) return true; // 小程序脚本缓存
+        return false;
+    }
+    function collectConfigData() {
+        const data = {};
+        try {
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (!k || isExcludedConfigKey(k)) continue;
+                data[k] = localStorage.getItem(k);
+            }
+        } catch (e) {}
+        return data;
+    }
+    // 稳定序列化：键排序后输出，保证相同配置生成相同字符串（云同步 hash 对比可靠）
+    function stableStringify(obj) {
+        if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
+        if (Array.isArray(obj)) return '[' + obj.map(stableStringify).join(',') + ']';
+        return '{' + Object.keys(obj).sort().map(function (k) {
+            return JSON.stringify(k) + ':' + stableStringify(obj[k]);
+        }).join(',') + '}';
+    }
+
+    // ===== 数据云同步（设置>通用>数据迁移>数据云同步，默认关闭）=====
+    // 本地配置修改后防抖 20s 自动上传；每 90s 轮询云端 meta 对比 hash；
+    // 检测到差异停止轮询并在左下角显示云朵提示（样式对齐后台下载 dock）；
+    // 点击云朵 → 重新拉取 → 弹窗对比 → 「本次跳过」/「同步」。
+    const SYNC_POLL_MS = 90 * 1000;
+    const SYNC_UPLOAD_MS = 20 * 1000;
+    let _syncUploadTimer = null;
+    let _syncPollTimer = null;
+    let _syncLastUploadHash = '';
+    let _syncPollStopped = false;
+    let _syncBadge = null;
+
+    function getSyncSettings() {
+        try {
+            return {
+                enabled: localStorage.getItem('oc_sync_enabled') === '1',
+                url: localStorage.getItem('oc_sync_url') || 'https://ockn.reverie.dpdns.org/api/cfg'
+            };
+        } catch (e) { return { enabled: false, url: '' }; }
+    }
+
+    async function _sha256Hex(str) {
+        try {
+            const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+            return Array.prototype.map.call(new Uint8Array(buf), b => b.toString(16).padStart(2, '0')).join('');
+        } catch (e) { return null; }
+    }
+
+    function _syncFetch(url, opts) {
+        if (typeof window.__tauriHttpFetchImpl === 'function') return window.__tauriHttpFetchImpl(url, opts);
+        return fetch(url, opts);
+    }
+
+    function _syncApiUrl(suffix) {
+        const s = getSyncSettings();
+        const sep = s.url.indexOf('?') >= 0 ? '&' : '?';
+        return s.url + sep + 'ncuid=' + encodeURIComponent(myUid || '') + suffix;
+    }
+
+    async function localConfigHash() {
+        const data = collectConfigData();
+        const pkg = { app: 'OldChatForKivotos', kind: 'config-backup', version: 'v12', data: data };
+        return _sha256Hex(stableStringify(pkg));
+    }
+
+    // 上传：hash 无变化则跳过（force 忽略基线）。
+    // 注意：pkg 结构必须与 localConfigHash 完全一致（不含每次变化的时间戳），
+    // 否则 hash 漂移导致无限重复上传 / 同步后误报差异。
+    async function syncUpload(force) {
+        const s = getSyncSettings();
+        if (!s.enabled || !s.url) return false;
+        const data = collectConfigData();
+        const pkg = { app: 'OldChatForKivotos', kind: 'config-backup', version: 'v12', data: data };
+        const json = stableStringify(pkg);
+        const hash = await _sha256Hex(json);
+        if (!force && hash === _syncLastUploadHash) return false;
+        try {
+            const res = await _syncFetch(_syncApiUrl(''), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: json
+            });
+            if (!res.ok) return false;
+            _syncLastUploadHash = hash;
+            return true;
+        } catch (e) { return false; }
+    }
+
+    // 拉取云端 meta（轻量轮询）
+    async function syncFetchMeta() {
+        const s = getSyncSettings();
+        if (!s.enabled || !s.url) return null;
+        try {
+            const res = await _syncFetch(_syncApiUrl('&meta=1'), { method: 'GET' });
+            if (!res.ok) return null;
+            const j = await res.json().catch(() => null);
+            return (j && j.ok && j.meta) ? j.meta : null;
+        } catch (e) { return null; }
+    }
+
+    // 拉取云端完整配置
+    async function syncFetchFull() {
+        const s = getSyncSettings();
+        if (!s.enabled || !s.url) return null;
+        try {
+            const res = await _syncFetch(_syncApiUrl(''), { method: 'GET' });
+            if (!res.ok) return null;
+            const j = await res.json().catch(() => null);
+            return (j && j.ok) ? j : null;
+        } catch (e) { return null; }
+    }
+
+    function _stopSyncTimers() {
+        if (_syncUploadTimer) { clearInterval(_syncUploadTimer); _syncUploadTimer = null; }
+        if (_syncPollTimer) { clearInterval(_syncPollTimer); _syncPollTimer = null; }
+    }
+    function hideSyncBadge() {
+        if (_syncBadge) {
+            const b = _syncBadge;
+            _syncBadge = null;
+            b.classList.remove('shown');
+            setTimeout(function () { if (b.parentNode) b.parentNode.removeChild(b); }, 250);
+        }
+    }
+    function showSyncBadge() {
+        if (_syncBadge && _syncBadge.parentNode) return;
+        _syncBadge = document.createElement('div');
+        _syncBadge.id = 'oc-sync-badge';
+        _syncBadge.className = 'oc-sync-badge';
+        _syncBadge.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i><span>配置有更新</span>';
+        _syncBadge.addEventListener('click', openSyncCompare);
+        document.body.appendChild(_syncBadge);
+        requestAnimationFrame(function () { _syncBadge.classList.add('shown'); });
+    }
+
+    // 轮询：先同步本地变化（本地比云端新则上传），再对比云端 hash——
+    // 若仍不同说明云端确实比本地新 → 停止轮询 + 云朵
+    async function syncPollOnce() {
+        if (_syncPollStopped || !getSyncSettings().enabled) return;
+        await syncUpload(false); // 本地有变化先上传，避免把「本地新」误判为「云端新」
+        const meta = await syncFetchMeta();
+        if (!meta) return;
+        const localHash = await localConfigHash();
+        if (meta.hash && localHash && meta.hash !== localHash) {
+            _syncPollStopped = true;
+            if (_syncPollTimer) { clearInterval(_syncPollTimer); _syncPollTimer = null; }
+            showSyncBadge();
+        }
+    }
+
+    // 通用自定义弹窗（对比弹窗用；actions: [{label, cls, fn}]）
+    function showCustomDialog(html, title, actions) {
+        const ov = document.createElement('div');
+        ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:21000;display:flex;align-items:center;justify-content:center;';
+        const box = document.createElement('div');
+        box.style.cssText = 'background:var(--panel-bg,#fff);border:1px solid var(--border-color,#e0e0e0);border-radius:14px;padding:20px;max-width:440px;width:92%;box-shadow:0 12px 40px rgba(0,0,0,0.3);color:var(--text,#222);box-sizing:border-box;';
+        box.innerHTML = '<div style="font-size:16px;font-weight:700;margin-bottom:12px;">' + title + '</div>' + html +
+            '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px;">' + actions.map(function (a, i) {
+                return '<button class="' + a.cls + '" data-i="' + i + '">' + a.label + '</button>';
+            }).join('') + '</div>';
+        ov.appendChild(box);
+        ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
+        box.querySelectorAll('button').forEach(function (b) {
+            b.addEventListener('click', function () { ov.remove(); const a = actions[Number(b.dataset.i)]; if (a && a.fn) a.fn(); });
+        });
+        document.body.appendChild(ov);
+    }
+
+    // 云朵点击：重新拉取 → 对比弹窗
+    async function openSyncCompare() {
+        const remote = await syncFetchFull();
+        if (!remote) { showAlert('拉取云端配置失败，请检查同步地址与密钥'); return; }
+        const localData = collectConfigData();
+        let remoteData = {};
+        try {
+            const p = typeof remote.data === 'string' ? JSON.parse(remote.data) : (remote.data || {});
+            remoteData = (p && p.data && typeof p.data === 'object') ? p.data : {};
+        } catch (e) { remoteData = {}; }
+        const meta = remote.meta || {};
+        const localKeys = Object.keys(localData);
+        const remoteKeys = Object.keys(remoteData);
+        const localSize = stableStringify(localData).length;
+        const remoteSize = stableStringify(remoteData).length;
+        const added = remoteKeys.filter(k => !(k in localData));
+        const removed = localKeys.filter(k => !(k in remoteData));
+        const changed = remoteKeys.filter(k => (k in localData) && localData[k] !== remoteData[k]);
+        const ts = meta.updatedAt ? new Date(meta.updatedAt).toLocaleString() : '未知';
+        const row = function (label, v) {
+            return '<div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid var(--border-color,#eee);font-size:13px;"><span style="color:var(--secondary-text,#888);">' + label + '</span><span>' + v + '</span></div>';
+        };
+        const html =
+            row('云端更新时间', ts) +
+            row('本地配置项', localKeys.length + ' 项 · ' + _fmtBytes(localSize)) +
+            row('云端配置项', remoteKeys.length + ' 项 · ' + _fmtBytes(remoteSize)) +
+            row('云端新增', added.length + ' 项') +
+            row('云端删除', removed.length + ' 项') +
+            row('值有变化', changed.length + ' 项');
+        showCustomDialog(html, '云端配置对比', [
+            { label: '本次跳过', cls: 'btn', fn: function () { hideSyncBadge(); _syncPollStopped = false; _syncPollTimer = setInterval(syncPollOnce, SYNC_POLL_MS); setTimeout(syncPollOnce, 5000); } },
+            { label: '同步', cls: 'btn primary', fn: function () { applyRemoteConfig(remoteData, meta); } }
+        ]);
+    }
+
+    // 应用云端配置到本地
+    function applyRemoteConfig(remoteData, meta) {
+        let n = 0;
+        Object.keys(remoteData).forEach(function (k) {
+            if (isExcludedConfigKey(k)) return;
+            const v = remoteData[k];
+            if (typeof v !== 'string') return;
+            try { localStorage.setItem(k, v); n++; } catch (e) {}
+        });
+        // 更新上传基线，避免立刻回传
+        if (meta && meta.hash) _syncLastUploadHash = meta.hash;
+        hideSyncBadge();
+        _syncPollStopped = false;
+        _syncPollTimer = setInterval(syncPollOnce, SYNC_POLL_MS);
+        showConfirm('已应用云端 ' + n + ' 项配置。重启后全部生效，现在重启吗？', '同步完成').then(function (ok) {
+            if (ok) { try { window.location.reload(); } catch (e) {} }
+        });
+    }
+
+    // 开启/关闭/配置变化时调用
+    function initConfigSync() {
+        _stopSyncTimers();
+        hideSyncBadge();
+        _syncPollStopped = false;
+        const s = getSyncSettings();
+        if (!s.enabled) { _syncLastUploadHash = ''; return; }
+        if (!s.url) return; // 未配置地址先不启动
+        syncUpload(true); // 立即上传建立基线
+        _syncUploadTimer = setInterval(function () { syncUpload(false); }, SYNC_UPLOAD_MS);
+        _syncPollTimer = setInterval(syncPollOnce, SYNC_POLL_MS);
+        setTimeout(syncPollOnce, 2000);
+    }
+
     function renderSettingsAppearance() {
         settingsContent.innerHTML = `
             <h3>通用</h3>
@@ -13125,6 +13374,20 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     </span>
                 </div>
                 <div class="settings-note">从导出的 JSON 文件恢复配置，导入后需重启应用生效。</div>
+            </div>
+            <h3 style="margin-top:20px;">数据云同步</h3>
+            <div class="settings-group">
+                <div class="settings-item">
+                    <span class="label">启用云同步</span>
+                    <span class="value">
+                        <label class="oc-switch"><input type="checkbox" id="syncToggle"><span class="oc-switch-slider"></span></label>
+                    </span>
+                </div>
+                <div class="settings-note">开启后本地配置修改将在 20 秒内自动上传；每 90 秒检查云端是否有更新，有则在左下角显示云朵提示。以 ncuid 为同步标识。</div>
+                <div class="settings-item">
+                    <span class="label">同步地址</span>
+                    <span class="value"><input type="text" id="syncUrlInput" placeholder="https://ockn.reverie.dpdns.org/api/cfg" style="max-width:280px;padding:4px 8px;border-radius:8px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;outline:none;"></span>
+                </div>
             </div>
         `;
         // 接口版本开关（设置 → 通用 → 接口版本）
@@ -13332,27 +13595,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         // 加载缓存大小
         loadCacheSize();
 
-        // ===== 数据迁移：导出/导入配置 =====
-        const CONFIG_EXCLUDE_KEYS = new Set([
-            'oc_access_token', 'oc_refresh_token', 'oc_user', 'oc_ws_pts',
-            'oldchat_device_id', 'oc_contacts_cache'
-        ]);
-        function isExcludedConfigKey(k) {
-            if (CONFIG_EXCLUDE_KEYS.has(k)) return true;
-            if (k.indexOf('cip_cache_') === 0) return true; // 小程序脚本缓存
-            return false;
-        }
-        function collectConfigData() {
-            const data = {};
-            try {
-                for (let i = 0; i < localStorage.length; i++) {
-                    const k = localStorage.key(i);
-                    if (!k || isExcludedConfigKey(k)) continue;
-                    data[k] = localStorage.getItem(k);
-                }
-            } catch (e) {}
-            return data;
-        }
+        // ===== 数据迁移：导出/导入配置（isExcludedConfigKey/collectConfigData 为模块级，见云同步控制器上方）=====
         document.getElementById('exportConfigBtn')?.addEventListener('click', async () => {
             const _invoke = getInvoke();
             if (!_invoke) { showAlert('当前环境不支持该功能（需在 Tauri 中运行）'); return; }
@@ -13400,6 +13643,24 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 showAlert('导入失败：' + ((e && e.message) || e));
             }
         });
+
+        // ===== 数据云同步设置绑定 =====
+        const syncToggle = document.getElementById('syncToggle');
+        const syncUrlInput = document.getElementById('syncUrlInput');
+        if (syncToggle) {
+            syncToggle.checked = getSyncSettings().enabled;
+            syncToggle.addEventListener('change', () => {
+                try { localStorage.setItem('oc_sync_enabled', syncToggle.checked ? '1' : '0'); } catch (e) {}
+                initConfigSync();
+            });
+        }
+        if (syncUrlInput) {
+            syncUrlInput.value = getSyncSettings().url;
+            syncUrlInput.addEventListener('change', () => {
+                try { localStorage.setItem('oc_sync_url', syncUrlInput.value.trim()); } catch (e) {}
+                initConfigSync();
+            });
+        }
     }
 
     async function loadCacheSize() {
