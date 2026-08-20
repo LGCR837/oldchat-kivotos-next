@@ -10165,7 +10165,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     }
 
 
-    async function sendMessage(body, msgType = 'text', mediaUrl = null, thumbUrl = null, burnAfterSeconds = 0) {
+    async function sendMessage(body, msgType = 'text', mediaUrl = null, thumbUrl = null, burnAfterSeconds = 0, durationMs = 0) {
         if (!currentConv) return;
 
         // 私聊用 displayUid（旧 uid）作为 to_uid，避免 NCUID 不被服务器接受
@@ -10225,6 +10225,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
               }, { to_uid: currentConv._sendToUid || currentConv.id, to_ncuid: currentConv.id });
         if (burnAfterSeconds && burnAfterSeconds > 0) {
             payload.burn_after_seconds = burnAfterSeconds;
+        }
+        if (durationMs && durationMs > 0) {
+            payload.duration_ms = durationMs; // voice/video 顶层时长字段（≤60000）
         }
 
         // 立即显示发送中消息（半透明）
@@ -11924,22 +11927,39 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     const urlInputSend = document.getElementById('urlInputSend');
     const urlInputTitle = document.querySelector('.url-input-title');
 
+    const urlMusicNameInput = document.getElementById('urlMusicNameInput');
+    const urlAudioDurInput = document.getElementById('urlAudioDurInput');
+
     function showUrlInput(mode) {
         urlInputMode = mode;
         if (mode === 'image') {
             urlInputTitle.textContent = '输入图片链接';
             urlImageInput.placeholder = 'https://...';
-        } else {
+            urlMusicNameInput.style.display = 'none';
+            urlAudioDurInput.style.display = 'none';
+        } else if (mode === 'voice') {
             urlInputTitle.textContent = '输入音频链接';
-            urlImageInput.placeholder = 'https://...';
+            urlImageInput.placeholder = 'https://...（音频直链）';
+            urlMusicNameInput.style.display = 'none';
+            urlAudioDurInput.style.display = '';
+        } else if (mode === 'music') {
+            urlInputTitle.textContent = '输入音乐名称与链接';
+            urlImageInput.placeholder = 'https://...（音频直链）';
+            urlMusicNameInput.style.display = '';
+            urlAudioDurInput.style.display = 'none';
         }
         urlInputOverlay.style.display = 'flex';
         urlImageInput.value = '';
-        urlImageInput.focus();
+        urlAudioDurInput.value = '';
+        urlMusicNameInput.value = '';
+        if (mode === 'music') urlMusicNameInput.focus();
+        else urlImageInput.focus();
     }
 
     sendUrlImageBtn.addEventListener('click', () => showUrlInput('image'));
     sendUrlVoiceBtn.addEventListener('click', () => showUrlInput('voice'));
+    const sendUrlMusicBtn = document.getElementById('sendUrlMusicBtn');
+    if (sendUrlMusicBtn) sendUrlMusicBtn.addEventListener('click', () => showUrlInput('music'));
 
     urlInputCancel.addEventListener('click', () => {
         urlInputOverlay.style.display = 'none';
@@ -11953,9 +11973,25 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (!url) { showAlert('请输入链接'); return; }
         // URL 格式校验：允许 http(s) 开头或 / 开头的相对路径
         if (!/^https?:\/\//i.test(url) && !/^\//.test(url)) { showAlert('请输入有效的 http(s) 链接或相对路径'); return; }
-        // 按 MCL0 官方文档：voice 消息使用 msg_type=voice + media_url，body 为空
-        const msgType = urlInputMode === 'image' ? 'image' : 'voice';
-        sendMessage('', msgType, url);
+        if (urlInputMode === 'voice') {
+            // voice 消息：msg_type=voice + media_url，body 为空；duration_ms 为顶层字段（≤60000）
+            const raw = Math.floor(Number(urlAudioDurInput.value) || 0);
+            const durSec = raw > 0 ? Math.min(raw, 60) : 60; // 留空默认 60 秒
+            sendMessage('', 'voice', url, null, 0, durSec * 1000);
+        } else if (urlInputMode === 'music') {
+            // 音乐卡片：resource 消息，body 为 media_kind=music 的 JSON（参考 MCL0 格式）
+            const name = urlMusicNameInput.value.trim() || '音乐';
+            const body = JSON.stringify({
+                media_kind: 'music',
+                audio_url: url,
+                text: '歌曲: ' + name + '\n点击播放',
+                url: url,
+                v: 2
+            });
+            sendMessage(body, 'resource', url);
+        } else {
+            sendMessage('', 'image', url);
+        }
         urlInputOverlay.style.display = 'none';
     });
     

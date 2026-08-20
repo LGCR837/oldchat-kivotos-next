@@ -212,6 +212,7 @@
                         <button id="sendFileBtn">上传文件</button>
                         <button id="sendUrlImageBtn">发送直链图片</button>
                         <button id="sendUrlVoiceBtn">发送直链音频</button>
+                        <button id="sendUrlMusicBtn">发送直链音乐卡片</button>
                         <button id="sendBurnBtn">阅后即焚</button>
                         <button id="sendRedPacketBtn">发红包</button>
                         <button id="emojiPlazaMoreBtn">表情包广场</button>
@@ -344,7 +345,9 @@
     <div class="url-input-overlay" id="urlInputOverlay" style="display:none;">
         <div class="url-input-dialog">
             <div class="url-input-title">输入图片链接</div>
+            <input type="text" id="urlMusicNameInput" placeholder="歌曲名称（发送音乐卡片）" style="display:none;">
             <input type="text" id="urlImageInput" placeholder="https://...">
+            <input type="number" id="urlAudioDurInput" placeholder="音频时长（秒，留空默认 60，≤60）" min="0" max="60" style="display:none;">
             <div class="url-input-actions">
                 <button id="urlInputCancel" class="btn">取消</button>
                 <button id="urlInputSend" class="btn primary">发送</button>
