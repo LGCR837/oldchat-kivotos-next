@@ -3543,8 +3543,8 @@ body::-webkit-scrollbar {
     color: var(--text);
 }
 .gm-set-row label { font-weight: 500; }
+/* danger 菜单项：仅红字（与编辑框右键「清空」一致），hover 走普通菜单柔和背景，不再红底白字 */
 .context-menu-item.danger { color: var(--danger); }
-.context-menu-item.danger:hover { background: var(--danger); color: #fff; }
 
 /* 阅后即焚气泡占位 */
 .burn-lock { color: var(--danger); cursor: pointer; }
@@ -5440,18 +5440,6 @@ body.sidebar-anim-off .sidebar-panel.side-slide-in .contact-item { animation: no
 .cip-badge-remote { background: rgba(120, 120, 120, 0.18); color: var(--secondary-text); }
 .cip-badge-granted { background: rgba(214, 48, 49, 0.18); color: #d63031; }
 
-.cip-app-del {
-    border: none;
-    background: transparent;
-    color: var(--secondary-text);
-    cursor: pointer;
-    padding: 2px 5px;
-    border-radius: 6px;
-    font-size: 13px;
-    flex-shrink: 0;
-}
-.cip-app-del:hover { background: rgba(255, 80, 80, 0.15); color: #ff6b6b; }
-
 /* ===== 下载进度弹窗（点击下载按钮即时反馈）===== */
 /* 下载进度弹窗内的进度条（弹窗外壳复用 .custom-modal 样式） */
 .dl-progress {
@@ -5662,3 +5650,58 @@ body.sidebar-bar-off .contact-item::before {
 }
 .oc-switch input:checked + .oc-switch-slider { background: var(--accent); }
 .oc-switch input:checked + .oc-switch-slider::before { transform: translateX(18px); }
+
+/* ===== 全局：所有侧边栏隐藏滚动条（保留滚动能力） =====
+   覆盖联系人/发现/频道/小程序等侧边栏容器；滚动仍可用，只是不显示滚动条 */
+.sidebar-panel,
+.contact-list,
+.cip-app-list,
+.discover-list,
+.channel-side {
+    scrollbar-width: none;        /* Firefox */
+    -ms-overflow-style: none;     /* IE / 旧 Edge */
+}
+.sidebar-panel::-webkit-scrollbar,
+.contact-list::-webkit-scrollbar,
+.cip-app-list::-webkit-scrollbar,
+.discover-list::-webkit-scrollbar,
+.channel-side::-webkit-scrollbar {
+    display: none;                /* WebKit / Chromium */
+}
+
+/* ===== 小程序「发现小程序」页（风格/动画参考频道发现页） ===== */
+.cip-discover {
+    max-width: 960px;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0 auto;
+}
+.cip-card-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: var(--discover-icon-fg, #fff);
+    background: var(--discover-icon-bg, #7aa2f7);
+}
+.cip-dl-btn {
+    font-size: 12px;
+    padding: 5px 10px;
+    border-radius: 8px;
+}
+.cip-discover-entry .msg-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    background: var(--discover-icon-bg);
+    color: var(--discover-icon-fg);
+}
+.cip-disc-card .channel-card-actions {
+    justify-content: center;
+}
+.cip-disc-card .cip-badge {
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+}

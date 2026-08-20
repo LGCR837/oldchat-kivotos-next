@@ -41,23 +41,89 @@
     return Promise.resolve(null); // 无 subtle 时跳过校验
   }
 
-  // 云端小程序文件缓存：默认 4h。存于 localStorage，键 cip_cache_<k>，值为 {ts,data}。
+  // 云端小程序缓存：manifest 清单缓存 4h；已下载小程序脚本永久缓存（版本不一致时由 checkRemoteUpdates 主动失效）。
   var CLOUD_CACHE_MS = 4 * 60 * 60 * 1000;
+  var APP_CACHE_MS = 0; // 0 = 不过期
   function cacheKey(k) { return 'cip_cache_' + k; }
-  function cacheGet(k) {
+  function cacheGet(k, ttlMs) {
     try {
       var s = localStorage.getItem(cacheKey(k));
       if (!s) return null;
       var o = JSON.parse(s);
       if (!o || typeof o.ts !== 'number' || !o.data) return null;
-      if (Date.now() - o.ts > CLOUD_CACHE_MS) return null; // 过期
+      if (ttlMs > 0 && Date.now() - o.ts > ttlMs) return null; // 仅 ttl>0 时过期；0/未传 = 永久
       return o.data;
     } catch (e) { return null; }
   }
-  function cacheSet(k, data) {
-    try { localStorage.setItem(cacheKey(k), JSON.stringify({ ts: Date.now(), data: data })); } catch (e) {}
+  function cacheSet(k, data, version) {
+    try { localStorage.setItem(cacheKey(k), JSON.stringify({ ts: Date.now(), data: data, version: version || '' })); } catch (e) {}
+  }
+  function cacheVersion(k) {
+    try {
+      var s = localStorage.getItem(cacheKey(k));
+      if (!s) return null;
+      var o = JSON.parse(s);
+      return (o && o.version) || null;
+    } catch (e) { return null; }
   }
   function cacheDrop(k) { try { localStorage.removeItem(cacheKey(k)); } catch (e) {} }
+
+  // 已订阅（已下载）的云端小程序：永久记录元数据，供侧边栏展示（不依赖 manifest 缓存）
+  function getSubs() { try { return JSON.parse(localStorage.getItem('cip_subs') || '{}') || {}; } catch (e) { return {}; } }
+  function saveSubs(subs) { try { localStorage.setItem('cip_subs', JSON.stringify(subs)); } catch (e) {} }
+  function isSubscribed(id) { return !!getSubs()[id]; }
+  function subscribeApp(app) {
+    var subs = getSubs();
+    subs[app.id] = {
+      name: app.name || app.id,
+      description: app.description || '',
+      version: app.version || '',
+      permissions: app.permissions || [],
+      allowed_hosts: app.allowed_hosts || []
+    };
+    saveSubs(subs);
+  }
+  // 版本检测：manifest 版本与已缓存/已订阅版本不一致 → 删脚本缓存并更新订阅版本（下次运行自动重拉）
+  function checkRemoteUpdates(remoteApps) {
+    var subs = getSubs();
+    var changed = false;
+    (remoteApps || []).forEach(function (a) {
+      var s = subs[a.id];
+      if (s && a.version && s.version && s.version !== a.version) {
+        cacheDrop('app_' + a.id);
+        s.version = a.version;
+        changed = true;
+      }
+    });
+    if (changed) saveSubs(subs);
+  }
+
+  // 兼容旧缓存/边缘情况：存在脚本缓存（已下载到本地）但无订阅记录的云端小程序，自动补订阅。
+  // 保证「已下载即显示在侧边栏」，即使此前版本（4h 缓存时代）下载过、没来得及订阅。
+  function backfillSubsFromCache(remoteApps) {
+    var subs = getSubs();
+    var changed = false;
+    var prefix = 'cip_cache_app_';
+    try {
+      for (var i = 0; i < localStorage.length; i++) {
+        var key = localStorage.key(i);
+        if (!key || key.indexOf(prefix) !== 0) continue;
+        var id = key.slice(prefix.length);
+        if (!id || subs[id]) continue;
+        var meta = null;
+        (remoteApps || []).forEach(function (a) { if (a.id === id) meta = a; });
+        subs[id] = {
+          name: (meta && meta.name) || id,
+          description: (meta && meta.description) || '',
+          version: (meta && meta.version) || cacheVersion('app_' + id) || '',
+          permissions: (meta && meta.permissions) || [],
+          allowed_hosts: (meta && meta.allowed_hosts) || []
+        };
+        changed = true;
+      }
+    } catch (e) {}
+    if (changed) saveSubs(subs);
+  }
 
   // 字节可读化（用于「下载量」显示）
   function fmtBytes(n) {
@@ -65,6 +131,13 @@
     if (n < 1024) return n + ' B';
     if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
     return (n / 1024 / 1024).toFixed(2) + ' MB';
+  }
+
+  // HTML 转义（发现页卡片渲染用）
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
   }
 
   // 服务端 manifest 条目 → 内部 app 对象
@@ -155,7 +228,13 @@
       Promise.allSettled([this.loadLocal(), this.loadRemote()]).then(function (r) {
         var list = [];
         if (r[0].status === 'fulfilled') list = list.concat(r[0].value);
-        if (r[1].status === 'fulfilled') list = list.concat(r[1].value);
+        if (r[1].status === 'fulfilled') {
+          list = list.concat(r[1].value);
+          // 云端清单到位后做版本检测：不一致则失效缓存（下次运行自动重拉）
+          checkRemoteUpdates(r[1].value);
+          // 兼容旧缓存：已下载未订阅的云端小程序自动补订阅，保证侧边栏显示
+          backfillSubsFromCache(r[1].value);
+        }
         self._list = list;
         self.renderList();
       });
@@ -179,7 +258,7 @@
     // 云端小程序（服务端 manifest），默认缓存 4h
     loadRemote: function (force) {
       if (!force) {
-        var cached = cacheGet('manifest');
+        var cached = cacheGet('manifest', CLOUD_CACHE_MS);
         if (cached && Array.isArray(cached.apps)) {
           return Promise.resolve(cached.apps.map(mapRemoteApp));
         }
@@ -193,64 +272,145 @@
     renderList: function () {
       var listEl = document.getElementById('cipAppList');
       listEl.innerHTML = '';
-      if (!this._list.length) { listEl.innerHTML = '<div class="cip-placeholder">没有可用小程序<br>点上方「上传本地小程序」试试</div>'; return; }
       var self = this;
-      this._list.forEach(function (app) {
-        var item = document.createElement('div');
-        item.className = 'contact-item cip-app-item';
-        item.dataset.id = app.id;
-        item.dataset.kind = app.kind;
+      // 顶部「发现小程序」入口：点击后右侧展示云端小程序列表（频道风格）
+      var disc = document.createElement('div');
+      disc.className = 'contact-item cip-discover-entry';
+      disc.innerHTML = '<div class="msg-avatar"><i class="fa-solid fa-compass"></i></div>' +
+        '<div class="contact-info"><div class="name">发现小程序</div><div class="uid">浏览云端小程序</div></div>';
+      disc.addEventListener('click', function () {
+        // 与 selectApp 一致：清除其它项高亮，选中「发现小程序」入口
+        Array.prototype.forEach.call(listEl.children, function (c) { c.classList.remove('active'); });
+        disc.classList.add('active');
+        self.renderDiscover();
+      });
+      listEl.appendChild(disc);
 
-        // 左侧图标：与发现页「小程序」入口一致（立方体 + 主题色圆底）
-        var avatar = document.createElement('div');
-        avatar.className = 'msg-avatar';
-        avatar.innerHTML = '<i class="fa-solid fa-cube"></i>';
+      // 本地小程序（用户上传）
+      this._list.filter(function (a) { return a.kind === 'local'; }).forEach(function (app) {
+        listEl.appendChild(self._buildListItem(app));
+      });
 
-        // 中间信息：名称 + 描述，复用联系人列表 .name / .uid 样式
-        var info = document.createElement('div');
-        info.className = 'contact-info';
-        var name = document.createElement('div');
-        name.className = 'name';
-        name.textContent = app.name || app.id;
-        var desc = document.createElement('div');
-        desc.className = 'uid';
-        desc.textContent = app.description || '';
-        info.appendChild(name);
-        info.appendChild(desc);
+      // 已订阅云端小程序：从订阅记录恢复（永久），不依赖 manifest 缓存
+      var subs = getSubs();
+      Object.keys(subs).forEach(function (id) {
+        var s = subs[id];
+        listEl.appendChild(self._buildListItem({
+          id: id,
+          name: s.name,
+          description: s.description,
+          version: s.version,
+          permissions: s.permissions,
+          allowed_hosts: s.allowed_hosts,
+          kind: 'remote'
+        }));
+      });
 
-        // 右侧：来源徽标 + （本地）删除按钮
-        var right = document.createElement('div');
-        right.style.display = 'flex';
-        right.style.alignItems = 'center';
-        right.style.gap = '6px';
-        right.style.flexShrink = '0';
-        var badge = document.createElement('span');
-        badge.className = 'cip-badge ' + (app.kind === 'local' ? 'cip-badge-local' : 'cip-badge-remote');
-        badge.textContent = app.kind === 'local' ? '本地' : '云端';
-        // 已「赋予所有权限 / 退出沙箱」的云端小程序：徽标加标记，提示用户
-        if (app.kind === 'remote' && isGrantedAll(app.id)) {
-          badge.classList.add('cip-badge-granted');
-          badge.title = '已赋予全部权限（退出沙箱运行）';
-          badge.textContent = '云端·全权限';
+      if (!this._list.some(function (a) { return a.kind === 'local'; }) && !Object.keys(subs).length) {
+        // 保留顶部「发现小程序」入口，仅追加空态提示
+        var ph = document.createElement('div');
+        ph.className = 'cip-placeholder';
+        ph.innerHTML = '没有可用小程序<br>点上方「上传本地小程序」或「发现小程序」试试';
+        listEl.appendChild(ph);
+        return;
+      }
+    },
+    _buildListItem: function (app) {
+      var self = this;
+      var item = document.createElement('div');
+      item.className = 'contact-item cip-app-item';
+      item.dataset.id = app.id;
+      item.dataset.kind = app.kind;
+
+      // 左侧图标：与发现页「小程序」入口一致（立方体 + 主题色圆底）
+      var avatar = document.createElement('div');
+      avatar.className = 'msg-avatar';
+      avatar.innerHTML = '<i class="fa-solid fa-cube"></i>';
+
+      // 中间信息：名称 + 描述，复用联系人列表 .name / .uid 样式
+      var info = document.createElement('div');
+      info.className = 'contact-info';
+      var name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = app.name || app.id;
+      var desc = document.createElement('div');
+      desc.className = 'uid';
+      desc.textContent = app.description || '';
+      info.appendChild(name);
+      info.appendChild(desc);
+
+      // 右侧：来源徽标 + （本地）删除按钮
+      var right = document.createElement('div');
+      right.style.display = 'flex';
+      right.style.alignItems = 'center';
+      right.style.gap = '6px';
+      right.style.flexShrink = '0';
+      var badge = document.createElement('span');
+      badge.className = 'cip-badge ' + (app.kind === 'local' ? 'cip-badge-local' : 'cip-badge-remote');
+      badge.textContent = app.kind === 'local' ? '本地' : '云端';
+      // 已「赋予所有权限 / 退出沙箱」的云端小程序：徽标加标记，提示用户
+      if (app.kind === 'remote' && isGrantedAll(app.id)) {
+        badge.classList.add('cip-badge-granted');
+        badge.title = '已赋予全部权限（退出沙箱运行）';
+        badge.textContent = '云端·全权限';
+      }
+      right.appendChild(badge);
+
+      item.appendChild(avatar);
+      item.appendChild(info);
+      item.appendChild(right);
+      item.addEventListener('click', function () { self.selectApp(app, item); });
+      return item;
+    },
+    // 「发现小程序」：右侧渲染云端小程序列表（风格/动画参考频道发现页）
+    renderDiscover: function () {
+      var self = this;
+      var area = document.getElementById('cipRunArea');
+      area.innerHTML = '<div class="cip-placeholder">加载小程序清单…</div>';
+      // 强制刷新 manifest，保证版本检测及时
+      this.loadRemote(true).then(function (apps) {
+        checkRemoteUpdates(apps);
+        backfillSubsFromCache(apps);
+        var remote = apps.filter(function (a) { return a.kind === 'remote'; });
+        if (!remote.length) {
+          area.innerHTML = '<div class="cip-placeholder">云端暂时没有小程序</div>';
+          return;
         }
-        right.appendChild(badge);
-        if (app.kind === 'local') {
-          var del = document.createElement('button');
-          del.className = 'cip-app-del';
-          del.title = '删除小程序';
-          del.innerHTML = '<i class="fa-solid fa-trash"></i>';
-          del.addEventListener('click', function (e) {
-            e.stopPropagation();
-            self.deleteApp(app, item);
+        area.innerHTML = '';
+        var wrap = document.createElement('div');
+        wrap.className = 'cip-discover';
+        var head = document.createElement('div');
+        head.className = 'channel-browser-head';
+        head.innerHTML = '<h2>发现小程序</h2>';
+        wrap.appendChild(head);
+        var list = document.createElement('div');
+        list.className = 'channel-list';
+        remote.forEach(function (app, i) {
+          var dl = cacheGet('app_' + app.id, APP_CACHE_MS);
+          var card = document.createElement('div');
+          card.className = 'channel-card cip-disc-card';
+          card.style.animationDelay = (i * 40) + 'ms';
+          var actionsHtml = dl
+            ? '<span class="cip-badge cip-badge-remote">已下载</span>'
+            : '<button class="btn primary cip-dl-btn"><i class="fa-solid fa-download"></i> 下载</button>';
+          card.innerHTML =
+            '<div class="channel-card-avatar cip-card-avatar"><i class="fa-solid fa-cube"></i></div>' +
+            '<div class="channel-card-info">' +
+              '<div class="name">' + esc(app.name) + '</div>' +
+              '<div class="meta">v' + esc(app.version || '?') + ' · 云端</div>' +
+              (app.description ? '<div class="desc">' + esc(app.description) + '</div>' : '') +
+            '</div>' +
+            '<div class="channel-card-actions">' + actionsHtml + '</div>';
+          card.addEventListener('click', function () {
+            // 下载并运行；完成后自动订阅并刷新侧边栏
+            self.runApp(app, false);
           });
-          right.appendChild(del);
-        }
-
-        item.appendChild(avatar);
-        item.appendChild(info);
-        item.appendChild(right);
-        item.addEventListener('click', function () { self.selectApp(app, item); });
-        listEl.appendChild(item);
+          list.appendChild(card);
+        });
+        wrap.appendChild(list);
+        area.appendChild(wrap);
+      }).catch(function (err) {
+        area.innerHTML = '<div class="cip-error">加载失败：' + ((err && err.message) || err) + '</div>';
       });
     },
     selectApp: function (app, itemEl) {
@@ -280,11 +440,11 @@
         });
         return;
       }
-      // 云端小程序：优先读缓存（默认 4h），否则流式下载 + 进度 + sha256 校验；资源走 /lua-assets/<id>/<path>
+      // 云端小程序：优先读永久缓存，否则流式下载 + 进度 + sha256 校验；资源走 /lua-assets/<id>/<path>
       var prog = this._showLoading(area, app);
-      var cached = force ? null : cacheGet('app_' + app.id);
+      var cached = force ? null : cacheGet('app_' + app.id, APP_CACHE_MS);
       if (cached && cached.script) {
-        prog.note('已从缓存读取（4h 内有效，右键可刷新）');
+        prog.note('已从缓存读取（永久缓存，版本更新自动重拉）');
         prog.done();
         this._executeFromData(app, cached);
         return;
@@ -299,7 +459,10 @@
           try { data = JSON.parse(text); } catch (e) { throw new Error('响应不是合法 JSON'); }
           var script = data && data.script;
           if (!script) { area.innerHTML = '<div class="cip-error">脚本为空</div>'; return; }
-          cacheSet('app_' + app.id, data);
+          cacheSet('app_' + app.id, data, app.version);
+          // 下载成功即订阅（永久），并刷新侧边栏使该小程序出现
+          subscribeApp(app);
+          self.renderList();
           prog.note('校验中…');
           sha256Hex(script).then(function (hash) {
             var expected = (data.sha256 || '').toLowerCase();
@@ -447,6 +610,23 @@
     },
     deleteApp: function (app, itemEl) {
       var self = this;
+      if (app.kind === 'remote') {
+        // 云端小程序：删除订阅记录 + 清除脚本缓存；若正在运行则停止并清空运行区
+        var subs = getSubs();
+        delete subs[app.id];
+        saveSubs(subs);
+        cacheDrop('app_' + app.id);
+        if (self._lastApp && self._lastApp.id === app.id) {
+          self._teardown();
+          self._lastApp = null;
+          var area = document.getElementById('cipRunArea');
+          if (area) area.innerHTML = '<div class="cip-placeholder">从左侧选择一个小程序</div>';
+        }
+        self.toast('已删除「' + (app.name || app.id) + '」');
+        self.renderList();
+        return;
+      }
+      // 本地小程序：Rust 侧删除文件
       cipInvoke('delete_cip_app', { id: app.id }).then(function () {
         if (itemEl && itemEl.parentNode) itemEl.parentNode.removeChild(itemEl);
         self.toast('已删除「' + (app.name || app.id) + '」');
@@ -588,6 +768,8 @@
     } else {
       items.push({ label: '赋予所有权限', run: function () { _requestGrantAll(app); } });
     }
+    // 删除：本地=删文件；云端=删订阅+缓存（均允许）
+    items.push({ label: '删除', danger: true, run: function () { Controller.deleteApp(app, null); } });
     _openNativeMenu(items, x, y);
   }
   function _requestGrantAll(app) {
@@ -627,6 +809,8 @@
     if (app.kind === 'remote') {
       items.push({ label: '重新下载', run: function () { cacheDrop('app_' + app.id); Controller.runApp(app, true); } });
     }
+    // 删除：本地=删文件；云端=删订阅+缓存（均允许）
+    items.push({ label: '删除', danger: true, run: function () { Controller.deleteApp(app, null); } });
     _openNativeMenu(items, x, y);
   }
 
