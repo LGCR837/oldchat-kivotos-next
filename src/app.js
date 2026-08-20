@@ -6125,6 +6125,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             fetchProfileBatch();
             // 加载未读计数（同步等待，避免后续 switchConversation 清红点后被覆盖）
             await loadUnreadCounts();
+            // 联系人数据就绪后刷新副标题：修正启动早期 lookupName 未命中时写入的 ncuid 占位
+            refreshAllContactSubtitles();
             // 多会话消息接受：首次联系人加载完成后，对所有会话做一次静默补拉，补回离线期间漏掉的消息
             if (isMultiSessionEnabled()) backfillAllConversations();
         } catch (e) { console.error(e); }
@@ -6875,8 +6877,26 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (m) { lookupNameCache.set(upper, m.name); return m.name; }
         const cached = userProfileCache.get(upper);
         if (cached) { const n = cached.display_name || cached.username || uid; lookupNameCache.set(upper, n); return n; }
-        lookupNameCache.set(upper, uid);
+        // 找不到时【不写入缓存】：应用启动早期联系人/群成员/资料缓存可能尚未就绪，
+        // 若把 uid 缓存住会永久显示 ncuid；待数据就绪后再次查询即可返回真名。
         return uid;
+    }
+
+    // 侧边栏预览 sender 名字未知时：异步按 uid/ncuid 补拉用户资料，成功后刷新副标题。
+    // 覆盖非好友群成员、未加载群成员等场景（fetchUserProfile 自带并发去重/无效缓存/失败可重试）
+    const pendingSidebarNameFetches = new Set();
+    function fetchNameForSidebar(fromNcuid, fromUid) {
+        const id = fromNcuid || fromUid;
+        if (!id) return;
+        const upper = String(id).toUpperCase();
+        if (pendingSidebarNameFetches.has(upper)) return;
+        if (userProfileCache.has(upper)) return;
+        if (invalidUidCache.has(upper)) return;
+        pendingSidebarNameFetches.add(upper);
+        fetchUserProfile(fromUid, fromNcuid).catch(() => {}).then(() => {
+            pendingSidebarNameFetches.delete(upper);
+            refreshAllContactSubtitles();
+        });
     }
 
     const lookupAvatarCache = new Map();
@@ -6976,7 +6996,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     function buildSidebarPreviewText(convKey, msg, type) {
         const preview = messagePreview(msg) || '';
         if (type === 'group') {
-            const sender = msg.from_name || lookupName(msg.from_ncuid || msg.from_uid) || '';
+            const rawId = msg.from_ncuid || msg.from_uid;
+            const sender = msg.from_name || lookupName(rawId) || '';
+            // sender 仍为原始 id（未命中真名：非好友、非已加载群成员）→ 异步补拉资料，拉回后刷新副标题
+            if (rawId && sender && sender.toUpperCase() === String(rawId).toUpperCase()) {
+                fetchNameForSidebar(msg.from_ncuid, msg.from_uid);
+            }
             return (sender ? sender + '：' : '') + preview;
         }
         return preview;
@@ -7010,6 +7035,17 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const text = computeContactSubtitle(type, id, displayId);
         if (text === null) { sub.style.display = 'none'; sub.textContent = ''; }
         else { sub.style.display = ''; sub.textContent = text; }
+    }
+
+    // 批量就地刷新所有会话副标题（不重建整列）。用于联系人/群成员等数据就绪后，
+    // 修正启动早期 lookupName 未命中时写入的 ncuid 占位文本。
+    function refreshAllContactSubtitles() {
+        if (!contactList) return;
+        const items = contactList.querySelectorAll('.contact-item[data-conv-key]');
+        items.forEach(function (el) {
+            const key = el.dataset.convKey;
+            if (key) updateContactSubtitle(key);
+        });
     }
 
     // 记录某会话最近一条消息（仅在更晚时覆盖），并就地刷新副标题/重排顺序
@@ -10433,6 +10469,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (cached && Date.now() - cached.ts < GROUP_MEMBERS_CACHE_TTL) {
             groupMembers = cached.members;
             mentionMembers = cached.members;
+            refreshAllContactSubtitles();
             return;
         }
         try {
@@ -10459,6 +10496,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             groupMembers = members;
             mentionMembers = members;
             groupMembersCache.set(groupId, { members, ts: Date.now() });
+            // 群成员就绪后刷新副标题：修正该群预览中此前未命中的 ncuid 占位
+            refreshAllContactSubtitles();
         } catch (e) {
             mentionMembers = [];
             groupMembers = [];
