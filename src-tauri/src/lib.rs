@@ -1074,14 +1074,21 @@ pub fn run() {
     });
 
     // 单实例：仅桌面端（移动端无此概念，且该插件 API 为桌面专属）
+    // 启动参数 -n / --new：强制启动一个新的窗口实例（跳过单实例注册，允许多开）
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.unminimize();
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
-    }));
+    let force_new_window = std::env::args().any(|a| a == "-n" || a == "--new");
+    #[cfg(desktop)]
+    let builder = if force_new_window {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
+    };
 
     // 拦截窗口关闭请求改为隐藏到托盘：仅桌面端
     #[cfg(desktop)]
