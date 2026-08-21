@@ -202,6 +202,10 @@ const V1_TO_V2 = {
     '/v1/users/profile': '/v2/users/profile',
     '/v1/chats/typing': '/v2/chats/typing',
     '/v1/buttons/callback': '/v2/buttons/callback',
+    // 好友（v1 路由已弃用，迁移到 v2；好友请求/添加已实测 503，好友列表启动即加载）
+    '/v1/friends': '/v2/friends',
+    '/v1/friends/requests': '/v2/friends/requests',
+    '/v1/friends/request': '/v2/friends/request',
     // 频道 / 文件（v2 新增端点，客户端暂未接入，先占位保证未来直接可用）
     '/v1/channels/subscribe': '/v2/channels/subscribe',
     '/v1/channels/unsubscribe': '/v2/channels/unsubscribe',
