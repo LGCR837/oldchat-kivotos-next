@@ -218,8 +218,10 @@ const V1_TO_V2 = {
     '/v1/resources/upload': '/v2/resources/upload',
     '/v1/resources/download': '/v2/resources/download',
     // 未读 / 差量 / 网关（v2 新增端点，客户端暂未接入，先占位保证未来直接可用）
-    '/v1/unread/direct': '/v2/unread/direct',
-    '/v1/unread/groups': '/v2/unread/groups',
+    // 注意：客户端实际调用路径是 /v1/direct/unread、/v1/groups/unread（词序与 v2 相反），
+    // mapToV2 为精确匹配，键必须与调用路径一致，否则永远命中不了 v2 兜底。
+    '/v1/direct/unread': '/v2/unread/direct',
+    '/v1/groups/unread': '/v2/unread/groups',
     '/v1/updates/difference': '/v2/updates/difference',
     '/v1/gateway': '/v2/gateway'
 };
