@@ -343,15 +343,15 @@
 
     // ===== 群管理（app.js:3995/4082/4100/4116/4183/4189/4212/4215/4288/4472/7685）=====
     // 均为动作类 POST/管理操作，body 各异，透传不归一化；返回原始 JSON 供调用方判断
+    // 注意：后端 kick/admin/invite 的 user_uid 与 user_ncuid 独立校验，必须双写，任一缺失报 "uid or ncuid is required"
     async leaveGroup(groupId) {
       return _post('/v1/groups/leave', { group_id: groupId });
     },
-    async kickGroupMember(groupId, uid) {
-      // uid 为 NCUID 或旧 uid；后端 kick 接受 user_uid 字段（旧 uid）
-      return _post('/v1/groups/kick', { group_id: groupId, user_uid: uid });
+    async kickGroupMember({ groupId, userUid, userNcuid }) {
+      return _post('/v1/groups/kick', { group_id: groupId, user_uid: userUid, user_ncuid: userNcuid });
     },
-    async setGroupAdmin(groupId, uid, role) {
-      return _post('/v1/groups/admin', { group_id: groupId, user_uid: uid, role });
+    async setGroupAdmin({ groupId, userUid, userNcuid, admin }) {
+      return _post('/v1/groups/admin', { group_id: groupId, user_uid: userUid, user_ncuid: userNcuid, admin: !!admin });
     },
     async dissolveGroup(groupId) {
       return _post('/v1/groups/dissolve', { group_id: groupId });
@@ -362,12 +362,12 @@
     async renameGroup(groupId, name) {
       return _post('/v1/groups/name', { group_id: groupId, name });
     },
-    async uploadGroupAvatar(groupId, formData) {
-      const r = await apiFetch('/v1/groups/avatar', { method: 'POST', body: formData });
-      return _parse(r);
+    // 群头像：上传是「先 /v1/media 拿 URL → 再 JSON 写回 avatar_url」，此处收口第二步
+    async updateGroupAvatar({ groupId, avatarUrl }) {
+      return _post('/v1/groups/avatar', { group_id: groupId, avatar_url: avatarUrl });
     },
-    async inviteToGroup(groupId, uid) {
-      return _post('/v1/groups/invite', { group_id: groupId, user_uid: uid });
+    async inviteToGroup({ groupId, userUid, userNcuid }) {
+      return _post('/v1/groups/invite', { group_id: groupId, user_uid: userUid, user_ncuid: userNcuid });
     },
     async joinGroup(groupId) {
       return _post('/v1/groups/join', { group_id: groupId });

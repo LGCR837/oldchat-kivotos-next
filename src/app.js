@@ -3460,12 +3460,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                             try {
                                 let imageUrl = '';
                                 if (file) {
-                                    const upFd = new FormData();
-                                    upFd.append('file', file);
-                                    const upRes = await apiFetch('/v1/media', { method: 'POST', body: upFd });
-                                    const upData = await upRes.json();
-                                    if (upData.error) { showAlert(upData.error); momentBtn.disabled = false; momentBtn.textContent = '发布'; return; }
-                                    imageUrl = upData.url || '';
+                                const upFd = new FormData();
+                                upFd.append('file', file);
+                                const upData = await OC.uploadMedia(upFd);
+                                if (upData.error) { showAlert(upData.error); momentBtn.disabled = false; momentBtn.textContent = '发布'; return; }
+                                imageUrl = upData.url || '';
                                 }
                                 const d = await OC.postMoment({ body: text, imageUrl });
                                 if (d && d.error) { showAlert(d.error); momentBtn.disabled = false; momentBtn.textContent = '发布'; return; }
@@ -3906,13 +3905,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (!await showConfirm('确定要退出该群聊吗？')) return;
                     if (!await showConfirm('再次确认：退出后将不再接收该群的新消息。')) return;
                     try {
-                        const r = await apiFetch('/v1/groups/leave', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({ group_id: groupId })
-                        });
-                        const d = await r.json();
-                        if (d.error) { showAlert(d.error); return; }
+                        const d = await OC.leaveGroup(groupId);
+                        if (d && d.error) { showAlert(d.error); return; }
                         overlay.remove();
                         contacts.groups = contacts.groups.filter(g => g.id !== groupId);
                         renderContacts();
@@ -11392,9 +11386,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             plazaLoading = true;
             loadMoreBtn.innerHTML = '<span class="oc-spinner sm" style="vertical-align:-2px;margin-right:6px;"></span>加载中…';
             try {
-                const res = await apiFetch(`/v1/emoji/plaza?limit=20&offset=${plazaOffset}`);
-                const data = await res.json();
-                const items = data.items || [];
+                const data = await OC.getEmojiPlazaPage({ limit: 20, offset: plazaOffset });
+                const items = data.items || data.emojis || [];
                 if (items.length === 0) {
                     plazaHasMore = false;
                     loadMoreBtn.textContent = '没有更多了';
@@ -11429,21 +11422,13 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         favBtn.disabled = true;
                         try {
                             if (wasFaved) {
-                                await apiFetch('/v1/emoji/plaza/delete', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ id: itemId })
-                                });
+                                await OC.deleteEmoji(itemId);
                                 delete plazaFavState[itemId];
                                 favBtn.classList.remove('faved');
                                 favBtn.textContent = '☆';
                                 favBtn.title = '收藏到我的表情';
                             } else {
-                                await apiFetch('/v1/emoji/plaza/save', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ id: itemId })
-                                });
+                                await OC.saveEmoji({ id: itemId });
                                 plazaFavState[itemId] = true;
                                 favBtn.classList.add('faved');
                                 favBtn.textContent = '★';
