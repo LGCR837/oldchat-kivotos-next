@@ -208,7 +208,35 @@
       return _parse(r);
     },
 
-    // ===== 动态 moments（TODO: 对应行 3219/3229/3444/3528/3610/3654）=====
+    // ===== 动态 moments（已读码，app.js:3219/3229/3444/3528/3610/3654）=====
+    // 返回 raw：调用方直接用 data.moments / comments 原始字段（from_name/avatar_url 等），不归一化。
+    async getUserMoments({ ncuid, uid, limit = 50 } = {}) {
+      // 优先 ncuid 路径（ncuid 不能传入 ?uid=，会 400），失败回退 uid（保持原双路径回退语义）
+      if (ncuid) {
+        try {
+          const d = await _get(`/v1/moments/user?ncuid=${encodeURIComponent(ncuid)}&limit=${limit}`);
+          if (d && !d.error) return d;
+        } catch (e) {}
+      }
+      if (uid) {
+        try {
+          const d = await _get(`/v1/moments/user?uid=${encodeURIComponent(uid)}&limit=${limit}`);
+          if (d && !d.error) return d;
+        } catch (e) {}
+      }
+      return null;
+    },
+    async getMomentComments(momentId) {
+      const d = await _get(`/v1/moments/comments?moment_id=${encodeURIComponent(momentId)}`);
+      return d.comments || [];
+    },
+    async postMoment({ body, imageUrl = '' }) {
+      return _post('/v1/moments', { body, image_url: imageUrl });
+    },
+    async postMomentComment({ momentId, body }) {
+      return _post('/v1/moments/comment', { moment_id: momentId, body });
+    },
+
     // ===== 红包 redpackets（TODO: 对应行 10114/10169/10234/11312）=====
     // ===== 签到墙 checkin wall（TODO: 对应行 13122/13183/13198/13253/13316/13394/3727/3773）=====
     // ===== 公审庭 public-court（TODO: 对应行 15418/15439/15453/15454/15547/15565/15579/15592）=====
@@ -216,7 +244,20 @@
     // ===== 媒体上传 media（TODO: 对应行 3523/4212/10330/14836）=====
     // ===== 资源广场 resources（v1 临时关闭，暂缓；对应行 15628/15674/15727/15774/15809/15888/15904/15939/15962/15984）=====
     // ===== 通知 notifications（TODO: 对应行 13548）=====
-    // ===== 收藏 favorites（TODO: 对应行 1420/13989/14016）=====
+    // ===== 收藏 favorites（app.js:1420/13881/13908）=====
+    async getFavorites(limit = 100) {
+      const d = await _get('/v1/favorites?limit=' + limit);
+      return d.items || (d.data && d.data.items) || [];
+    },
+    async addFavorite(body) {
+      // body 字段复杂（type/target_id/title/subtitle/media_url/extra），透传不归一化
+      return _post('/v1/favorites/add', body);
+    },
+    async removeFavorite(id) {
+      return _post('/v1/favorites/remove', { id });
+    },
+
+    // ===== 用户资料 users/profile（TODO: 对应行 3193/4364/6059/6067/6076）=====
     // ===== 用户资料 users/profile（TODO: 对应行 3193/4364/6059/6067/6076）=====
     // ===== 音乐广场 music/plaza（app.js:2512/2933）=====
     // 上传为 FormData（非 JSON），单独走 apiFetch 直接发，再 _parse 兜 error
@@ -228,6 +269,36 @@
       const d = await _get('/v1/music/plaza/detail?id=' + encodeURIComponent(itemId));
       // 兼容响应嵌套：详情可能包在 item/data 字段里
       return d.item || d.data || d;
+    },
+
+    // ===== 用户资料 users/profile（app.js:3184/4306/4433/4463/4491/5963/5971/5980）=====
+    // 双路径回退：ncuid 优先（ncuid 不能传 ?uid= 会 400），失败回退 uid
+    async getUserProfile({ ncuid, uid } = {}) {
+      if (ncuid) {
+        try {
+          const d = await _get('/v1/users/profile?ncuid=' + encodeURIComponent(ncuid));
+          if (d && !d.error) return d;
+        } catch (e) {}
+      }
+      if (uid) {
+        try {
+          const d = await _get('/v1/users/profile?uid=' + encodeURIComponent(uid));
+          if (d && !d.error) return d;
+        } catch (e) {}
+      }
+      return null;
+    },
+    async updateMyProfile(patch) {
+      return _post('/v1/me/profile', patch);
+    },
+    async updateMyUid(uid) {
+      return _post('/v1/me/uid', { uid });
+    },
+
+    // ===== 通知 notifications（app.js:13427）=====
+    async getNotifications(limit = 50) {
+      const d = await _get('/v1/notifications?limit=' + limit);
+      return d.notifications || d.items || [];
     },
 
     // ===== 动态 moments（TODO: 对应行 3219/3229/3444/3528/3610/3654）=====

@@ -1417,20 +1417,15 @@ async function addMessageToFavorites(msgDiv) {
         title = (rawMsg.title || '音乐') + (fromName ? ' · ' + fromName : '');
     }
     try {
-        const res = await apiFetch('/v1/favorites/add', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                type: msgType,
-                target_id: msgDiv.dataset.msgId,
-                title: title,
-                subtitle: convName,
-                media_url: mediaUrl,
-                extra: JSON.stringify(rawMsg)
-            })
+        const data = await OC.addFavorite({
+            type: msgType,
+            target_id: msgDiv.dataset.msgId,
+            title: title,
+            subtitle: convName,
+            media_url: mediaUrl,
+            extra: JSON.stringify(rawMsg)
         });
-        const data = await res.json();
-        if (data.error) { showAlert(data.error); return; }
+        if (data && data.error) { showAlert(data.error); return; }
         showAlert('已收藏到收藏夹');
     } catch (e) { showAlert('收藏失败'); }
 }
@@ -2509,9 +2504,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             musicUploadBtn.disabled = true;
             musicUploadBtn.innerHTML = '<span class="oc-spinner sm" style="vertical-align:-2px;margin-right:6px;"></span>上传中...';
             try {
-                const res = await apiFetch('/v1/music/plaza/upload', { method: 'POST', body: fd });
-                const d = await res.json();
-                if (d.error) { showAlert(d.error); }
+                const d = await OC.uploadMusicPlaza(fd);
+                if (d && d.error) { showAlert(d.error); }
                 else {
                     showAlert('上传成功');
                     // 歌词随上传表单的 lyrics 字段一起提交（与官方客户端行为一致：
@@ -2930,11 +2924,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const lrcContainer = musicWorkspace?.querySelector('.music-lyrics-container');
         if (!itemId) { if (lrcContainer) lrcContainer.style.display = 'none'; return; }
         try {
-            const res = await apiFetch('/v1/music/plaza/detail?id=' + encodeURIComponent(itemId));
-            const data = await res.json();
-            if (data.error) { if (lrcContainer) lrcContainer.style.display = 'none'; return; }
-            // 兼容响应嵌套：详情可能包在 item/data 字段里
-            const song = data.item || data.data || data;
+            const song = await OC.getMusicPlazaDetail(itemId);
+            if (!song || song.error) { if (lrcContainer) lrcContainer.style.display = 'none'; return; }
             const lrcText = song.lyrics || song.lrc || song.lyrics_text || '';
             if (song.lyrics_url) {
                 loadMusicLyrics(song.lyrics_url);
@@ -3212,28 +3203,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // 尝试获取动态：优先用 ncuid，失败则用 uid
         async function fetchMomentsForPanel() {
-            let data = null;
-            // 优先 ncuid 路径（注意：ncuid 不能传入 ?uid=，会 400）
-            if (ncuid) {
-                try {
-                    const res = await apiFetch('/v1/moments/user?ncuid=' + encodeURIComponent(ncuid) + '&limit=50');
-                    if (res.ok) {
-                        const d = await res.json();
-                        if (d && !d.error) data = d;
-                    }
-                } catch (e) {}
-            }
-            // 失败则 uid 路径
-            if (!data && uid) {
-                try {
-                    const res = await apiFetch('/v1/moments/user?uid=' + encodeURIComponent(uid) + '&limit=50');
-                    if (res.ok) {
-                        const d = await res.json();
-                        if (d && !d.error) data = d;
-                    }
-                } catch (e) {}
-            }
-            return data;
+            return await OC.getUserMoments({ ncuid, uid, limit: 50 });
         }
 
         async function load() {
@@ -3439,10 +3409,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                         if (!momentId) return;
                         const cur = parseInt((btn.textContent || '').replace(/\D/g, '')) || 0;
                         if (cur > 0) return; // 服务端已给非零计数则信任之，跳过
-                        apiFetch('/v1/moments/comments?moment_id=' + encodeURIComponent(momentId))
-                            .then(r => r.json())
-                            .then(data => {
-                                const n = (data.comments || []).length;
+                        OC.getMomentComments(momentId)
+                            .then(comments => {
+                                const n = (comments || []).length;
                                 btn.innerHTML = '<i class="fa-solid fa-comment"></i> ' + n;
                             })
                             .catch(() => {});
@@ -3519,9 +3488,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                                     if (upData.error) { showAlert(upData.error); momentBtn.disabled = false; momentBtn.textContent = '发布'; return; }
                                     imageUrl = upData.url || '';
                                 }
-                                const r = await apiFetch('/v1/moments', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({body: text, image_url: imageUrl}) });
-                                const d = await r.json();
-                                if (d.error) { showAlert(d.error); momentBtn.disabled = false; momentBtn.textContent = '发布'; return; }
+                                const d = await OC.postMoment({ body: text, imageUrl });
+                                if (d && d.error) { showAlert(d.error); momentBtn.disabled = false; momentBtn.textContent = '发布'; return; }
                                 load();
                             } catch(e) { showAlert('发布失败'); momentBtn.disabled = false; momentBtn.textContent = '发布'; }
                         });
@@ -3601,13 +3569,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         async function loadComments() {
             scrollEl.innerHTML = loadingHtml('加载中...');
             try {
-                const res = await apiFetch('/v1/moments/comments?moment_id=' + encodeURIComponent(momentId));
-                const data = await res.json();
-                if (data.error) {
-                    scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">' + escapeHtml(data.error) + '</div>';
+                const comments = await OC.getMomentComments(momentId);
+                if (!comments || !Array.isArray(comments)) {
+                    scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">加载失败</div>';
                     return;
                 }
-                const comments = data.comments || [];
                 if (comments.length === 0) {
                     scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">还没有评论，快来抢沙发~</div>';
                     return;
@@ -3645,13 +3611,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             sendBtn.disabled = true;
             sendBtn.textContent = '...';
             try {
-                const res = await apiFetch('/v1/moments/comment', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ moment_id: momentId, body: text })
-                });
-                const data = await res.json();
-                if (data.error) { showAlert(data.error); return; }
+                const data = await OC.postMomentComment({ momentId, body: text });
+                if (data && data.error) { showAlert(data.error); return; }
                 inputEl.value = '';
                 // 更新按钮上的评论计数
                 if (triggerBtn) {
@@ -13904,9 +13865,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         async function loadFavs() {
             listEl.innerHTML = '<div class="court-loading">加载中...</div>';
             try {
-                const res = await apiFetch('/v1/favorites?limit=100');
-                const data = await res.json();
-                const items = data.items || (data.data && data.data.items) || [];
+                const items = await OC.getFavorites(100);
                 const countEl = document.getElementById('favFolderCount');
                 if (countEl) countEl.textContent = '共 ' + items.length + ' 项';
                 if (!items.length) {
@@ -13931,12 +13890,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         e.stopPropagation();
                         if (!await showConfirm('从收藏夹移除该项？')) return;
                         try {
-                            const r = await apiFetch('/v1/favorites/remove', {
-                                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ id: item.dataset.id })
-                            });
-                            const d = await r.json();
-                            if (d.error) { showAlert(d.error); return; }
+                            const d = await OC.removeFavorite(item.dataset.id);
+                            if (d && d.error) { showAlert(d.error); return; }
                             loadFavs();
                         } catch (err) { showAlert('移除失败'); }
                     });
