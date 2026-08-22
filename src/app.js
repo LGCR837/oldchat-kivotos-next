@@ -13016,18 +13016,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 btn.disabled = true;
                 btn.textContent = '刮奖中...';
                 try {
-                    const res = await apiFetch('/v1/me/scratch', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: '{}'
-                    });
-                    const rtext = await res.text();
-                    let rd = {};
-                    try { rd = JSON.parse(rtext); } catch (e) {}
-                    if (rd && typeof rd.body === 'string') { try { rd = JSON.parse(rd.body); } catch (e) {} }
-                    if (res.status >= 400 || rd.error) {
+                    const { status, data: rd } = await OC.postMeScratch();
+                    if (status >= 400 || rd.error) {
                         // 已刮过或失败：回退展示提示并刷新状态
-                        const msg = rd && rd.error ? rd.error : (res.status >= 400 ? '刮奖失败' : '刮奖失败');
+                        const msg = rd && rd.error ? rd.error : (status >= 400 ? '刮奖失败' : '刮奖失败');
                         if (typeof showAlert === 'function') showAlert(msg);
                         const fresh = await scratchLoad();
                         if (fresh) paintScratch(main, fresh, false);
