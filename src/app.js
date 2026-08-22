@@ -11239,9 +11239,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 // 与 §37 消息收藏夹（/v1/favorites）是两套独立系统。
                 // 旧实现误查 /v1/favorites 且只认 type==='image' && media_url，
                 // 导致收藏的表情一个都看不到。这里改为正确的「我的表情」接口。
-                const res = await apiFetch('/v1/emoji/plaza/mine?limit=200');
-                const data = await res.json();
-                const items = data.items || (data.data && data.data.items) || [];
+                const items = await OC.getMyEmojis(200);
                 const emojis = items
                     .map(it => ({ id: it.id, url: it.media_url || it.cover_url || '' }))
                     .filter(e => e.url);
@@ -12998,13 +12996,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     if (!id) return;
                     const isLiked = btn.dataset.liked === 'true';
                     try {
-                        const endpoint = isLiked ? '/v1/me/checkin/wall/unlike' : '/v1/me/checkin/wall/like';
-                        const res = await apiFetch(endpoint, {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ post_id: id })
-                        });
-                        const data = await res.json().catch(() => ({}));
-                        if (data.error) { showAlert(data.error); return; }
+                        const data = isLiked ? await OC.unlikeCheckinWall(id) : await OC.likeCheckinWall(id);
+                        if (data && data.error) { showAlert(data.error); return; }
                         renderCheckin(target);
                     } catch (e) { console.error(e); }
                 });
@@ -15195,8 +15188,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (!courtCaseList) return;
         courtCaseList.innerHTML = '<div class="court-loading">加载中...</div>';
         try {
-            const res = await apiFetch('/v1/public-court/cases?status=all');
-            const data = await res.json();
+            const data = await OC.getCourtCases('all');
             const items = courtExtractList(data);
             courtCaseList.innerHTML = '';
             if (items.length === 0) {
@@ -15216,8 +15208,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         courtCurrentId = id;
         courtDetail.innerHTML = '<div class="court-loading">加载中...</div>';
         try {
-            const res = await apiFetch('/v1/public-court/cases/' + encodeURIComponent(id));
-            const rawDetail = await res.json();
+            const rawDetail = await OC.getCourtCaseDetail(id);
             // 兼容 {code:0, data:{...}} / {case:{...}} / [{...}] 包裹
             let c = rawDetail;
             if (c && c.data && typeof c.data === 'object' && !Array.isArray(c.data)) c = c.data;
@@ -15230,8 +15221,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             const statements = Array.isArray(rawDetail.statements) ? rawDetail.statements : [];
             // 投票与讨论是独立 GET 端点
             const [votesRes, discRes] = await Promise.all([
-                apiFetch('/v1/public-court/cases/' + encodeURIComponent(id) + '/votes').then(r => r.json()).catch(() => null),
-                apiFetch('/v1/public-court/cases/' + encodeURIComponent(id) + '/discussions').then(r => r.json()).catch(() => null)
+                OC.getCourtCaseVotes(id).catch(() => null),
+                OC.getCourtCaseDiscussions(id).catch(() => null)
             ]);
             const votes = courtExtractList((votesRes && (votesRes.data || votesRes)) || []);
             const discussions = courtExtractList((discRes && (discRes.data || discRes)) || rawDetail.discussions || []);

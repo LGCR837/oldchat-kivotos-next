@@ -273,10 +273,120 @@
     async postCheckinWallComment({ postId, body }) {
       return _post('/v1/me/checkin/wall/comment', { post_id: postId, body });
     },
+    async likeCheckinWall(postId) {
+      return _post('/v1/me/checkin/wall/like', { post_id: postId });
+    },
+    async unlikeCheckinWall(postId) {
+      return _post('/v1/me/checkin/wall/unlike', { post_id: postId });
+    },
 
-    // ===== 公审庭 public-court（TODO: 对应行 15418/15439/15453/15454/15547/15565/15579/15592）=====
-    // ===== 表情广场 emoji（TODO: 对应行 11448/11479/11525/11646/11656）=====
-    // ===== 媒体上传 media（TODO: 对应行 3523/4212/10330/14836）=====
+    // ===== 公审庭 public-court（app.js:15198/15219/15233/15234/15327/15345/15359/15372）=====
+    // 响应格式多层兼容（{case}/{data}/[] 包裹），app.js 用 courtExtractList 自行解析，
+    // 故本层仅做「GET/POST 透传 + 兜 error」薄封装，返回原始 JSON，不归一化。
+    async getCourtCases(status = 'all') {
+      return _get('/v1/public-court/cases?status=' + encodeURIComponent(status));
+    },
+    async getCourtCaseDetail(id) {
+      return _get('/v1/public-court/cases/' + encodeURIComponent(id));
+    },
+    async getCourtCaseVotes(id) {
+      return _get('/v1/public-court/cases/' + encodeURIComponent(id) + '/votes');
+    },
+    async getCourtCaseDiscussions(id) {
+      return _get('/v1/public-court/cases/' + encodeURIComponent(id) + '/discussions');
+    },
+    async voteCourtCase(id, { vote, reason = '', evidence = '' }) {
+      return _post('/v1/public-court/cases/' + encodeURIComponent(id) + '/vote', { vote, reason, evidence });
+    },
+    async postCourtStatement(id, { reason, evidence = '' }) {
+      return _post('/v1/public-court/cases/' + encodeURIComponent(id) + '/statement', { reason, evidence });
+    },
+    async postCourtDiscussion(id, { body }) {
+      return _post('/v1/public-court/cases/' + encodeURIComponent(id) + '/discussion', { body });
+    },
+    async withdrawCourtCase(id) {
+      return _post('/v1/public-court/cases/' + encodeURIComponent(id) + '/withdraw', {});
+    },
+
+    // ===== 表情广场 emoji（app.js:11278/11309/11355/11476/11486）=====
+    // 字段各异（emoji 包含 id/name/url/type 等），调用方直接用 raw，不归一化
+    async getEmojiPlaza({ limit = 50, offset = 0 } = {}) {
+      const d = await _get(`/v1/emoji/plaza?limit=${limit}&offset=${offset}`);
+      return d.emojis || d.items || [];
+    },
+    async getMyEmojis(limit = 200) {
+      const d = await _get(`/v1/emoji/plaza/mine?limit=${limit}`);
+      return d.emojis || d.items || [];
+    },
+    async saveEmoji(payload) {
+      // payload: { name, url, type } 等，透传
+      return _post('/v1/emoji/plaza/save', payload);
+    },
+    async deleteEmoji(id) {
+      return _post('/v1/emoji/plaza/delete', { id });
+    },
+
+    // ===== 媒体上传 media（app.js:3523/4212/10330/14836）=====
+    // 均为 FormData 上传（非 JSON），单独走 apiFetch 直接发，再 _parse 兜 error
+    async uploadMedia(formData) {
+      const r = await apiFetch('/v1/media', { method: 'POST', body: formData });
+      return _parse(r);
+    },
+    async uploadChannelMedia(formData) {
+      const r = await apiFetch('/v1/channels/media/upload', { method: 'POST', body: formData });
+      return _parse(r);
+    },
+
+    // ===== 群管理（app.js:3995/4082/4100/4116/4183/4189/4212/4215/4288/4472/7685）=====
+    // 均为动作类 POST/管理操作，body 各异，透传不归一化；返回原始 JSON 供调用方判断
+    async leaveGroup(groupId) {
+      return _post('/v1/groups/leave', { group_id: groupId });
+    },
+    async kickGroupMember(groupId, uid) {
+      // uid 为 NCUID 或旧 uid；后端 kick 接受 user_uid 字段（旧 uid）
+      return _post('/v1/groups/kick', { group_id: groupId, user_uid: uid });
+    },
+    async setGroupAdmin(groupId, uid, role) {
+      return _post('/v1/groups/admin', { group_id: groupId, user_uid: uid, role });
+    },
+    async dissolveGroup(groupId) {
+      return _post('/v1/groups/dissolve', { group_id: groupId });
+    },
+    async updateGroupSettings(groupId, settings) {
+      return _post('/v1/groups/settings', Object.assign({ group_id: groupId }, settings));
+    },
+    async renameGroup(groupId, name) {
+      return _post('/v1/groups/name', { group_id: groupId, name });
+    },
+    async uploadGroupAvatar(groupId, formData) {
+      const r = await apiFetch('/v1/groups/avatar', { method: 'POST', body: formData });
+      return _parse(r);
+    },
+    async inviteToGroup(groupId, uid) {
+      return _post('/v1/groups/invite', { group_id: groupId, user_uid: uid });
+    },
+    async joinGroup(groupId) {
+      return _post('/v1/groups/join', { group_id: groupId });
+    },
+
+    // ===== 我的资料媒体 / 签到（app.js:4436/13007/13022/13037/13394）=====
+    async uploadMyAvatar(formData) {
+      const r = await apiFetch('/v1/me/avatar', { method: 'POST', body: formData });
+      return _parse(r);
+    },
+    async getMe() {
+      const d = await _get('/v1/me');
+      return d.user || d;
+    },
+    async getMeScratch() {
+      const d = await _get('/v1/me/scratch');
+      return d;
+    },
+    async postMeScratch() {
+      return _post('/v1/me/scratch', {});
+    },
+
+    // ===== 资源广场 resources（v1 临时关闭，暂缓；对应行 15628/15674/15727/15774/15809/15888/15904/15939/15962/15984）=====
     // ===== 资源广场 resources（v1 临时关闭，暂缓；对应行 15628/15674/15727/15774/15809/15888/15904/15939/15962/15984）=====
     // ===== 通知 notifications（TODO: 对应行 13548）=====
     // ===== 收藏 favorites（app.js:1420/13881/13908）=====
