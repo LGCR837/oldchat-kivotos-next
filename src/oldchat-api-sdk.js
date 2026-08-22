@@ -325,6 +325,10 @@
     async deleteEmoji(id) {
       return _post('/v1/emoji/plaza/delete', { id });
     },
+    // 分页加载（保留 has_more 等元字段）：返回原始 d，调用方自行取 items/has_more
+    async getEmojiPlazaPage({ limit = 20, offset = 0 } = {}) {
+      return _get(`/v1/emoji/plaza?limit=${limit}&offset=${offset}`);
+    },
 
     // ===== 媒体上传 media（app.js:3523/4212/10330/14836）=====
     // 均为 FormData 上传（非 JSON），单独走 apiFetch 直接发，再 _parse 兜 error

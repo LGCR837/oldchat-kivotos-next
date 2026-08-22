@@ -11268,11 +11268,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     delBtn.addEventListener('click', async (ev) => {
                         ev.stopPropagation();
                         try {
-                            await apiFetch('/v1/emoji/plaza/delete', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ id: e.id })
-                            });
+                            await OC.deleteEmoji(e.id);
                             renderFolder();
                         } catch (err) { showAlert('取消收藏失败'); }
                     });
@@ -11314,9 +11310,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (existing) existing.remove();
 
         try {
-            const res = await apiFetch('/v1/emoji/plaza?limit=50&offset=0');
-            const data = await res.json();
-            const items = data.items || [];
+            const items = await OC.getEmojiPlaza({ limit: 50, offset: 0 });
             if (items.length === 0) {
                 showAlert('没有可用的表情包');
                 return;
@@ -15315,13 +15309,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 const reason = window.prompt('投票理由（可选）：', '') || '';
                 const evidence = window.prompt('投票证据（可选）：', '') || '';
                 try {
-                    const r = await apiFetch('/v1/public-court/cases/' + encodeURIComponent(id) + '/vote', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vote: voteType, reason, evidence })
-                    });
-                    const vr = await r.json().catch(() => null);
-                    if (r.ok) { showAlert('投票成功', '提示'); renderCourtCase(id); }
-                    else showAlert('投票失败：' + (vr && (vr.error || vr.message) || r.status), '提示');
-                } catch (e) { showAlert('投票失败：' + e.message, '提示'); }
+                    await OC.voteCourtCase(id, { vote: voteType, reason, evidence });
+                    showAlert('投票成功', '提示'); renderCourtCase(id);
+                } catch (e) { showAlert('投票失败：' + (e.message || e), '提示'); }
             };
             const vb = courtDetail.querySelector('#courtVoteBan');
             if (vb) vb.addEventListener('click', () => doVote('ban'));
@@ -15333,13 +15323,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 const text = window.prompt('请输入陈词内容：');
                 if (!text) return;
                 try {
-                    const r = await apiFetch('/v1/public-court/cases/' + encodeURIComponent(id) + '/statement', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: text, evidence: '' })
-                    });
-                    const sr = await r.json().catch(() => null);
-                    if (r.ok) { showAlert('陈词已提交', '提示'); renderCourtCase(id); }
-                    else showAlert('提交失败：' + (sr && (sr.error || sr.message) || r.status), '提示');
-                } catch (e) { showAlert('提交失败：' + e.message, '提示'); }
+                    await OC.postCourtStatement(id, { reason: text, evidence: '' });
+                    showAlert('陈词已提交', '提示'); renderCourtCase(id);
+                } catch (e) { showAlert('提交失败：' + (e.message || e), '提示'); }
             });
             // 参与讨论
             const discBtn = courtDetail.querySelector('#courtDiscussionBtn');
@@ -15347,26 +15333,18 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 const text = window.prompt('请输入讨论内容：');
                 if (!text) return;
                 try {
-                    const r = await apiFetch('/v1/public-court/cases/' + encodeURIComponent(id) + '/discussion', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: text })
-                    });
-                    const dr = await r.json().catch(() => null);
-                    if (r.ok) { showAlert('讨论已发布', '提示'); renderCourtCase(id); }
-                    else showAlert('发布失败：' + (dr && (dr.error || dr.message) || r.status), '提示');
-                } catch (e) { showAlert('发布失败：' + e.message, '提示'); }
+                    await OC.postCourtDiscussion(id, { body: text });
+                    showAlert('讨论已发布', '提示'); renderCourtCase(id);
+                } catch (e) { showAlert('发布失败：' + (e.message || e), '提示'); }
             });
             // 撤销
             const wdBtn = courtDetail.querySelector('#courtWithdrawBtn');
             if (wdBtn) wdBtn.addEventListener('click', async () => {
                 if (!window.confirm('确定撤销你的投票 / 陈词？')) return;
                 try {
-                    const r = await apiFetch('/v1/public-court/cases/' + encodeURIComponent(id) + '/withdraw', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
-                    });
-                    const wr = await r.json().catch(() => null);
-                    if (r.ok) { showAlert('已撤销', '提示'); renderCourtCase(id); }
-                    else showAlert('撤销失败：' + (wr && (wr.error || wr.message) || r.status), '提示');
-                } catch (e) { showAlert('撤销失败：' + e.message, '提示'); }
+                    await OC.withdrawCourtCase(id);
+                    showAlert('已撤销', '提示'); renderCourtCase(id);
+                } catch (e) { showAlert('撤销失败：' + (e.message || e), '提示'); }
             });
         } catch (e) {
             console.error('[court] load case detail failed:', e);
