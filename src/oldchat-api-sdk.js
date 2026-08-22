@@ -373,7 +373,7 @@
       return _post('/v1/groups/join', { group_id: groupId });
     },
 
-    // ===== 我的资料媒体 / 签到（app.js:4436/13007/13022/13037/13394）=====
+    // ===== 我的资料媒体 / 签到 / 刮刮乐（app.js:4436/13007/13022/13037/13394）=====
     async uploadMyAvatar(formData) {
       const r = await apiFetch('/v1/me/avatar', { method: 'POST', body: formData });
       return _parse(r);
@@ -382,17 +382,43 @@
       const d = await _get('/v1/me');
       return d.user || d;
     },
+    // 刮刮乐 GET：404 视为功能未上线返回 null；body 字段可能为 JSON 字符串需二次解析
     async getMeScratch() {
-      const d = await _get('/v1/me/scratch');
-      return d;
+      const r = await apiFetch('/v1/me/scratch', { method: 'GET' });
+      if (r.status === 404) return null;
+      const text = await r.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch (e) { console.warn('[scratch] not JSON:', text.slice(0, 100)); }
+      if (data && typeof data.body === 'string') { try { data = JSON.parse(data.body); } catch (e) {} }
+      return data;
     },
+    // 刮刮乐 POST：返回 {status, data}，调用方按 status/error 判断成功
     async postMeScratch() {
-      return _post('/v1/me/scratch', {});
+      const r = await apiFetch('/v1/me/scratch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+      });
+      const text = await r.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch (e) {}
+      if (data && typeof data.body === 'string') { try { data = JSON.parse(data.body); } catch (e) {} }
+      return { status: r.status, data };
     },
 
     // ===== 资源广场 resources（v1 临时关闭，暂缓；对应行 15628/15674/15727/15774/15809/15888/15904/15939/15962/15984）=====
-    // ===== 资源广场 resources（v1 临时关闭，暂缓；对应行 15628/15674/15727/15774/15809/15888/15904/15939/15962/15984）=====
-    // ===== 通知 notifications（TODO: 对应行 13548）=====
+    // ===== 通知 notifications（app.js:13273）=====
+    // 404→功能建设中，非 JSON 容错，返回 {notFound, data}（与签到墙同模式）
+    async getNotifications(limit = 50) {
+      const r = await apiFetch(`/v1/notifications?limit=${limit}`);
+      if (r.status === 404) return { notFound: true };
+      const text = await r.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch (e) { console.warn('[notice] not JSON:', text.slice(0, 100)); }
+      if (data && data.error) throw new OCError(data.error);
+      return { notFound: false, data };
+    },
+
     // ===== 收藏 favorites（app.js:1420/13881/13908）=====
     async getFavorites(limit = 100) {
       const d = await _get('/v1/favorites?limit=' + limit);

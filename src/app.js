@@ -1937,21 +1937,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 登录后立即调用 /v1/me 刷新用户信息（修复登录后只显示 NCUID 不显示昵称头像）
     try {
-        const meRes = await apiFetch('/v1/me');
-        if (meRes && meRes.ok) {
-            const meData = await meRes.json();
-            if (meData && !meData.error) {
-                // 更新 localStorage
-                localStorage.setItem('oc_user', JSON.stringify(meData));
-                // 更新内存中的用户信息
-                myUid = meData.ncuid || meData.uid || myUid;
-                myDisplayUid = meData.uid || meData.ncuid || myDisplayUid;
-                myName = meData.display_name || meData.username || myName;
-                myAvatar = meData.avatar_url || myAvatar;
-                // 缓存到 userProfileCache，供 lookupTitle 查询称号
-                meData._ts = Date.now();
-                userProfileCache.set(myUid.toUpperCase(), meData);
-            }
+        const meData = await OC.getMe();
+        if (meData && !meData.error) {
+            // 更新 localStorage
+            localStorage.setItem('oc_user', JSON.stringify(meData));
+            // 更新内存中的用户信息
+            myUid = meData.ncuid || meData.uid || myUid;
+            myDisplayUid = meData.uid || meData.ncuid || myDisplayUid;
+            myName = meData.display_name || meData.username || myName;
+            myAvatar = meData.avatar_url || myAvatar;
+            // 缓存到 userProfileCache，供 lookupTitle 查询称号
+            meData._ts = Date.now();
+            userProfileCache.set(myUid.toUpperCase(), meData);
         }
     } catch (e) {
         console.error('Failed to refresh user info after login', e);
@@ -3987,13 +3984,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     // 后端两个字段独立校验，任一缺失即报"uid or ncuid is required"
                     const userUid = member.displayUid || member.uid;
                     const userNcuid = member.ncuid || member.uid;
-                    const r = await apiFetch('/v1/groups/kick', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ group_id: groupId, user_uid: userUid, user_ncuid: userNcuid })
-                    });
-                    const d = await r.json();
-                    if (d.error) { showAlert(d.error); return; }
+                    const d = await OC.kickGroupMember({ groupId, userUid, userNcuid });
+                    if (d && d.error) { showAlert(d.error); return; }
                     load();
                 } catch (e) { showAlert('请求失败'); }
             }
@@ -4005,13 +3997,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     // 双写：user_uid 用真正的旧 uid（USR-XXX），user_ncuid 用 ncuid
                     const userUid = member.displayUid || member.uid;
                     const userNcuid = member.ncuid || member.uid;
-                    const r = await apiFetch('/v1/groups/admin', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ group_id: groupId, user_uid: userUid, user_ncuid: userNcuid, admin: admin })
-                    });
-                    const d = await r.json();
-                    if (d.error) { showAlert(d.error); return; }
+                    const d = await OC.setGroupAdmin({ groupId, userUid, userNcuid, admin });
+                    if (d && d.error) { showAlert(d.error); return; }
                     load();
                 } catch (e) { showAlert('请求失败'); }
             }
@@ -4021,12 +4008,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (!await showConfirm('再次确认：解散后所有成员将被移出，群聊无法恢复。')) return;
                 if (!await showConfirm('最后确认：群聊一旦解散将无法恢复，您确定吗？')) return;
                 try {
-                    const r = await apiFetch('/v1/groups/dissolve', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ group_id: groupId })
-                    });
-                    const d = await r.json();
+                    const d = await OC.dissolveGroup(groupId);
                     if (d.error) { showAlert(d.error); return; }
                     overlay.remove();
                     contacts.groups = contacts.groups.filter(g => g.id !== groupId);
@@ -4088,17 +4070,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const btn = sOverlay.querySelector('#gsSave');
                     btn.disabled = true; btn.textContent = '保存中...';
                     try {
-                        await apiFetch('/v1/groups/settings', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ group_id: groupId, join_approval: joinApproval, global_mute: globalMute })
-                        });
+                        await OC.updateGroupSettings(groupId, { join_approval: joinApproval, global_mute: globalMute });
                         if (name && name !== (info.name || '')) {
-                            await apiFetch('/v1/groups/name', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ group_id: groupId, name: name })
-                            });
+                            await OC.renameGroup(groupId, name);
                         }
                         showAlert('已保存');
                         sOverlay.remove();
@@ -4117,15 +4091,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                         try {
                             const fd = new FormData();
                             fd.append('file', file);
-                            const up = await apiFetch('/v1/media', { method: 'POST', body: fd });
-                            const upData = await up.json();
+                            const upData = await OC.uploadMedia(fd);
                             if (upData.error || !upData.url) { showAlert('上传失败: ' + (upData.error || '未知错误')); return; }
-                            const r = await apiFetch('/v1/groups/avatar', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ group_id: groupId, avatar_url: upData.url })
-                            });
-                            const d = await r.json();
+                            const d = await OC.updateGroupAvatar({ groupId, avatarUrl: upData.url });
                             if (d.error) { showAlert(d.error); return; }
                             info.avatar_url = upData.url;
                             const av = sOverlay.querySelector('#gsAvatar');
@@ -4193,13 +4161,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             async function doInvite(uid) {
                 try {
-                    const r = await apiFetch('/v1/groups/invite', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ group_id: groupId, user_uid: uid, user_ncuid: uid })
-                    });
-                    const d = await r.json();
-                    if (d.error) { showAlert(d.error); return false; }
+                    const d = await OC.inviteToGroup({ groupId, userUid: uid, userNcuid: uid });
+                    if (d && d.error) { showAlert(d.error); return false; }
                     return true;
                 } catch (e) { showAlert('请求失败'); return false; }
             }
@@ -4338,8 +4301,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const formData = new FormData();
                     formData.append('file', file);
                     try {
-                        const r = await apiFetch('/v1/me/avatar', { method: 'POST', body: formData });
-                        const d = await r.json();
+                        const d = await OC.uploadMyAvatar(formData);
                         if (d.error) { showAlert(d.error); return; }
                         document.getElementById('mpAvatar').src = cachedResolveMediaUrl(d.avatar_url);
                         currentProfile.avatar_url = d.avatar_url;
@@ -4369,13 +4331,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     btn.disabled = true;
                     btn.textContent = '加入中...';
                     try {
-                        const r = await apiFetch('/v1/groups/join', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({ group_id: val })
-                        });
-                        const d = await r.json();
-                        if (d.error || d.code) { showAlert(d.error || '加入失败'); } else { showAlert('已加入群聊'); input.value = ''; loadContacts(); }
+                        const d = await OC.joinGroup(val);
+                        if (d && (d.error || d.code)) { showAlert(d.error || '加入失败'); } else { showAlert('已加入群聊'); input.value = ''; loadContacts(); }
                     } catch(e) { showAlert('请求失败'); }
                     btn.disabled = false;
                     btn.textContent = '加入';
@@ -7500,12 +7457,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             groupBtn.disabled = true;
             groupBtn.textContent = '加入中...';
             try {
-                const r = await apiFetch('/v1/groups/join', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ group_id: val })
-                });
-                const d = await r.json();
+                const d = await OC.joinGroup(val);
                 if (d.error || d.code) { showAlert(d.error || '加入失败'); }
                 else { showAlert('已加入群聊'); close(); loadContacts(); }
             } catch (e) { showAlert('请求失败'); }
@@ -10124,8 +10076,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
         try {
             // 第一步：上传文件到 /v1/media
-            const upRes = await apiFetch('/v1/media', { method: 'POST', body: formData });
-            const upData = await upRes.json();
+            const upData = await OC.uploadMedia(formData);
             if (upData.error || !upData.url) {
                 if (tempEl) { if (lastRenderedMsg && lastRenderedMsg.element === tempEl) { lastRenderedMsg = null; lastRenderedTs = 0; } tempEl.remove(); }
                 seenMsgIds[currentConv.key]?.delete(tempId);
@@ -13008,13 +12959,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // 拉取刮刮乐状态：优先回传已解析对象；404/异常回传 null（视为功能未上线）
     async function scratchLoad() {
         try {
-            const res = await apiFetch('/v1/me/scratch', { method: 'GET' });
-            if (res.status === 404) return null;
-            const text = await res.text();
-            let data = {};
-            try { data = JSON.parse(text); } catch (e) { console.warn('[scratch] not JSON:', text.slice(0, 100)); }
-            if (data && typeof data.body === 'string') { try { data = JSON.parse(data.body); } catch (e) {} }
-            return data;
+            return await OC.getMeScratch();
         } catch (e) {
             return null;
         }
@@ -13303,13 +13248,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         try {
             let data = {};
             try {
-                const res = await apiFetch('/v1/notifications?limit=50');
-                if (res.status === 404) {
+                const notice = await OC.getNotifications(50);
+                if (notice.notFound) {
                     target.innerHTML = '<h3>系统通知</h3><div style="text-align:center;padding:60px 20px;color:var(--secondary-text);"><i class="fa-solid fa-hammer" style="font-size:32px;margin-bottom:12px;display:block;"></i>功能建设中，敬请期待</div>';
                     return;
                 }
-                const text = await res.text();
-                try { data = JSON.parse(text); } catch (e) { console.warn('[notice] not JSON:', text.slice(0, 100)); }
+                data = notice.data;
             } catch (e) {
                 target.innerHTML = '<h3>系统通知</h3><div style="text-align:center;padding:60px 20px;color:var(--secondary-text);"><i class="fa-solid fa-hammer" style="font-size:32px;margin-bottom:12px;display:block;"></i>功能建设中，敬请期待</div>';
                 return;
@@ -14585,8 +14529,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const formData = new FormData();
         formData.append('file', file);
         formData.append('channel_id', channelId);
-        const res = await apiFetch('/v1/channels/media/upload', { method: 'POST', body: formData });
-        const data = await res.json();
+        const data = await OC.uploadChannelMedia(formData);
         if (data.error || !data.url) throw new Error(data.error || '上传失败');
         return data; // { url, msg_type, media_ref }
     }
