@@ -268,8 +268,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build Tauri bundles (aarch64 AppImage + deb + rpm)
-        run: npm run tauri build -- --bundles appimage,deb,rpm --target aarch64-unknown-linux-gnu
+      # aarch64 AppImage 在 x86 runner 交叉打包极易失败（linuxdeploy 工具链脆弱），放弃 AppImage，仅发 deb + rpm
+      - name: Build Tauri bundles (aarch64 deb + rpm)
+        run: npm run tauri build -- --bundles deb,rpm --target aarch64-unknown-linux-gnu
 
       - name: Rename and upload bundles
         env:
@@ -277,15 +278,12 @@ jobs:
         run: |
           TAG="${{ env.TAG }}"
           ROOT=src-tauri/target/aarch64-unknown-linux-gnu/release/bundle
-          APPIMAGE=$(ls "$ROOT"/appimage/*.AppImage | head -n1)
           DEB=$(ls "$ROOT"/deb/*.deb | head -n1)
           RPM=$(ls "$ROOT"/rpm/*.rpm | head -n1)
           OUT=$(mktemp -d)
-          mv "$APPIMAGE" "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-appimage.AppImage"
           mv "$DEB" "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-deb.deb"
           mv "$RPM" "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-rpm.rpm"
           gh release upload "$TAG" \
-            "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-appimage.AppImage" \
             "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-deb.deb" \
             "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-rpm.rpm"
 
@@ -336,6 +334,7 @@ jobs:
         run: npm run tauri build -- --bundles nsis --target ${{ matrix.target }}
 
       - name: Rename and upload installer
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
