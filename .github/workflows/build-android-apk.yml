@@ -2,8 +2,12 @@
 # Android APK 手动构建（独立于桌面端 CI）
 # -----------------------------------------------------------------------------
 # 仅手动触发：在 GitHub 仓库 Actions 页选 "Android APK (manual)" → Run workflow。
-# 从 main 分支拉取并构建，只产出 arm64-v8a 的测试用 APK（用户要求：先能编译、仅 armv8 测试）。
-# 不接入桌面端的 release 矩阵，互不干扰。
+# 从当前分支拉取并构建；产出 4 个 ABI 的 release APK：
+#   aarch64 (armv8) / armv7 (aarch32) / x86_64 (amd64) / i686 (i386)
+#
+# 产物上传规则：
+#   - 非 main 分支（含 PR、feature 分支等手动触发）→ 上传为 Actions artifact；
+#   - main 分支手动触发 → 不上传（产物已在 Actions 日志路径，可手动下 runner 取）。
 #
 # 需要先在仓库 Settings → Secrets 配置 4 项：
 #   ANDROID_KEYSTORE_BASE64      本地签名密钥的 base64（见桌面「OCKN安卓签名备份.txt」）
@@ -18,7 +22,6 @@
 #  - 因此改为：构建照常产出「未签名」APK，随后用 Android SDK 自带的 apksigner
 #    直接拿本工作流从 Secret 还原的 jks 现场签名（--ks / --ks-key-alias / 密码），
 #    再用 apksigner verify 兜底校验，未签上则直接令构建失败。
-#  - 这样彻底绕开 Tauri gradle 签名黑箱，签的是我们自己的 alias(ockn)。
 # =============================================================================
 
 name: Android APK (manual)
@@ -29,21 +32,45 @@ on:
       note:
         description: '构建备注（仅记录用，不影响构建）'
         required: false
-        default: 'arm64-v8a 测试构建'
+        default: '4 ABI 全量构建'
 
 jobs:
   android-apk:
-    name: Build Android APK (arm64-v8a)
+    name: Build Android APK (${{ matrix.abi_label }})
     runs-on: ubuntu-22.04
-    # 仅手动触发；不随 push / release 自动跑
+    # 仅手动触发；当前分支为 main 时跳过上传（其余逻辑照跑）
     if: github.event_name == 'workflow_dispatch'
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tauri_target: aarch64
+            rust_target: aarch64-linux-android
+            abi_filter: arm64-v8a
+            abi_label: arm64-v8a
+            artifact_name: oldchat-android-arm64-v8a-apk
+          - tauri_target: armv7
+            rust_target: armv7-linux-androideabi
+            abi_filter: armeabi-v7a
+            abi_label: armv7-aarch32
+            artifact_name: oldchat-android-armv7-apk
+          - tauri_target: x86_64
+            rust_target: x86_64-linux-android
+            abi_filter: x86_64
+            abi_label: x86_64
+            artifact_name: oldchat-android-x86_64-apk
+          - tauri_target: i686
+            rust_target: i686-linux-android
+            abi_filter: x86
+            abi_label: i686
+            artifact_name: oldchat-android-i686-apk
+
     env:
-      # 非交互：tauri android init 不因缺参而卡住询问
       CI: 'true'
 
     steps:
-      - name: Checkout (main)
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -58,24 +85,18 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Rust stable + aarch64-linux-android target
+      - name: Install Rust stable + 4 个 Android target
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-        # 该 action 安装 command-line tools 并设置 ANDROID_HOME / ANDROID_SDK_ROOT
 
-      - name: Install Android platform, build-tools and NDK
+      - name: Install Android platform / build-tools
         run: |
           yes | sdkmanager --licenses
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-          # 先装一个 NDK 作为兜底；随后按 Tauri 生成工程里 pin 的 ndkVersion 精确安装
-          sdkmanager "ndk;27.0.12077973"
-
-      - name: Install frontend dependencies
-        run: npm ci
 
       - name: 还原签名密钥（从 base64 Secret）
         run: |
@@ -93,20 +114,21 @@ jobs:
             yes | sdkmanager "ndk;$NDK_PIN"
             echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_PIN" >> "$GITHUB_ENV"
           else
+            sdkmanager "ndk;27.0.12077973"
             echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
           fi
 
-      - name: 限制 ABI 为 arm64-v8a（仅测试用，缩小体积）
+      - name: 限制 ABI 为 ${{ matrix.abi_filter }}
         run: |
-          sed -i 's/\(defaultConfig {\)/\1\n        ndk { abiFilters += listOf("arm64-v8a") }/' \
+          sed -i 's/\(defaultConfig {\)/\1\n        ndk { abiFilters += listOf("${{ matrix.abi_filter }}") }/' \
             src-tauri/gen/android/app/build.gradle.kts
           echo "--- patched defaultConfig ---"
           sed -n '/defaultConfig {/,/^    }/p' src-tauri/gen/android/app/build.gradle.kts
 
-      - name: 构建 Android APK（arm64-v8a，先产出未签名包）
-        run: npm run tauri -- android build --target aarch64 --apk
+      - name: 构建 Android APK（${{ matrix.abi_label }}，未签名）
+        run: npm run tauri -- android build --target ${{ matrix.tauri_target }} --apk
 
-      - name: 用 apksigner 对 APK 签名（绕开 Tauri gradle 签名黑箱）
+      - name: 用 apksigner 现场签名
         run: |
           APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" | head -1)
           DIR=$(dirname "$APK")
@@ -117,19 +139,20 @@ jobs:
             --ks-pass pass:"${{ secrets.ANDROID_KEY_PASSWORD }}" \
             --key-pass pass:"${{ secrets.ANDROID_KEY_PASSWORD }}" \
             "$APK"
-          # 去掉文件名里误导性的 'unsigned'，便于识别
-          mv "$APK" "$DIR/oldchat-kivotos-arm64-v8a-release.apk"
-          echo "已签名 → $DIR/oldchat-kivotos-arm64-v8a-release.apk"
+          # 去掉文件名里误导性的 'unsigned'，并按 ABI 重命名
+          mv "$APK" "$DIR/oldchat-kivotos-${{ matrix.abi_label }}-release.apk"
+          echo "已签名 → $DIR/oldchat-kivotos-${{ matrix.abi_label }}-release.apk"
 
-      - name: 校验 APK 签名（签的不是我们的 key 则令构建失败）
+      - name: 校验 APK 签名
         run: |
           APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" | head -1)
           echo "待校验 APK: $APK"
           "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs "$APK"
 
-      - name: 上传 APK 产物
+      - name: 上传 APK 产物（非 main 分支才上传）
+        if: github.ref != 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
-          name: oldchat-android-arm64-apk
+          name: ${{ matrix.artifact_name }}
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
