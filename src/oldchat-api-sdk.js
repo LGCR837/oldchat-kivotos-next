@@ -325,13 +325,17 @@
       }
     },
     // POST 执行刮奖：返回 {status, data}，data 可能嵌套在 rd.body 字符串里，由调用方解
-    async doScratch() {
+    async postMeScratch() {
       const r = await apiFetch('/v1/me/scratch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
       const text = await r.text();
       let rd = {};
       try { rd = JSON.parse(text); } catch (e) {}
       if (rd && typeof rd.body === 'string') { try { rd = JSON.parse(rd.body); } catch (e) {} }
       return { status: r.status, data: rd };
+    },
+    // 别名：早期按钮处理器 call-site 仍用 doScratch（app.js:13019）
+    async doScratch() {
+      return this.postMeScratch();
     },
 
     // ===== 表情广场 emoji（app.js:11278/11309/11355/11476/11486）=====
@@ -468,8 +472,17 @@
     },
 
     // ===== 通知 notifications（app.js:13427）=====
-    // 注意：通知页是「尽力解析」容错逻辑（检查 404 显示建设中、res.text() 再 JSON.parse），
-    // 不适合强制归一化，app.js 保留裸 apiFetch 调用。此处不提供 OC 方法。
+    // 通知页是「尽力解析」容错逻辑（404 显示建设中、res.text() 再 JSON.parse），
+    // 返回 {notFound, data}（同 getCheckinWall 模式），由调用方渲染。
+    async getNotifications(limit = 50) {
+      const r = await apiFetch('/v1/notifications?limit=' + limit);
+      if (r.status === 404) return { notFound: true };
+      const text = await r.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch (e) { console.warn('[notice] not JSON:', text.slice(0, 100)); }
+      if (data && data.error) throw new OCError(data.error);
+      return { notFound: false, data };
+    },
 
     // ===== 动态 moments（app.js:3219/3229/3444/3528/3610/3654，已由本文件上方实现）=====
   };
