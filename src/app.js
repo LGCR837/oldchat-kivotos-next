@@ -3267,9 +3267,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     // 检查是否有来自该用户的好友申请（会话内缓存，仅首次拉取，之后复用，避免每次打开主页都打 /v1/friends/requests）
                     try {
                         if (!_incomingFriendReqCache) {
-                            const reqRes = await apiFetch('/v1/friends/requests');
-                            const reqData = await reqRes.json();
-                            _incomingFriendReqCache = reqData.requests || [];
+                            _incomingFriendReqCache = await OC.getFriendRequests();
                         }
                         const incoming = _incomingFriendReqCache.some(r => uidEq(getUid(r) || r.from_ncuid || r.from_uid, profileUid || ncuid || uid));
                         if (incoming) relation = 'pending_received';
@@ -3469,9 +3467,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 };
                 window.spAddFriend = async function() {
                     try {
-                        const r = await apiFetch('/v1/friends/request', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(toUidParam(uid)) });
-                        const d = await r.json();
-                        if (d.error) { showAlert(d.error); return; }
+                        const d = await OC.addFriend(uid);
+                        if (d && d.error) { showAlert(d.error); return; }
                         _incomingFriendReqCache = null;
                         load();
                     } catch(e) { showAlert('请求失败'); }
@@ -3479,13 +3476,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 window.spRespond = async function(action) {
                     try {
                         // 先查询好友申请列表，找到对应 request_id
-                        const reqRes = await apiFetch('/v1/friends/requests');
-                        const reqData = await reqRes.json();
-                        const req = (reqData.requests || []).find(r => uidEq(getUid(r) || r.from_ncuid || r.from_uid, uid));
+                        const req = (await OC.getFriendRequests()).find(r => uidEq(r.uid || r.from_ncuid || r.from_uid, uid));
                         if (!req) { showAlert('未找到好友申请'); return; }
-                        const r = await apiFetch('/v1/friends/respond', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({request_id: req.id, accept: action === 'accept'}) });
-                        const d = await r.json();
-                        if (d.error) { showAlert(d.error); return; }
+                        const d = await OC.respondFriend(req.id, action === 'accept');
+                        if (d && d.error) { showAlert(d.error); return; }
                         _incomingFriendReqCache = null;
                         load();
                     } catch(e) { showAlert('请求失败'); }
@@ -3543,9 +3537,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function markAllRead(convType, convId) {
         try {
             if (convType === 'direct') {
-                await apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(withUidParam(convId)) });
+                await OC.markDirectRead(convId);
             } else {
-                await apiFetch('/v1/groups/read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({group_id: convId}) });
+                await OC.markGroupRead(convId);
             }
             const convKey = convType + ':' + convId;
             delete unreadCounts[convKey];
@@ -3564,9 +3558,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         _debouncedReadTimers.set(convKey, setTimeout(() => {
             _debouncedReadTimers.delete(convKey);
             if (convType === 'direct') {
-                apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(withUidParam(convId)) }).catch(() => {});
+                OC.markDirectRead(convId).catch(() => {});
             } else {
-                apiFetch('/v1/groups/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ group_id: convId }) }).catch(() => {});
+                OC.markGroupRead(convId).catch(() => {});
             }
         }, 2000));
     }
@@ -3817,25 +3811,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         async function load() {
             try {
-                const [groupsRes, membersRes] = await Promise.all([
-                    apiFetch('/v1/groups/list'),
-                    apiFetch('/v1/groups/members?group_id=' + encodeURIComponent(groupId))
+                const [groups, members] = await Promise.all([
+                    OC.getGroups(),
+                    OC.getGroupMembers(groupId)
                 ]);
-                const groupsData = await groupsRes.json();
-                const membersData = await membersRes.json();
-                if (groupsData.error) { scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">' + groupsData.error + '</div>'; return; }
-                const info = (groupsData.groups || []).find(g => g.group_id === groupId) || {};
-                if (membersData.error) { scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">' + membersData.error + '</div>'; return; }
-                const members = (membersData.members || []).map(m => ({
-                    // 机器主键：ncuid 优先（用于 API 调用、isSelfUid 比对）
-                    uid: getUid(m),
-                    ncuid: m.ncuid || getUid(m),
-                    // 旧 uid（USR-XXX），kick/admin 后端要求 user_uid 字段填这个
-                    displayUid: getDisplayUid(m),
-                    name: m.display_name || m.username || getUid(m),
-                    avatar: m.avatar_url || '',
-                    role: m.role || 0
-                }));
+                const info = groups.find(g => g.id === groupId) || {};
+                if (!info) { scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">群聊不存在</div>'; return; }
                 const avatar = info.avatar_url || defaultAvatar;
                 const myRole = info.role || 0;
                 gmMyRole = myRole;  // 供全局右键菜单共享「我的角色」
@@ -4360,29 +4341,27 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         async function load() {
             try {
-                const [profRes, friendsRes] = await Promise.all([
+                const [profRes, friends] = await Promise.all([
                     apiFetch('/v1/users/profile?ncuid=' + encodeURIComponent(myUid)),
-                    apiFetch('/v1/friends')
+                    OC.getFriends()
                 ]);
                 const prof = await profRes.json();
-                const friendsData = await friendsRes.json();
                 if (prof.error) { scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">' + prof.error + '</div>'; return; }
                 currentProfile = prof;
                 // 刷新缓存
                 prof._ts = Date.now();
                 userProfileCache.set(myUid.toUpperCase(), prof);
                 const avatar = currentProfile.avatar_url || defaultAvatar;
-                const friends = friendsData.friends || [];
 
                 let friendsHtml = '';
                 if (friends.length > 0) {
                     friends.forEach(f => {
-                        const fAvatar = f.avatar_url || defaultAvatar;
-                        const displayName = f.remark_name || f.display_name || f.username || getUid(f);
+                        const fAvatar = f.avatar || defaultAvatar;
+                        const displayName = f.remark_name || f.display_name || f.username || f.uid;
                         friendsHtml += `<div class="mp-req-item" data-uid="${escapeHtml(f.uid)}">` +
                             `<img class="mp-req-avatar" src="${cachedResolveMediaUrl(fAvatar)}" onerror="this.src='${defaultAvatar}'">` +
                             `<div class="mp-req-info"><div class="mp-req-name">${escapeHtml(displayName)}</div>` +
-                            `<div class="mp-req-time">${escapeHtml(getDisplayUid(f))}</div></div>` +
+                            `<div class="mp-req-time">${escapeHtml(f.displayUid)}</div></div>` +
                             `<button class="mp-req-chat-btn" data-uid="${escapeHtml(f.uid)}">私聊</button>` +
                             `</div>`;
                     });
@@ -4449,13 +4428,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     btn.disabled = true;
                     btn.textContent = '发送中...';
                     try {
-                        const r = await apiFetch('/v1/friends/request', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify(toUidParam(val.toUpperCase()))
-                        });
-                        const d = await r.json();
-                        if (d.error) { showAlert(d.error); } else { showAlert('已发送申请'); input.value = ''; }
+                        const d = await OC.addFriend(val.toUpperCase());
+                        if (d && d.error) { showAlert(d.error); } else { showAlert('已发送申请'); input.value = ''; }
                     } catch(e) { showAlert('请求失败'); }
                     btn.disabled = false;
                     btn.textContent = '添加';
@@ -5344,37 +5318,20 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             // （回调被 orphan）会永不 resolve，导致 renderContacts 永不执行、整个联系人列表空白。
             // 现在两侧互不阻塞——一侧卡死/失败不影响另一侧渲染，最多缺一侧数据而不是全空。
             try {
-                const frRes = await withTimeout(apiFetch('/v1/friends'), 15000, '好友列表');
-                frData = await frRes.json().catch(() => null);
+                frData = await withTimeout(OC.getFriends(), 15000, '好友列表');
             } catch (e) { console.error('[contacts] 好友列表加载失败:', e); }
             try {
-                const grRes = await withTimeout(apiFetch('/v1/groups/list'), 15000, '群聊列表');
-                grData = await grRes.json().catch(() => null);
+                grData = await withTimeout(OC.getGroups(), 15000, '群聊列表');
             } catch (e) { console.error('[contacts] 群聊列表加载失败:', e); }
             if (!frData && !grData) {
                 console.error('[contacts] 好友与群聊列表均加载失败');
                 if (!_cached) contactList.innerHTML = '<div class="oc-page-loading"><span class="oc-spinner xl"></span><span style="color:var(--danger)">加载失败，请重试</span></div>';
                 return;
             }
-            if (frData && frData.error) { showAlert(frData.error); if (!_cached) contactList.innerHTML = ''; return; }
+            // OC.getFriends/getGroups 已返回归一化数组（字段覆盖原 map 的全部 key）
             contacts = {
-                friends: (frData && frData.friends || []).map(f => ({
-                    uid: getUid(f),
-                    displayUid: getDisplayUid(f),
-                    name: f.display_name || f.username || getUid(f),
-                    username: f.username,
-                    display_name: f.display_name,
-                    avatar: f.avatar_url || '',
-                    remark_name: f.remark_name || '',
-                    user_title: f.user_title || ''
-                })),
-                groups: (grData && grData.groups || []).map(g => ({
-                    id: g.group_id,
-                    name: g.name,
-                    avatar: g.avatar_url || '',
-                    member_count: g.member_count,
-                    role: g.role
-                }))
+                friends: frData || [],
+                groups: grData || []
             };
             renderContacts();
             // 拉取成功：写回缓存，下次启动/切换可直接显示，无需再等 5Mbps 限速链路
@@ -5418,21 +5375,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
     async function loadUnreadCounts() {
         try {
-            const [dRes, gRes] = await Promise.all([
-                apiFetch('/v1/direct/unread', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ limit: 200 })
-                }),
-                apiFetch('/v1/groups/unread', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ limit: 200 })
-                })
+            const [dData, gData] = await Promise.all([
+                OC.getUnreadDirect(200),
+                OC.getUnreadGroups(200)
             ]);
-            const dData = await dRes.json();
-            const gData = await gRes.json();
-            if (dData.error || gData.error) return;
+            if (!dData || !gData) return;
             // 统计私聊未读（按 from_ncuid 分组），并缓存每个会话最新一条未读消息用于通知预览
             const directCount = {};
             const directLast = {};
@@ -5667,13 +5614,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     // 复用 fetchLatestMessages 的「最新一页 offset=0」原语（/v1/groups/messages/after 有 Bug 已回退），靠 pushBgMsg 去重。
     async function fetchLatestSilent(type, id, convKey) {
         try {
-            const url = type === 'group'
-                ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=30&offset=0`
-                : `/v1/direct/messages/v2?with_ncuid=${encodeURIComponent(id)}&limit=30&offset=0`;
-            const res = await apiFetch(url);
-            const data = await res.json();
-            if (data && data.error) return;
-            const msgs = (data.messages || []).slice().reverse();
+            const msgs = type === 'group'
+                ? (await OC.getGroupMessages(id, { limit: 30, offset: 0 })).slice().reverse()
+                : (await OC.getDirectMessages(id, { limit: 30, offset: 0 })).slice().reverse();
             msgs.forEach(m => { if (m && m.id) pushBgMsg(convKey, buildMsgObj(m, convKey, type === 'group', type === 'group' ? id : undefined)); });
         } catch (e) { /* 静默忽略，不影响当前会话 */ }
     }
@@ -7541,9 +7484,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     async function loadFriendRequests(container) {
         container.innerHTML = loadingHtml('加载中...', 'inline');
         try {
-            const res = await apiFetch('/v1/friends/requests');
-            const data = await res.json();
-            const requests = (data.requests || []).filter(r => r.status === 0 || r.status === 'pending');
+            const requests = (await OC.getFriendRequests()).filter(r => r.status === 0 || r.status === 'pending');
             container.innerHTML = '';
             if (requests.length === 0) {
                 container.innerHTML = '<div style="padding:8px 15px;font-size:12px;color:var(--secondary-text);">暂无新申请</div>';
@@ -7586,13 +7527,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
     async function respondFriendRequest(requestId, accept, container) {
         try {
-            const res = await apiFetch('/v1/friends/respond', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ request_id: requestId, accept })
-            });
-            const data = await res.json();
-            if (data.error) { showAlert(data.error); return; }
+            const data = await OC.respondFriend(requestId, accept);
+            if (data && data.error) { showAlert(data.error); return; }
             // 刷新
             loadContacts();
         } catch (e) { showAlert('操作失败'); }
@@ -7661,13 +7597,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             friendBtn.disabled = true;
             friendBtn.textContent = '发送中...';
             try {
-                const r = await apiFetch('/v1/friends/request', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(toUidParam(val))
-                });
-                const d = await r.json();
-                if (d.error) { showAlert(d.error); }
+                const d = await OC.addFriend(val);
+                if (d && d.error) { showAlert(d.error); }
                 else { showAlert('好友请求已发送'); close(); }
             } catch (e) { showAlert('请求失败'); }
             friendBtn.disabled = false;
@@ -7804,23 +7735,20 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         try {
             // 群 / 私聊统一：拉最新一页（offset=0）。群消息同步不做 seq 增量续拉
             // （/v2/groups/messages/after 接口有 Bug，已回退为统一的最新一页拉取）。
-            const historyUrl = type === 'group'
-                ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`
-                : `/v1/direct/messages/v2?with_ncuid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=0`;
-            let res, data;
+            let msgs;
             try {
-                res = await apiFetch(historyUrl);
-                data = await res.json();
-                if (data.error) throw new Error(String(data.error));
+                msgs = type === 'group'
+                    ? await OC.getGroupMessages(id, { limit: PAGE_SIZE, offset: 0 })
+                    : await OC.getDirectMessages(id, { limit: PAGE_SIZE, offset: 0 });
             } catch (e) {
-                console.error('[FETCH] API error for', historyUrl, e);
+                console.error('[FETCH] API error for', type === 'group' ? 'getGroupMessages' : 'getDirectMessages', e);
                 return;
             }
             // 检查是否已切换会话或该请求已过期
             if (reqId !== fetchLatestReqId || currentConv?.key !== convKey) return;
 
             // 后端返回 DESC（最新在前）→ 反转为 ASC（旧→新）
-            const msgs = (data.messages || []).slice().reverse();
+            msgs = msgs.slice().reverse();
 
             // 多会话消息接受：把后台暂存的该会话消息并入（按时间排序 + id 去重），打开会话即秒开
             if (isMultiSessionEnabled() && bgMsgStore[convKey] && bgMsgStore[convKey].length) {
@@ -8004,9 +7932,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             pinAndReveal(async function () {
                 try {
                     if (type === 'group') {
-                        await apiFetch('/v1/groups/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ group_id: id }) });
+                        await OC.markGroupRead(id);
                     } else {
-                        await apiFetch('/v1/direct/read', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(withUidParam(id)) });
+                        await OC.markDirectRead(id);
                     }
                 } catch (e) {}
             }, true);
@@ -8046,20 +7974,20 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             messagesContainer.insertBefore(historySpinner, messagesContainer.firstChild);
             try {
                 const offset = convOffset[convKey] || 0;
-                const olderUrl = type === 'group'
-                    ? `/v1/groups/messages/v2?group_id=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=${offset}`
-                    : `/v1/direct/messages/v2?with_ncuid=${encodeURIComponent(id)}&limit=${PAGE_SIZE}&offset=${offset}`;
-                const res = await apiFetch(olderUrl);
-                const data = await res.json();
-                console.log('[LOAD_MORE] response:', olderUrl, 'msgs:', (data.messages||[]).length);
-                if (loadReqId !== isLoadingMoreReqId) return;
-                if (data.error) {
-                    console.error('[LOAD_MORE] API error:', data.error);
+                let olderMsgs;
+                try {
+                    olderMsgs = type === 'group'
+                        ? await OC.getGroupMessages(id, { limit: PAGE_SIZE, offset })
+                        : await OC.getDirectMessages(id, { limit: PAGE_SIZE, offset });
+                } catch (e) {
+                    console.error('[LOAD_MORE] API error:', e);
                     return;
                 }
+                console.log('[LOAD_MORE] msgs:', olderMsgs.length);
+                if (loadReqId !== isLoadingMoreReqId) return;
 
                 // Go 返回 DESC（新→旧），反转为 ASC（旧→新）
-                const olderMsgs = (data.messages || []).slice().reverse();
+                olderMsgs = olderMsgs.slice().reverse();
                 if (olderMsgs.length === 0) {
                     convHasMore[convKey] = false;
                     return;
@@ -9542,14 +9470,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
 
         // 带重试的发送逻辑
-        const sendEndpoint = currentConv.type === 'group' ? '/v1/groups/message/send' : '/v1/direct/send';
         const doSend = async () => {
-            const res = await apiFetch(sendEndpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            return await res.json();
+            return currentConv.type === 'group'
+                ? await OC.sendGroup(payload)
+                : await OC.sendDirect(payload);
         };
 
         let data = null;
@@ -9715,10 +9639,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         if (_refreshGroupInFlight.has(groupId)) return _refreshGroupInFlight.get(groupId);
         const promise = (async () => {
             try {
-                const res = await apiFetch('/v1/groups/members?group_id=' + encodeURIComponent(groupId));
-                const data = await res.json();
-                const members = (data.members || []).map(m => {
-                    const name = m.display_name || m.username || getUid(m);
+                const rawMembers = await OC.getGroupMembers(groupId);
+                const members = (rawMembers || []).map(m => {
+                    const name = m.name || m.uid || '';
                     // 预计算拼音（全拼 + 首字母），避免每次按键重算导致大群卡顿
                     const _py = getPinyinInitials(name).toLowerCase();
                     const _ini = name.split('').map(ch => {
@@ -9727,9 +9650,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     }).join('');
                     return {
                         uid: m.uid || '',
-                        ncuid: m.ncuid || getUid(m),
+                        ncuid: m.ncuid || '',
                         name: name,
-                        avatar: m.avatar_url || '',
+                        avatar: m.avatar || '',
                         _py: _py,
                         _ini: _ini
                     };
@@ -9759,11 +9682,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             return;
         }
         try {
-            const res = await apiFetch('/v1/groups/members?group_id=' + encodeURIComponent(groupId));
-            const data = await res.json();
-            // Go 返回 {members: [{uid, username, display_name, avatar_url, role, joined_at}]}
-            const members = (data.members || []).map(m => {
-                const name = m.display_name || m.username || getUid(m);
+            const rawMembers = await OC.getGroupMembers(groupId);
+            // 归一化对象：uid/ncuid/name/avatar 已就绪，补充拼音预计算
+            const members = (rawMembers || []).map(m => {
+                const name = m.name || m.uid || '';
                 // 预计算拼音（全拼 + 首字母），避免每次按键重算导致大群卡顿
                 const _py = getPinyinInitials(name).toLowerCase();
                 const _ini = name.split('').map(ch => {
@@ -9772,9 +9694,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 }).join('');
                 return {
                     uid: m.uid || '',            // 旧 uid
-                    ncuid: m.ncuid || getUid(m), // ncuid（getUid 优先取 ncuid）
+                    ncuid: m.ncuid || '',        // ncuid
                     name: name,
-                    avatar: m.avatar_url || '',
+                    avatar: m.avatar || '',
                     _py: _py,
                     _ini: _ini
                 };
@@ -10794,9 +10716,6 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     messageInput.focus();
                 } else if (action === 'recall') {
                     if (!currentConv) return;
-                    const recallUrl = currentConv.type === 'group'
-                        ? `/v1/groups/messages/${encodeURIComponent(msgId)}`
-                        : `/v1/direct/messages/${encodeURIComponent(msgId)}`;
 
                     // 先在本地替换 DOM（在 WebSocket 回调到达前生效），再发请求
                     const timeSep = createRecallSeparator('你', msgDiv);
@@ -10804,10 +10723,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     breakRecallChain(msgDiv, timeSep);
                     seenMsgIds[currentConv.key]?.delete(msgId);
 
-                    apiFetch(recallUrl, { method: 'DELETE' })
-                        .then(r => r.json())
+                    (currentConv.type === 'group' ? OC.recallGroupMessage(msgId) : OC.recallDirectMessage(msgId))
                         .then(d => {
-                            if (d.error) {
+                            if (d && d.error) {
                                 showAlert(d.error || '撤回失败');
                             }
                         }).catch(() => showAlert('网络错误'));
