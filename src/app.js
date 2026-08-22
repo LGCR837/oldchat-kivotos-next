@@ -112,6 +112,16 @@ const IS_TAURI = _detectIsTauri();
     };
     // 注：不再全局重写 window.fetch。后端请求统一通过 IIFE 外的顶层 tauriHttpFetch() 调用本实现。
 
+    // ---- 注入 SDK 网络转接器 window.ocTransport ----
+    // oldchat-api-sdk.js 所有 HTTP 请求都打到 window.ocTransport(url, init)，但该实现不在 SDK 内。
+    // 此处作为外部注入方：Tauri 环境优先走 plugin-http 直连（无 CORS），否则回退浏览器原生 fetch。
+    window.ocTransport = async function (url, init) {
+        if (typeof window.__tauriHttpFetchImpl === 'function') {
+            return window.__tauriHttpFetchImpl(url, init);
+        }
+        return fetch(url, init);
+    };
+
     // 标记 Tauri 环境（CSS 据此启用圆角阴影、三大金刚键、拖动区域）
     document.body.classList.add('tauri-env');
 
