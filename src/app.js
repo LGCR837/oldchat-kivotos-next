@@ -13086,16 +13086,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     async function gachaPull() {
         let arr = null;
         try {
-            const res = await apiFetch('/v1/me/scratch', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: '{}'
-            });
-            const text = await res.text();
-            let rd = {};
-            try { rd = JSON.parse(text); } catch (e) {}
-            if (rd && typeof rd.body === 'string') { try { rd = JSON.parse(rd.body); } catch (e) {} }
-            if (res.status < 400 && !rd.error && Array.isArray(rd.slots)) arr = rd.slots;
+            const { status, data: rd } = await OC.postMeScratch();
+            if (status < 400 && !rd.error && Array.isArray(rd.slots)) arr = rd.slots;
         } catch (e) { console.warn('[gacha] pull failed', e); }
         if (!arr) {
             const data = await scratchLoad();

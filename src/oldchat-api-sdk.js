@@ -308,6 +308,32 @@
       return _post('/v1/public-court/cases/' + encodeURIComponent(id) + '/withdraw', {});
     },
 
+    // ===== 刮刮乐 scratch（app.js:12962/13089）=====
+    // GET 取当日状态：404/异常回传 null（视为功能未上线），由调用方 scratchLoad 处理
+    async getMeScratch() {
+      try {
+        const r = await apiFetch('/v1/me/scratch', { method: 'GET' });
+        if (r.status === 404) return null;
+        const text = await r.text();
+        let data = {};
+        try { data = JSON.parse(text); } catch (e) {}
+        if (data && data.error) throw new OCError(data.error);
+        return data;
+      } catch (e) {
+        if (e instanceof OCError) throw e;
+        return null; // 网络/解析异常视为未上线
+      }
+    },
+    // POST 执行刮奖：返回 {status, data}，data 可能嵌套在 rd.body 字符串里，由调用方解
+    async doScratch() {
+      const r = await apiFetch('/v1/me/scratch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const text = await r.text();
+      let rd = {};
+      try { rd = JSON.parse(text); } catch (e) {}
+      if (rd && typeof rd.body === 'string') { try { rd = JSON.parse(rd.body); } catch (e) {} }
+      return { status: r.status, data: rd };
+    },
+
     // ===== 表情广场 emoji（app.js:11278/11309/11355/11476/11486）=====
     // 字段各异（emoji 包含 id/name/url/type 等），调用方直接用 raw，不归一化
     async getEmojiPlaza({ limit = 50, offset = 0 } = {}) {
@@ -382,42 +408,9 @@
       const d = await _get('/v1/me');
       return d.user || d;
     },
-    // 刮刮乐 GET：404 视为功能未上线返回 null；body 字段可能为 JSON 字符串需二次解析
-    async getMeScratch() {
-      const r = await apiFetch('/v1/me/scratch', { method: 'GET' });
-      if (r.status === 404) return null;
-      const text = await r.text();
-      let data = {};
-      try { data = JSON.parse(text); } catch (e) { console.warn('[scratch] not JSON:', text.slice(0, 100)); }
-      if (data && typeof data.body === 'string') { try { data = JSON.parse(data.body); } catch (e) {} }
-      return data;
-    },
-    // 刮刮乐 POST：返回 {status, data}，调用方按 status/error 判断成功
-    async postMeScratch() {
-      const r = await apiFetch('/v1/me/scratch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}'
-      });
-      const text = await r.text();
-      let data = {};
-      try { data = JSON.parse(text); } catch (e) {}
-      if (data && typeof data.body === 'string') { try { data = JSON.parse(data.body); } catch (e) {} }
-      return { status: r.status, data };
-    },
 
     // ===== 资源广场 resources（v1 临时关闭，暂缓；对应行 15628/15674/15727/15774/15809/15888/15904/15939/15962/15984）=====
-    // ===== 通知 notifications（app.js:13273）=====
-    // 404→功能建设中，非 JSON 容错，返回 {notFound, data}（与签到墙同模式）
-    async getNotifications(limit = 50) {
-      const r = await apiFetch(`/v1/notifications?limit=${limit}`);
-      if (r.status === 404) return { notFound: true };
-      const text = await r.text();
-      let data = {};
-      try { data = JSON.parse(text); } catch (e) { console.warn('[notice] not JSON:', text.slice(0, 100)); }
-      if (data && data.error) throw new OCError(data.error);
-      return { notFound: false, data };
-    },
+    // 服务端尚未迁移 v2，且近期因特殊原因临时关闭。app.js 保留裸 apiFetch 调用，待服务端恢复/迁移后再收口。
 
     // ===== 收藏 favorites（app.js:1420/13881/13908）=====
     async getFavorites(limit = 100) {
