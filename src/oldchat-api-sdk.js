@@ -237,7 +237,18 @@
       return _post('/v1/moments/comment', { moment_id: momentId, body });
     },
 
-    // ===== 红包 redpackets（TODO: 对应行 10114/10169/10234/11312）=====
+    // ===== 红包 redpackets（已读码，app.js:9997/10052/10117/11191）=====
+    // 返回 raw：调用方直接用 d.cover_url/d.title/d.packet_id 等原始字段，不归一化。
+    async getRedpacket(packetId) {
+      return _get(`/v1/redpackets/${encodeURIComponent(packetId)}`);
+    },
+    async claimRedpacket(packetId) {
+      return _post('/v1/redpackets/claim', { packet_id: packetId });
+    },
+    async sendRedpacket(payload) {
+      return _post('/v1/redpackets/send', payload);
+    },
+
     // ===== 签到墙 checkin wall（TODO: 对应行 13122/13183/13198/13253/13316/13394/3727/3773）=====
     // ===== 公审庭 public-court（TODO: 对应行 15418/15439/15453/15454/15547/15565/15579/15592）=====
     // ===== 表情广场 emoji（TODO: 对应行 11448/11479/11525/11646/11656）=====
@@ -257,8 +268,6 @@
       return _post('/v1/favorites/remove', { id });
     },
 
-    // ===== 用户资料 users/profile（TODO: 对应行 3193/4364/6059/6067/6076）=====
-    // ===== 用户资料 users/profile（TODO: 对应行 3193/4364/6059/6067/6076）=====
     // ===== 音乐广场 music/plaza（app.js:2512/2933）=====
     // 上传为 FormData（非 JSON），单独走 apiFetch 直接发，再 _parse 兜 error
     async uploadMusicPlaza(formData) {
@@ -271,8 +280,8 @@
       return d.item || d.data || d;
     },
 
-    // ===== 用户资料 users/profile（app.js:3184/4306/4433/4463/4491/5963/5971/5980）=====
-    // 双路径回退：ncuid 优先（ncuid 不能传 ?uid= 会 400），失败回退 uid
+    // ===== 用户资料 users/profile（app.js:3184/4306/4433/4463/4491/5942/5950/5959）=====
+    // 三路径回退：ncuid → uid → (uid 当 ncuid 查，服务器可能把 ncuid 放进 from_uid)
     async getUserProfile({ ncuid, uid } = {}) {
       if (ncuid) {
         try {
@@ -285,6 +294,12 @@
           const d = await _get('/v1/users/profile?uid=' + encodeURIComponent(uid));
           if (d && !d.error) return d;
         } catch (e) {}
+        if (!ncuid) {
+          try {
+            const d = await _get('/v1/users/profile?ncuid=' + encodeURIComponent(uid));
+            if (d && !d.error) return d;
+          } catch (e) {}
+        }
       }
       return null;
     },
@@ -296,12 +311,10 @@
     },
 
     // ===== 通知 notifications（app.js:13427）=====
-    async getNotifications(limit = 50) {
-      const d = await _get('/v1/notifications?limit=' + limit);
-      return d.notifications || d.items || [];
-    },
+    // 注意：通知页是「尽力解析」容错逻辑（检查 404 显示建设中、res.text() 再 JSON.parse），
+    // 不适合强制归一化，app.js 保留裸 apiFetch 调用。此处不提供 OC 方法。
 
-    // ===== 动态 moments（TODO: 对应行 3219/3229/3444/3528/3610/3654）=====
+    // ===== 动态 moments（app.js:3219/3229/3444/3528/3610/3654，已由本文件上方实现）=====
   };
 
   global.OC = OC;

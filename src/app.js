@@ -3175,30 +3175,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             spSyncMaxIcon(); // 打开时同步一次图标
         }
 
-        // 尝试获取用户资料：优先用 ncuid，失败则用 uid
+        // 尝试获取用户资料：优先用 ncuid，失败则用 uid（OC.getUserProfile 内部已做双路径回退）
         async function fetchProfileForPanel() {
-            let data = null;
-            // 优先 ncuid 路径
-            if (ncuid) {
-                try {
-                    const res = await apiFetch('/v1/users/profile?ncuid=' + encodeURIComponent(ncuid));
-                    if (res.ok) {
-                        const d = await res.json();
-                        if (d && !d.error) data = d;
-                    }
-                } catch (e) {}
-            }
-            // 失败则 uid 路径（注意：ncuid 不能传入 ?uid=，会 400，所以 uid 路径只在 ncuid 路径无结果时尝试）
-            if (!data && uid) {
-                try {
-                    const res = await apiFetch(profileQuery(uid));
-                    if (res.ok) {
-                        const d = await res.json();
-                        if (d && !d.error) data = d;
-                    }
-                } catch (e) {}
-            }
-            return data;
+            return await OC.getUserProfile({ ncuid, uid });
         }
 
         // 尝试获取动态：优先用 ncuid，失败则用 uid
@@ -4302,12 +4281,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         async function load() {
             try {
-                const [profRes, friends] = await Promise.all([
-                    apiFetch('/v1/users/profile?ncuid=' + encodeURIComponent(myUid)),
+                const [prof, friends] = await Promise.all([
+                    OC.getUserProfile({ ncuid: myUid }),
                     OC.getFriends()
                 ]);
-                const prof = await profRes.json();
-                if (prof.error) { scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">' + prof.error + '</div>'; return; }
+                if (!prof || prof.error) { scroll.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">' + (prof && prof.error || '加载失败') + '</div>'; return; }
                 currentProfile = prof;
                 // 刷新缓存
                 prof._ts = Date.now();
@@ -9994,9 +9972,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         async function loadDetail() {
             const body = overlay.querySelector('#rpDetailBody');
             try {
-                const res = await apiFetch('/v1/redpackets/' + encodeURIComponent(packetId));
-                const d = await res.json();
-                if (d.error) { body.innerHTML = '<div class="court-error">' + escapeHtml(d.error) + '</div>'; return; }
+                const d = await OC.getRedpacket(packetId);
+                if (d && d.error) { body.innerHTML = '<div class="court-error">' + escapeHtml(d.error) + '</div>'; return; }
 
                 const cover = d.cover_url || d.cover || (cardEl && cardEl.dataset.cover) || '';
                 const title = d.title || d.blessing || (cardEl && cardEl.dataset.title) || '恭喜发财';
@@ -10049,12 +10026,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         claimBtn.disabled = true;
                         claimBtn.textContent = '领取中...';
                         try {
-                            const r2 = await apiFetch('/v1/redpackets/claim', {
-                                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ packet_id: packetId })
-                            });
-                            const d2 = await r2.json();
-                            if (d2.error) { showAlert(d2.error); claimBtn.disabled = false; claimBtn.textContent = '领取红包'; return; }
+                            const d2 = await OC.claimRedpacket(packetId);
+                            if (d2 && d2.error) { showAlert(d2.error); claimBtn.disabled = false; claimBtn.textContent = '领取红包'; return; }
                 if (cardEl) {
                     claimedRedPackets.add(packetId);
                     saveClaimedRedPackets();
@@ -10114,15 +10087,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 } else {
                     Object.assign(payload, { to_uid: currentConv._sendToUid || currentConv.id, to_ncuid: currentConv.id });
                 }
-                const res = await apiFetch('/v1/redpackets/send', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                const text = await res.text();
-                let data = {};
-                try { data = JSON.parse(text); } catch (e) {}
-                if (data.error) { showAlert(data.error); return; }
+                const data = await OC.sendRedpacket(payload);
+                if (data && data.error) { showAlert(data.error); return; }
                 rpDialogOverlay.style.display = 'none';
                 // 发送成功后本地立即追加一条红包消息，避免必须刷新页面才显示
                 try {
@@ -11188,13 +11154,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
         setRpStatus(packetId, '领取中...');
         try {
-            const res = await apiFetch('/v1/redpackets/claim', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ packet_id: packetId })
-            });
-            const data = await res.json();
-            if (data.error) {
+            const data = await OC.claimRedpacket(packetId);
+            if (data && data.error) {
                 // 已领过 → 标记已领取并进入详情（而非报错 / 重复领取被拉黑）
                 if (String(data.error).toLowerCase().includes('already')) {
                     claimedRedPackets.add(packetId);
