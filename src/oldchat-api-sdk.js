@@ -218,7 +218,19 @@
     // ===== 通知 notifications（TODO: 对应行 13548）=====
     // ===== 收藏 favorites（TODO: 对应行 1420/13989/14016）=====
     // ===== 用户资料 users/profile（TODO: 对应行 3193/4364/6059/6067/6076）=====
-    // ===== 音乐广场 music/plaza（TODO: 对应行 2512/2933）=====
+    // ===== 音乐广场 music/plaza（app.js:2512/2933）=====
+    // 上传为 FormData（非 JSON），单独走 apiFetch 直接发，再 _parse 兜 error
+    async uploadMusicPlaza(formData) {
+      const r = await apiFetch('/v1/music/plaza/upload', { method: 'POST', body: formData });
+      return _parse(r);
+    },
+    async getMusicPlazaDetail(itemId) {
+      const d = await _get('/v1/music/plaza/detail?id=' + encodeURIComponent(itemId));
+      // 兼容响应嵌套：详情可能包在 item/data 字段里
+      return d.item || d.data || d;
+    },
+
+    // ===== 动态 moments（TODO: 对应行 3219/3229/3444/3528/3610/3654）=====
   };
 
   global.OC = OC;
