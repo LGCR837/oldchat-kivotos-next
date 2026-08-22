@@ -249,7 +249,31 @@
       return _post('/v1/redpackets/send', payload);
     },
 
-    // ===== 签到墙 checkin wall（TODO: 对应行 13122/13183/13198/13253/13316/13394/3727/3773）=====
+    // ===== 签到墙 checkin wall（已读码，app.js:3661/3707/12962/13023/13038）=====
+    // getCheckinWall 需保留「404→功能建设中」与「非 JSON 容错」特殊逻辑，故返回 {notFound, data}
+    async getCheckinWall(limit = 50) {
+      const r = await apiFetch(`/v1/me/checkin/wall?limit=${limit}`);
+      if (r.status === 404) return { notFound: true };
+      const text = await r.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch (e) { console.warn('[checkin] wall not JSON:', text.slice(0, 100)); }
+      if (data && data.error) throw new OCError(data.error);
+      return { notFound: false, data };
+    },
+    async doCheckin() {
+      return _post('/v1/me/checkin', {});
+    },
+    async postCheckinWall(contentText) {
+      return _post('/v1/me/checkin/wall', { content_text: contentText });
+    },
+    async getCheckinWallComments(postId) {
+      const d = await _get(`/v1/me/checkin/wall/comments?post_id=${encodeURIComponent(postId)}`);
+      return d.comments || [];
+    },
+    async postCheckinWallComment({ postId, body }) {
+      return _post('/v1/me/checkin/wall/comment', { post_id: postId, body });
+    },
+
     // ===== 公审庭 public-court（TODO: 对应行 15418/15439/15453/15454/15547/15565/15579/15592）=====
     // ===== 表情广场 emoji（TODO: 对应行 11448/11479/11525/11646/11656）=====
     // ===== 媒体上传 media（TODO: 对应行 3523/4212/10330/14836）=====

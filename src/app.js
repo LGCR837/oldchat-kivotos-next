@@ -3658,13 +3658,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         async function loadComments() {
             scrollEl.innerHTML = loadingHtml('加载中...');
             try {
-                const res = await apiFetch('/v1/me/checkin/wall/comments?post_id=' + encodeURIComponent(postId));
-                const data = await res.json();
-                if (data.error) {
-                    scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">' + escapeHtml(data.error) + '</div>';
+                const comments = await OC.getCheckinWallComments(postId);
+                if (comments.error) {
+                    scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">' + escapeHtml(comments.error) + '</div>';
                     return;
                 }
-                const comments = data.comments || [];
                 if (comments.length === 0) {
                     scrollEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--secondary-text);">还没有评论，快来抢沙发~</div>';
                     return;
@@ -3704,13 +3702,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             sendBtn.disabled = true;
             sendBtn.textContent = '...';
             try {
-                const res = await apiFetch('/v1/me/checkin/wall/comment', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ post_id: postId, body: text })
-                });
-                const data = await res.json();
-                if (data.error) { showAlert(data.error); return; }
+                const data = await OC.postCheckinWallComment({ postId, body: text });
+                if (data && data.error) { showAlert(data.error); return; }
                 inputEl.value = '';
                 if (triggerBtn) {
                     const countEl = triggerBtn.lastChild;
@@ -4408,13 +4401,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                             return;
                         }
                         try {
-                            const r = await apiFetch('/v1/me/profile', {
-                                method: 'POST',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify({ display_name: newVal })
-                            });
-                            const d = await r.json();
-                            if (d.error) { showAlert(d.error); return; }
+                            const d = await OC.updateMyProfile({ display_name: newVal });
+                            if (d && d.error) { showAlert(d.error); return; }
                             currentProfile.display_name = newVal;
                             field.innerHTML = `<div class="mp-field-name" id="mpNameText">${escapeHtml(newVal)}</div>`;
                             document.getElementById('sidebarUserName').textContent = newVal;
@@ -4438,13 +4426,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                             return;
                         }
                         try {
-                            const r = await apiFetch('/v1/me/uid', {
-                                method: 'POST',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify({ uid: newVal })
-                            });
-                            const d = await r.json();
-                            if (d.error) { showAlert(d.error); return; }
+                            const d = await OC.updateMyUid(newVal);
+                            if (d && d.error) { showAlert(d.error); return; }
                             currentProfile.ncuid = newVal;
                             field.innerHTML = `<div class="mp-field-uid" id="mpUidText">${escapeHtml(newVal)}</div>`;
                         } catch (err) { showAlert('保存失败'); }
@@ -4466,13 +4449,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                             return;
                         }
                         try {
-                            const r = await apiFetch('/v1/me/profile', {
-                                method: 'POST',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify({ signature: newVal })
-                            });
-                            const d = await r.json();
-                            if (d.error) { showAlert(d.error); return; }
+                            const d = await OC.updateMyProfile({ signature: newVal });
+                            if (d && d.error) { showAlert(d.error); return; }
                             currentProfile.signature = newVal;
                             field.innerHTML = `<div class="mp-field-bio" id="mpBioText">${newVal ? escapeHtml(newVal) : '点击添加签名'}</div>`;
                         } catch (err) { showAlert('保存失败'); }
@@ -5935,32 +5913,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
         const promise = (async () => {
             try {
-                let data = null;
-                // 优先使用 ncuid 参数（?ncuid= 路径）
-                if (ncuid) {
-                    const res = await apiFetch('/v1/users/profile?ncuid=' + encodeURIComponent(ncuid));
-                    if (res.ok) {
-                        const d = await res.json();
-                        if (d && !d.error) data = d;
-                    }
-                }
-                // ncuid 查询失败，尝试用 uid 查询（?uid= 路径，注意 ncuid 不能传入 ?uid=）
-                if (!data && uid) {
-                    const res = await apiFetch('/v1/users/profile?uid=' + encodeURIComponent(uid));
-                    if (res.ok) {
-                        const d = await res.json();
-                        if (d && !d.error) data = d;
-                    }
-                }
-                // 补充：uid 查询也失败，但 uid 实际上可能是 ncuid（服务器把 ncuid 放进了 from_uid 字段）
-                // 尝试用 ?ncuid= 查询 uid 值
-                if (!data && uid && !ncuid) {
-                    const res = await apiFetch('/v1/users/profile?ncuid=' + encodeURIComponent(uid));
-                    if (res.ok) {
-                        const d = await res.json();
-                        if (d && !d.error) data = d;
-                    }
-                }
+                // OC.getUserProfile 内部已做三路径回退（ncuid → uid → uid当ncuid）
+                const data = await OC.getUserProfile({ ncuid, uid });
                 // 三种都失败（网络错误等情况），不标记无效，允许后续重试
                 if (!data) return null;
                 // 服务器返回错误信息（理论上上面已过滤，但保留防御性检查）
@@ -12959,13 +12913,12 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         try {
             let wallData = {};
             try {
-                const wallRes = await apiFetch('/v1/me/checkin/wall?limit=50');
-                if (wallRes.status === 404) {
+                const wall = await OC.getCheckinWall(50);
+                if (wall.notFound) {
                     target.innerHTML = '<h3>签到墙</h3><div style="text-align:center;padding:60px 20px;color:var(--secondary-text);"><i class="fa-solid fa-hammer" style="font-size:32px;margin-bottom:12px;display:block;"></i>功能建设中，敬请期待</div>';
                     return;
                 }
-                const wallText = await wallRes.text();
-                try { wallData = JSON.parse(wallText); } catch (e) { console.warn('[checkin] wall not JSON:', wallText.slice(0, 100)); }
+                wallData = wall.data;
             } catch (e) {
                 target.innerHTML = '<h3>签到墙</h3><div style="text-align:center;padding:60px 20px;color:var(--secondary-text);"><i class="fa-solid fa-hammer" style="font-size:32px;margin-bottom:12px;display:block;"></i>功能建设中，敬请期待</div>';
                 return;
@@ -13020,11 +12973,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             // 签到按钮
             document.getElementById('checkinDoBtn')?.addEventListener('click', async () => {
                 try {
-                    const res = await apiFetch('/v1/me/checkin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-                    const text = await res.text();
-                    let data = {};
-                    try { data = JSON.parse(text); } catch (e) {}
-                    if (data.error) { showAlert(data.error); return; }
+                    const data = await OC.doCheckin();
+                    if (data && data.error) { showAlert(data.error); return; }
                     renderCheckin(target);
                 } catch (e) { showAlert('签到失败'); }
             });
@@ -13035,12 +12985,8 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 const msg = (input?.value || '').trim();
                 if (!msg) { showAlert('请输入留言内容'); return; }
                 try {
-                    const res = await apiFetch('/v1/me/checkin/wall', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ content_text: msg })
-                    });
-                    const data = await res.json().catch(() => ({}));
-                    if (data.error) { showAlert(data.error); return; }
+                    const data = await OC.postCheckinWall(msg);
+                    if (data && data.error) { showAlert(data.error); return; }
                     renderCheckin(target);
                 } catch (e) { showAlert('留言失败'); }
             });
