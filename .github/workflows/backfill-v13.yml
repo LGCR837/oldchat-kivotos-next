@@ -1,0 +1,151 @@
+name: Backfill v13 Missing Assets
+
+# 一次性补传 v13 缺失产物（3 个 Windows NSIS 安装包 + aarch64 deb/rpm）。
+# 修复了 release.yml 的两个 bug：
+#   1) Windows installer 上传步骤缺 shell:bash（PowerShell 不认 TAG="v13" 赋值）；
+#   2) aarch64 放弃脆弱的 AppImage，仅发 deb+rpm。
+# 用完后可删除本文件。
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: GitHub Release ID to upload assets to (v13)
+        required: true
+        type: string
+      release_tag:
+        description: Release tag used in asset names
+        required: true
+        default: v13
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    name: Build and Upload Windows Installer (${{ matrix.asset_suffix }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            arch: amd64
+            asset_suffix: windows-amd64-setup
+          - platform: windows-latest
+            target: aarch64-pc-windows-msvc
+            arch: aarch64
+            asset_suffix: windows-aarch64-setup
+          - platform: windows-latest
+            target: i686-pc-windows-msvc
+            arch: i386
+            asset_suffix: windows-i386-setup
+    runs-on: ${{ matrix.platform }}
+    env:
+      TAG: ${{ inputs.release_tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # 产出 NSIS 安装包（已在 tauri.conf.json 设 webviewInstallMode=EmbedBootstrapper 内嵌 WebView2 引导）
+      - name: Build Tauri installer (NSIS)
+        run: npm run tauri build -- --bundles nsis --target ${{ matrix.target }}
+
+      - name: Rename and upload installer
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ env.TAG }}"
+          ARCH="${{ matrix.arch }}"
+          ROOT=src-tauri/target/${{ matrix.target }}/release/bundle/nsis
+          SETUP=$(ls "$ROOT"/*.exe | head -n1)
+          OUT=$(mktemp -d)
+          mv "$SETUP" "$OUT/oldchat-kivotos-next-app-${TAG}-windows-${ARCH}-setup.exe"
+          gh release upload "$TAG" "$OUT/oldchat-kivotos-next-app-${TAG}-windows-${ARCH}-setup.exe"
+
+  linux-arm64-bundles:
+    name: Build and Upload Linux Bundles (aarch64 · deb/rpm)
+    runs-on: ubuntu-22.04
+    env:
+      TAG: ${{ inputs.release_tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Install Linux system dependencies (cross aarch64)
+        run: |
+          apt_source=/etc/apt/sources.list.d/ubuntu-cross-arch.list
+          apt_opts=(
+            -o Dir::Etc::sourcelist="$apt_source"
+            -o Dir::Etc::sourceparts=-
+            -o APT::Get::List-Cleanup=0
+          )
+          sudo dpkg --add-architecture arm64
+          sources='deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-backports main restricted universe multiverse'
+          packages='gcc g++ gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libwebkit2gtk-4.1-dev:arm64 libappindicator3-dev:arm64 librsvg2-dev:arm64 patchelf xdg-utils'
+          printf '%s\n' "$sources" | sudo tee "$apt_source" >/dev/null
+          sudo apt-get update "${apt_opts[@]}"
+          sudo apt-get install -y "${apt_opts[@]}" $packages
+
+      - name: Configure Linux cross-compilation (aarch64)
+        run: |
+          echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc' >> "$GITHUB_ENV"
+          echo 'PKG_CONFIG_ALLOW_CROSS=1' >> "$GITHUB_ENV"
+          echo 'PKG_CONFIG_SYSROOT_DIR=/' >> "$GITHUB_ENV"
+          echo 'PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig' >> "$GITHUB_ENV"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # aarch64 AppImage 在 x86 runner 交叉打包极易失败，放弃 AppImage，仅发 deb + rpm
+      - name: Build Tauri bundles (aarch64 deb + rpm)
+        run: npm run tauri build -- --bundles deb,rpm --target aarch64-unknown-linux-gnu
+
+      - name: Rename and upload bundles
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ env.TAG }}"
+          ROOT=src-tauri/target/aarch64-unknown-linux-gnu/release/bundle
+          DEB=$(ls "$ROOT"/deb/*.deb | head -n1)
+          RPM=$(ls "$ROOT"/rpm/*.rpm | head -n1)
+          OUT=$(mktemp -d)
+          mv "$DEB" "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-deb.deb"
+          mv "$RPM" "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-rpm.rpm"
+          gh release upload "$TAG" \
+            "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-deb.deb" \
+            "$OUT/oldchat-kivotos-next-app-${TAG}-linux-aarch64-rpm.rpm"
