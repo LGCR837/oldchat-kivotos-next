@@ -9937,20 +9937,54 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                         claimBtn.textContent = '领取中...';
                         try {
                             const d2 = await OC.claimRedpacket(packetId);
-                            if (d2 && d2.error) { showAlert(d2.error); claimBtn.disabled = false; claimBtn.textContent = '领取红包'; return; }
-                if (cardEl) {
-                    claimedRedPackets.add(packetId);
-                    saveClaimedRedPackets();
-                    if (d2.amount != null) claimedRpAmount[packetId] = d2.amount;
-                    cardEl.dataset.claimed = 'true';
-                    cardEl.dataset.claiming = '';
-                    const st = cardEl.querySelector('.rp-status');
-                    const amt = d2.amount != null ? d2.amount : '';
-                    if (st) st.textContent = amt ? `已领取 ${amt}` : '已领取';
-                    cardEl.style.opacity = '0.7';
-                }
+                            if (d2 && d2.error) {
+                                // 业务拒绝（已领取/过期/金额不足）：已领取 → 标记并刷新详情；否则显示真实原因
+                                if (/already|已领取|已抢过|重复领取/i.test(String(d2.error))) {
+                                    if (cardEl) {
+                                        claimedRedPackets.add(packetId);
+                                        saveClaimedRedPackets();
+                                        cardEl.dataset.claimed = 'true';
+                                        cardEl.dataset.claiming = '';
+                                        cardEl.style.opacity = '0.7';
+                                    }
+                                    loadDetail();
+                                } else {
+                                    showAlert(String(d2.error));
+                                    claimBtn.disabled = false;
+                                    claimBtn.textContent = '领取红包';
+                                }
+                                return;
+                            }
+                            if (cardEl) {
+                                claimedRedPackets.add(packetId);
+                                saveClaimedRedPackets();
+                                if (d2.amount != null) claimedRpAmount[packetId] = d2.amount;
+                                cardEl.dataset.claimed = 'true';
+                                cardEl.dataset.claiming = '';
+                                const st = cardEl.querySelector('.rp-status');
+                                const amt = d2.amount != null ? d2.amount : '';
+                                if (st) st.textContent = amt ? `已领取 ${amt}` : '已领取';
+                                cardEl.style.opacity = '0.7';
+                            }
                             loadDetail();
-                        } catch (e) { showAlert('领取失败'); claimBtn.disabled = false; claimBtn.textContent = '领取红包'; }
+                        } catch (e) {
+                            // SDK _parse 对服务端 {error} 抛 OCError：显示真实错误文案而非笼统"领取失败"
+                            const emsg = (e && (e.message || e.msg)) ? (e.message || e.msg) : '领取失败';
+                            if (/already|已领取|已抢过|重复领取/i.test(emsg)) {
+                                if (cardEl) {
+                                    claimedRedPackets.add(packetId);
+                                    saveClaimedRedPackets();
+                                    cardEl.dataset.claimed = 'true';
+                                    cardEl.dataset.claiming = '';
+                                    cardEl.style.opacity = '0.7';
+                                }
+                                loadDetail();
+                            } else {
+                                showAlert(emsg);
+                                claimBtn.disabled = false;
+                                claimBtn.textContent = '领取红包';
+                            }
+                        }
                     });
                 }
             } catch (e) {
@@ -11088,8 +11122,19 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 card.style.cursor = 'default';
             }
         } catch (err) {
-            setRpStatus(packetId, '网络错误');
-            card.dataset.claiming = '';
+            // SDK _parse 对服务端 {error} 响应抛 OCError（业务拒绝/已领取），
+            // 这里取真实错误文案而非笼统"网络错误"；"已领取"对齐老版行为：标记已领取并进详情。
+            const emsg = (err && (err.message || err.msg)) ? (err.message || err.msg) : '网络错误';
+            if (/already|已领取|已抢过|重复领取/i.test(emsg)) {
+                claimedRedPackets.add(packetId);
+                saveClaimedRedPackets();
+                card.dataset.claimed = 'true';
+                setRpStatus(packetId, '已领取');
+                openRedPacketDetail(packetId, card);
+            } else {
+                setRpStatus(packetId, emsg);
+                card.dataset.claiming = '';
+            }
         }
     });
 
