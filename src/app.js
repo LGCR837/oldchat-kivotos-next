@@ -15730,6 +15730,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         try { window.__MediaCache.init(); } catch (e) { console.error('[MediaCache]', e); }
     }
 
+    // 暴露 WS_HOST 给 oldchat-ws-extension.js 的默认 getUrl（扩展包连接管道复用此 host）。
+    // 不改动现有 WS 实现；__wsSession（含 getSessionId）已由上方 window.__wsSession 暴露。
+    try { window.WS_HOST = WS_HOST; } catch (e) {}
+
     // 初始化完成：关闭启动闪屏（覆盖 app.js 解析/初始化期间的白屏）
     hideAppSplash();
 

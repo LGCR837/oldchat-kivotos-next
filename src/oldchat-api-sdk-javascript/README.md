@@ -926,3 +926,14 @@ window.ocTransport = async (url) =>
 
 > 本文档随 `oldchat-api-sdk-javascript` 仓库维护。SDK 为单文件 `oldchat-api-sdk.js`，
 > 引入即用的设计目标是不要求调用方理解内部签名/降级细节——只需注入 `ocTransport` 并提供登录态。
+
+---
+
+## 14. 官方扩展包：WebSocket 实时推送
+
+核心 SDK 只负责 HTTP 侧协议，**实时消息推送**由独立扩展包 `oldchat-ws-extension.js` 提供。
+
+- 文件：`oldchat-ws-extension.js`（全局 `window.OCWebSocket`）
+- 职责：**纯长连接管道**——建连 / 断线指数退避重连 / 信封解密还原 / 事件分发；绝不解析业务字段。
+- 据实修正了通用 AI 方案的协议错误：`/v1/ws`（非 `/gateway`）、`ws:`/`wss:` 自适应、`token`+`sid` 双参、`oc_request_mode` 真实三档取值、心跳可选、Tauri 原生直连。
+- 详细用法、配置项、事件表、宿主适配示例见 **[WS_EXTENSION.md](./WS_EXTENSION.md)**。
