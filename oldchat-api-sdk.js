@@ -177,9 +177,10 @@ const V1_TO_V2 = {
     '/v1/groups/list': '/v2/groups/list',
     '/v1/groups/members': '/v2/groups/members',
     '/v1/groups/members/lookup': '/v2/groups/members/lookup',
-    // 红包
-    '/v1/redpackets/send': '/v2/redpackets/send',
-    '/v1/redpackets/claim': '/v2/redpackets/claim',
+    // 红包：保持 v1。老 OCKN 红包走 v1 正常；/v2/redpackets/* 实测领取/发送异常
+    // （catch 表现为"网络错误"，无控制台报错），暂不升级 v2，待 v2 签名专项排查后再恢复。
+    // '/v1/redpackets/send': '/v2/redpackets/send',
+    // '/v1/redpackets/claim': '/v2/redpackets/claim',
     // 好友
     '/v1/friends': '/v2/friends',
     '/v1/friends/request': '/v2/friends/request',
@@ -664,7 +665,9 @@ async function _fetchWithCandidates(url, options, strictV2) {
                     for (const fb of BACKEND_CANDIDATES) {
                         try {
                             const r2 = await ocTransport(fb + v1Url, Object.assign({}, options, { headers: hdrs }));
-                            if (r2.status < 500) return r2;
+                            // 仅 2xx 视为回退成功；4xx（含 401 token 过期）不要 short-circuit，
+                            // 否则会跳过下方的 token 刷新/重登逻辑，导致 v2 端点静默报废。
+                            if (r2.ok) return r2;
                         } catch (e) { /* 继续下一个候选 */ }
                     }
                 }
@@ -685,6 +688,8 @@ async function _fetchWithCandidates(url, options, strictV2) {
                         if (data.user) localStorage.setItem('oc_user', JSON.stringify(data.user));
                         options.headers = options.headers || {};
                         options.headers['Authorization'] = 'Bearer ' + data.access_token;
+                        // token 刷新成功：恢复该端点为 v2（本次 401 时它已被误加入 v2FailedPaths 熔断）
+                        v2FailedPaths.delete(url.split('?')[0]);
                         const replay = await ocTransport(base + url, options);
                         // v2 加密响应解密后返回
                         return options._v2Encrypted ? await maybeDecryptV2Response(replay) : replay;
