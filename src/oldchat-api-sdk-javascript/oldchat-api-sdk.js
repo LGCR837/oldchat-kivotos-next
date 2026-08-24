@@ -1014,14 +1014,21 @@ async function ocTransport(input, init) {
 
     // ===== 红包 redpackets（已读码，app.js:9997/10052/10117/11191）=====
     // 返回 raw：调用方直接用 d.cover_url/d.title/d.packet_id 等原始字段，不归一化。
+    // 注意：下列三个方法特意返回 {error} 对象而非 throw —— app.js 的调用方
+    // （openRedPacketDetail / 红包卡片点击领取）均按 `if (d && d.error)` 处理错误，
+    // 若此处 throw，错误会被外层 catch 统一吞成「网络错误」且控制台无输出，难以排查。
+    // _post/_get 底层仍会在服务端返回 {error} 时抛 OCError，这里转为返回值。
     async getRedpacket(packetId) {
-      return _get(`/v1/redpackets/${encodeURIComponent(packetId)}`);
+      try { return await _get(`/v1/redpackets/${encodeURIComponent(packetId)}`); }
+      catch (e) { return { error: (e && e.message) ? e.message : '加载失败', _code: e && e.code }; }
     },
     async claimRedpacket(packetId) {
-      return _post('/v1/redpackets/claim', { packet_id: packetId });
+      try { return await _post('/v1/redpackets/claim', { packet_id: packetId }); }
+      catch (e) { return { error: (e && e.message) ? e.message : '网络错误', _code: e && e.code }; }
     },
     async sendRedpacket(payload) {
-      return _post('/v1/redpackets/send', payload);
+      try { return await _post('/v1/redpackets/send', payload); }
+      catch (e) { return { error: (e && e.message) ? e.message : '发送失败', _code: e && e.code }; }
     },
 
     // ===== 签到墙 checkin wall（已读码，app.js:3661/3707/12962/13023/13038）=====
