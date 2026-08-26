@@ -524,6 +524,12 @@ function debounce(fn, wait) {
     function mediaCandidateUrls(url) {
         // 频道媒体 /channel-media/ 是 oc 主机的全局签名端点，仅此一个源，不做 host 候选展开（否则会误打到 files/60.205 报 404）
         if (url.indexOf('/channel-media/') !== -1) return [url];
+        // media 文件走 SDK 统一候选链（OSS → 60.205 → oc → files，含 OSS 路径重写），所有客户端一致；
+        // 仅当确为 media（多条候选）时采用，非 media 仍走下方原 host 前缀互换以兼容。
+        if (typeof mediaCandidates === 'function') {
+            const c = mediaCandidates(url);
+            if (c && c.length > 1) return c;
+        }
         const list = [];
         for (const base of MEDIA_CANDIDATES) {
             if (url.indexOf(base) === 0) {
@@ -8183,7 +8189,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             });
             if (origUrl) imgEl.dataset.original = origUrl; // 右键「查看原图」使用
             imgEl.onclick = () => openImageViewer(imgEl);
-            imgEl.src = cachedResolveMediaUrl(thumbUrl);
+            // 仅原图（无独立缩略图）的图片在 OSS 候选上优先请求缩放版（?x-oss-process=...），
+            // 降低带宽；自带缩略图(thumb_url)的直接用缩略图、不再缩放；右键「查看原图」走 dataset.original（不带参数）。
+            imgEl.src = cachedResolveMediaUrl(thumbUrl, { thumb: !msg.thumb_url });
 
             const msgDiv = document.createElement('div');
             msgDiv.className = `message ${isSelf ? 'self' : 'other'} bare-image`;

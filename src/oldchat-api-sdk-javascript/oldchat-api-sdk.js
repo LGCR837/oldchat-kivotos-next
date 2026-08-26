@@ -98,7 +98,35 @@ function refreshEndpoints() {
     MEDIA_BASE = MEDIA_ORIGIN;
 }
 
-function resolveMediaUrl(url) {
+// 媒体文件候选源（按优先级）：OSS（全量存储，含仅存于 OSS 的文件）→ 60.205 → oc → files。
+// 实测：部分文件仅存在于 OSS，服务器对其它镜像返回 403（非鉴权问题，是文件不在该节点）。
+// OSS 路径为 /media/ 而非 /v1/uploads/media/，需专门 remap。
+const OSS_MEDIA_BASE = 'https://ocf.oss-cn-shanghai.aliyuncs.com/media';
+// 仅原图（无独立缩略图）的媒体在 OSS 候选上优先请求缩放版，降低带宽；「查看原图」等原图场景不传此参数走原图。
+const OSS_PROCESS_PARAM = '?x-oss-process=image/resize,w_500,h_500,m_lfit/quality,Q_70';
+
+// 从 media URL 取文件名：兼容 /v1/uploads/media/{name} 与 OSS /media/{name} 两种形式
+function _mediaBasename(url) {
+    const m = String(url || '').match(/\/(?:v1\/uploads\/media|media)\/([^/?#]+)/);
+    return m ? m[1] : null;
+}
+
+// 生成 media 文件的完整候选源列表（优先级 OSS → 60.205 → oc → files）
+function mediaCandidates(url) {
+    const bn = _mediaBasename(url);
+    if (!bn) return [url];
+    // 保留输入 URL 中已有的 OSS 缩放参数（?x-oss-process=...），仅作用于 OSS 候选；
+    // 60.205 / oc / files 镜像不支持该参数，不做拼接（回退到原图）。
+    const q = (url.indexOf('?') >= 0) ? url.slice(url.indexOf('?')) : '';
+    return [
+        OSS_MEDIA_BASE + '/' + bn + q,
+        'http://60.205.94.101:8080/v1/uploads/media/' + bn,
+        'http://oc.mcl0.dpdns.org/v1/uploads/media/' + bn,
+        'http://files.mcl0.dpdns.org/v1/uploads/media/' + bn,
+    ];
+}
+
+function resolveMediaUrl(url, opts) {
     if (!url) return url;
     // 频道媒体 scheme：channel-private:<签名文件名>[?sig=...] → 频道媒体签名下载端点
     // 官方文档 14.10：GET /channel-media/{filename}（全局签名下载，签名在文件名里，无需 Bearer）。
@@ -113,17 +141,29 @@ function resolveMediaUrl(url) {
         if (/^https?:/i.test(url)) return url;
         return 'http://oc.mcl0.dpdns.org' + (url.startsWith('/') ? '' : '/') + url;
     }
+    // media 文件：优先 OSS（全量存储）。opts.thumb=true（仅原图无独立缩略图的展示场景）时在 OSS 候选追加缩放参数；
+    // 「查看原图」等原图场景不传，走原图。60.205 / oc / files 镜像不支持该参数，由候选链回退到原图。
+    if (typeof url === 'string' && url.indexOf('/v1/uploads/media/') !== -1) {
+        const bn = _mediaBasename(url);
+        if (bn) {
+            const needThumb = !!(opts && opts.thumb) && url.indexOf('x-oss-process') === -1;
+            return OSS_MEDIA_BASE + '/' + bn + (needThumb ? OSS_PROCESS_PARAM : '');
+        }
+    }
     if (/^(https?:|data:|blob:)/.test(url)) return url;
     if (MEDIA_BASE && url.startsWith('/')) return MEDIA_BASE + url;
     return url;
 }
 // 缓存 resolveMediaUrl 结果，减少重复字符串操作
 const mediaUrlCache = new Map();
-function cachedResolveMediaUrl(url) {
+function cachedResolveMediaUrl(url, opts) {
     if (!url) return url;
-    if (mediaUrlCache.has(url)) return mediaUrlCache.get(url);
-    const result = resolveMediaUrl(url);
-    mediaUrlCache.set(url, result);
+    // 同一输入 URL 在「展示缩略」(thumb=true) 与「查看原图」(thumb=false) 下会解析出不同 OSS 地址，
+    // 缓存键需纳入 thumb 标志，避免相互污染（否则原图场景会命中缩略结果）。
+    const ck = (typeof url === 'string' ? url : '') + ' ' + (opts && opts.thumb ? '1' : '0');
+    if (mediaUrlCache.has(ck)) return mediaUrlCache.get(ck);
+    const result = resolveMediaUrl(url, opts);
+    mediaUrlCache.set(ck, result);
     return result;
 }
 
