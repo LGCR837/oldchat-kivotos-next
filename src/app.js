@@ -535,17 +535,7 @@ function debounce(fn, wait) {
             }
         }
         if (list.length === 0) list.push(url);
-        const out = Array.from(new Set(list));
-        // 媒体文件（/v1/uploads/media/）现已被服务端要求 v2 会话签名鉴权，
-        // 而 60.205 / files 两个镜像无法校验 ECDH 会话签名（仅 oc 主站能校验），
-        // 故对媒体路径把 oc 候选提到最前，避免对无法鉴权的镜像做无谓的 403 重试。
-        if (url.indexOf('/v1/uploads/media/') !== -1) {
-            const ocBase = MEDIA_CANDIDATES.find(b => /oc\.mcl0\.dpdns\.org/.test(b)) || 'http://oc.mcl0.dpdns.org';
-            const ocFirst = out.filter(u => u.indexOf(ocBase) === 0);
-            const rest = out.filter(u => u.indexOf(ocBase) !== 0);
-            return ocFirst.concat(rest);
-        }
-        return out;
+        return Array.from(new Set(list));
     }
 
     // 用专用 Rust 命令 fetch_media（reqwest，与下载功能同款）拉媒体字节，绕开 plugin-http 的 scope/重定向限制与 Cloudflare 预检。

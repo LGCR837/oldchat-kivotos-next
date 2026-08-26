@@ -113,27 +113,8 @@ function resolveMediaUrl(url) {
         if (/^https?:/i.test(url)) return url;
         return 'http://oc.mcl0.dpdns.org' + (url.startsWith('/') ? '' : '/') + url;
     }
-    if (/^(https?:|data:|blob:)/.test(url)) {
-        // 媒体文件（/v1/uploads/media/）服务端已要求 v2 会话签名鉴权，
-        // 而 60.205 / files 两个镜像无法校验 ECDH 会话签名（仅 oc 主站能正确响应，经客户端实测 oc 裸 GET 即 200）。
-        // 故对这两个镜像的 media 绝对 URL 重写为 oc 主机，保证所有 SDK 消费端统一可用，无需各自实现签名。
-        if (url.indexOf('/v1/uploads/media/') !== -1) {
-            const ocBase = MEDIA_CANDIDATES.find(b => /oc\.mcl0\.dpdns\.org/.test(b)) || 'http://oc.mcl0.dpdns.org';
-            try {
-                const u = new URL(url);
-                if (!/oc\.mcl0\.dpdns\.org/.test(u.host)) return ocBase + u.pathname + u.search;
-            } catch (e) {}
-        }
-        return url;
-    }
-    if (MEDIA_BASE && url.startsWith('/')) {
-        // 相对路径的媒体文件同样强制走 oc 主机（理由同上：镜像要求签名会 403，只有 oc 能正确响应）
-        if (url.indexOf('/v1/uploads/media/') !== -1) {
-            const ocBase = MEDIA_CANDIDATES.find(b => /oc\.mcl0\.dpdns\.org/.test(b)) || 'http://oc.mcl0.dpdns.org';
-            return ocBase + url;
-        }
-        return MEDIA_BASE + url;
-    }
+    if (/^(https?:|data:|blob:)/.test(url)) return url;
+    if (MEDIA_BASE && url.startsWith('/')) return MEDIA_BASE + url;
     return url;
 }
 // 缓存 resolveMediaUrl 结果，减少重复字符串操作
