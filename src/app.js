@@ -1799,6 +1799,14 @@ function openImageViewer(src) {
 	// 支持传入 img 元素（直接使用已加载的 src）或 URL 字符串
 	const imgSrc = (typeof src === 'object' && src && src.src) ? src.src : src;
 	img.src = imgSrc;
+	// 记录放大页右键菜单所需数据：原图直链（查看原图）与收藏用 media 路径
+	if (typeof src === 'object' && src && src.dataset) {
+		img.dataset.viewerOriginal = src.dataset.original || '';
+		img.dataset.viewerMedia = src.dataset.mediaPath || '';
+	} else {
+		img.dataset.viewerOriginal = '';
+		img.dataset.viewerMedia = '';
+	}
 	img._scale = 1;
 	img._translateX = 0;
 	img._translateY = 0;
@@ -1807,6 +1815,46 @@ function openImageViewer(src) {
 	requestAnimationFrame(() => {
 		overlay.style.opacity = '1'
 	})
+}
+
+// 图片放大查看页（#imageOverlay）的右键菜单：与聊天图片消息菜单一致
+// （查看原图 / 另存为 / 收藏到本地）。放大页的 <img> 在 openImageViewer 中已写入
+// dataset.viewerOriginal（原图直链）与 dataset.viewerMedia（收藏用 media 路径）。
+function showImageContextMenu(imgEl, x, y) {
+	const menu = document.createElement('div');
+	menu.className = 'custom-context-menu';
+	menu.style.left = x + 'px';
+	menu.style.top = y + 'px';
+	menu.innerHTML = `
+		<div class="context-menu-item" data-action="view-original">查看原图</div>
+		<div class="context-menu-item" data-action="save-image">另存为</div>
+		<div class="context-menu-item" data-action="collect-emoji">收藏到本地</div>
+	`;
+	document.body.appendChild(menu);
+	requestAnimationFrame(() => { clampContextMenu(menu, x, y); menu.classList.add('show'); });
+	contextMenu = menu;
+
+	menu.addEventListener('click', (event) => {
+		const action = event.target.dataset.action;
+		if (action === 'view-original') {
+			// 优先用放大页记录的原图直链，回退到当前已显示的图（避免「查看原图」无数据时失效）
+			let origUrl = imgEl.dataset.viewerOriginal || '';
+			if (!origUrl) origUrl = imgEl.src;
+			if (origUrl) openImageViewer(cachedResolveMediaUrl(origUrl));
+		} else if (action === 'save-image') {
+			const dlUrl = imgEl.src || '';
+			if (dlUrl) downloadImage(dlUrl);
+		} else if (action === 'collect-emoji') {
+			const mediaPath = imgEl.dataset.viewerMedia || '';
+			if (!mediaPath) {
+				showAlert('该图片没有可用的链接');
+			} else if (!addCollectedEmoji(mediaPath)) {
+				showAlert('该表情已在收藏中');
+			} else {
+				showAlert('已收藏到本地');
+			}
+		}
+	});
 }
 
 // （协议层已拆分至 api.js：认证fetch包装/加密辅助见 api.js 块B/C）
@@ -8188,6 +8236,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 }
             });
             if (origUrl) imgEl.dataset.original = origUrl; // 右键「查看原图」使用
+            if (msg.media_url) imgEl.dataset.mediaPath = msg.media_url; // 放大页右键「收藏到本地」使用
             imgEl.onclick = () => openImageViewer(imgEl);
             // 仅原图（无独立缩略图）的图片在 OSS 候选上优先请求缩放版（?x-oss-process=...），
             // 降低带宽；自带缩略图(thumb_url)的直接用缩略图、不再缩放；右键「查看原图」走 dataset.original（不带参数）。
@@ -10235,6 +10284,18 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             e.preventDefault();
             showRedPacketMenu(rpCard, e.clientX, e.clientY);
             return;
+        }
+
+        // 2.7 图片放大查看页：复用图片消息右键菜单（查看原图 / 另存为 / 收藏到本地）
+        // 放大页的 <img> 设了 pointer-events:none，右键 target 即覆盖层本身；仅当查看器处于显示态时拦截
+        const _overlay = document.getElementById('imageOverlay');
+        if (_overlay && _overlay.style.display !== 'none' && _overlay.contains(e.target)) {
+            const _vImg = document.getElementById('imageOverlayImg');
+            if (_vImg) {
+                e.preventDefault();
+                showImageContextMenu(_vImg, e.clientX, e.clientY);
+                return;
+            }
         }
 
         // 3. 接管所有其他区域的系统右键行为
