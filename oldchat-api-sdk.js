@@ -98,17 +98,29 @@ function refreshEndpoints() {
     MEDIA_BASE = MEDIA_ORIGIN;
 }
 
-// 媒体文件候选源（按优先级）：OSS（全量存储，含仅存于 OSS 的文件）→ 60.205 → oc → files。
+// 上传资源的统一路径抽象 —— 不区分「OSS 的路径」与「镜像站的路径」，全局只有一个 PATH：
+//   PATH = 去掉 `/v1/uploads/` 前缀后的相对路径，**保留子目录**，如 `media/a.jpg`、`avatars/b.jpg`。
+//   各源一律按同一 PATH 拼接：
+//     OSS    → https://ocf.oss-cn-shanghai.aliyuncs.com/<PATH>
+//     镜像站 → <origin>/v1/uploads/<PATH>
+//   实测：OSS 上 `media/` 与 `avatars/` 均存在；若丢掉子目录（OSS 根 + 纯文件名）返回 404，
+//   故 PATH 必须保留子目录，不能只取 basename。
+const OSS_ORIGIN = 'https://ocf.oss-cn-shanghai.aliyuncs.com';
+const UPLOAD_PREFIX = '/v1/uploads/';
+// 媒体文件候选源（按优先级）：OSS（全量存储，含仅存于 OSS 的文件）→ 60.205 → oc。
 // 实测：部分文件仅存在于 OSS，服务器对其它镜像返回 403（非鉴权问题，是文件不在该节点）。
-// OSS 路径为 /media/ 而非 /v1/uploads/media/，需专门 remap。
-const OSS_MEDIA_BASE = 'https://ocf.oss-cn-shanghai.aliyuncs.com/media';
 // 仅原图（无独立缩略图）的媒体在 OSS 候选上优先请求缩放版，降低带宽；「查看原图」等原图场景不传此参数走原图。
 const OSS_PROCESS_PARAM = '?x-oss-process=image/resize,w_500,h_500,m_lfit/quality,Q_70';
 
-// 从 media URL 取文件名：兼容 /v1/uploads/media/{name} 与 OSS /media/{name} 两种形式
-function _mediaBasename(url) {
-    const m = String(url || '').match(/\/(?:v1\/uploads\/media|media)\/([^/?#]+)/);
-    return m ? m[1] : null;
+// 取出统一 PATH：同时兼容 /v1/uploads/{type}/{name}（相对或绝对 URL）与 OSS 绝对 URL 两种输入形式
+function _uploadPath(url) {
+    const s = String(url || '');
+    if (!s) return null;
+    const pathname = s.split('#')[0].split('?')[0];
+    const i = pathname.indexOf(UPLOAD_PREFIX);
+    if (i >= 0) return pathname.slice(i + UPLOAD_PREFIX.length) || null;
+    const m = pathname.match(/^https?:\/\/ocf\.oss-cn-shanghai\.aliyuncs\.com\/(.+)$/i);
+    return (m && m[1]) ? m[1] : null;
 }
 
 // 生成 media 文件的完整候选源列表。优先级对齐官端 MediaUrlResolver.resolveCandidates()（nx10.md §38.1）：
@@ -117,15 +129,16 @@ function _mediaBasename(url) {
 //   3. 当前主站 oc.mcl0.dpdns.org/v1/uploads
 // 注：files.mcl0.dpdns.org（CF 原站）不属于官端 media 候选链（它仅出现在 /download/sources 下载源列表），故已移除。
 function mediaCandidates(url) {
-    const bn = _mediaBasename(url);
-    if (!bn) return [url];
+    const p = _uploadPath(url);
+    // 作用域保持只覆盖 /v1/uploads/media/（avatars 维持原行为，暂不走 OSS）
+    if (!p || p.indexOf('media/') !== 0) return [url];
     // 保留输入 URL 中已有的 OSS 缩放参数（?x-oss-process=...），仅作用于 OSS 候选；
     // 60.205 / oc 镜像不支持该参数，不做拼接（回退到原图）。
     const q = (url.indexOf('?') >= 0) ? url.slice(url.indexOf('?')) : '';
     return [
-        OSS_MEDIA_BASE + '/' + bn + q,
-        'http://60.205.94.101:8080/v1/uploads/media/' + bn,
-        'http://oc.mcl0.dpdns.org/v1/uploads/media/' + bn,
+        OSS_ORIGIN + '/' + p + q,
+        'http://60.205.94.101:8080' + UPLOAD_PREFIX + p,
+        'http://oc.mcl0.dpdns.org' + UPLOAD_PREFIX + p,
     ];
 }
 
@@ -145,12 +158,12 @@ function resolveMediaUrl(url, opts) {
         return 'http://oc.mcl0.dpdns.org' + (url.startsWith('/') ? '' : '/') + url;
     }
     // media 文件：优先 OSS（全量存储）。opts.thumb=true（仅原图无独立缩略图的展示场景）时在 OSS 候选追加缩放参数；
-    // 「查看原图」等原图场景不传，走原图。60.205 / oc / files 镜像不支持该参数，由候选链回退到原图。
+    // 「查看原图」等原图场景不传，走原图。60.205 / oc 镜像不支持该参数，由候选链回退到原图。
     if (typeof url === 'string' && url.indexOf('/v1/uploads/media/') !== -1) {
-        const bn = _mediaBasename(url);
-        if (bn) {
+        const p = _uploadPath(url);
+        if (p) {
             const needThumb = !!(opts && opts.thumb) && url.indexOf('x-oss-process') === -1;
-            return OSS_MEDIA_BASE + '/' + bn + (needThumb ? OSS_PROCESS_PARAM : '');
+            return OSS_ORIGIN + '/' + p + (needThumb ? OSS_PROCESS_PARAM : '');
         }
     }
     if (/^(https?:|data:|blob:)/.test(url)) return url;
