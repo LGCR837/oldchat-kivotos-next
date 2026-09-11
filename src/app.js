@@ -524,7 +524,7 @@ function debounce(fn, wait) {
     function mediaCandidateUrls(url) {
         // 频道媒体 /channel-media/ 是 oc 主机的全局签名端点，仅此一个源，不做 host 候选展开（否则会误打到 files/60.205 报 404）
         if (url.indexOf('/channel-media/') !== -1) return [url];
-        // media 文件走 SDK 统一候选链（OSS → 60.205 → oc → files，含 OSS 路径重写），所有客户端一致；
+        // media 文件走 SDK 统一候选链（OSS → 60.205 → oc，含 OSS 路径重写），所有客户端一致；
         // 仅当确为 media（多条候选）时采用，非 media 仍走下方原 host 前缀互换以兼容。
         if (typeof mediaCandidates === 'function') {
             const c = mediaCandidates(url);

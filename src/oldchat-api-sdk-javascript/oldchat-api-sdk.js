@@ -111,18 +111,21 @@ function _mediaBasename(url) {
     return m ? m[1] : null;
 }
 
-// 生成 media 文件的完整候选源列表（优先级 OSS → 60.205 → oc → files）
+// 生成 media 文件的完整候选源列表。优先级对齐官端 MediaUrlResolver.resolveCandidates()（nx10.md §38.1）：
+//   1. OSS 阿里云（全量存储）
+//   2. 旧主服务器 60.205.94.101:8080/v1/uploads
+//   3. 当前主站 oc.mcl0.dpdns.org/v1/uploads
+// 注：files.mcl0.dpdns.org（CF 原站）不属于官端 media 候选链（它仅出现在 /download/sources 下载源列表），故已移除。
 function mediaCandidates(url) {
     const bn = _mediaBasename(url);
     if (!bn) return [url];
     // 保留输入 URL 中已有的 OSS 缩放参数（?x-oss-process=...），仅作用于 OSS 候选；
-    // 60.205 / oc / files 镜像不支持该参数，不做拼接（回退到原图）。
+    // 60.205 / oc 镜像不支持该参数，不做拼接（回退到原图）。
     const q = (url.indexOf('?') >= 0) ? url.slice(url.indexOf('?')) : '';
     return [
         OSS_MEDIA_BASE + '/' + bn + q,
         'http://60.205.94.101:8080/v1/uploads/media/' + bn,
         'http://oc.mcl0.dpdns.org/v1/uploads/media/' + bn,
-        'http://files.mcl0.dpdns.org/v1/uploads/media/' + bn,
     ];
 }
 
