@@ -2019,20 +2019,23 @@ body::-webkit-scrollbar {
 	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif
 }
 
-.message.self .mention-highlight {
-	color: var(--link-hover);
-}
-
+/* @ 高亮：自己与对方保持完全一致（气泡底色偏深，统一用浅蓝更清晰） */
+.message.self .mention-highlight,
 .message.other .mention-highlight {
-	color: var(--link);
-}
-
-.message.self .mention-highlight:hover {
-	color: #ffffff;
-}
-
-.message.other .mention-highlight:hover {
 	color: var(--link-hover);
+}
+
+/* 悬停：变浅蓝（不再用纯白，纯白在深气泡上对比生硬） */
+.message.self .mention-highlight:hover,
+.message.other .mention-highlight:hover {
+	color: #d0e8ff;
+}
+
+/* 暗色主题：--link-hover 与 --link 同值（都是 #5ba3e6），
+   若不单独指定，悬停会毫无视觉变化，故显式给一档更浅的蓝 */
+[data-theme-mode="dark"] .message.self .mention-highlight:hover,
+[data-theme-mode="dark"] .message.other .mention-highlight:hover {
+	color: #9fd0f5;
 }
 
 .message.other .quote-block {
