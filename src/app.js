@@ -9383,6 +9383,10 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
         // 带重试的发送逻辑
         const doSend = async () => {
+            console.warn('[SEND-DBG] mentions=' + mentions.length +
+                ' | msgType=' + msgType +
+                ' | pendingQuote=' + (pendingQuote ? 'Y' : 'N') +
+                ' | payload.body=' + String(payload.body).slice(0, 260));
             return currentConv.type === 'group'
                 ? await OC.sendGroup(payload)
                 : await OC.sendDirect(payload);
@@ -9564,16 +9568,23 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         } catch (e) {}
     }
 
-    // 光标之前的纯文本（用于 @ 触发判断）
-    function getTextBeforeCaret() {
+    // @ 触发词：只在「光标所在的文本节点」内回溯。
+    // chip 是独立元素，它前后的文本是两个不同文本节点，所以 @ 过一个人之后继续输入，
+    // 回溯会在文本节点起点就结束，不会再命中 chip 里的 @ —— 弹窗也就不会二次弹出。
+    // 查询词遇到空白即停止（与常见 IM 一致）；名字含空格时用前缀即可搜到（filterMentionList 用 includes）。
+    function getMentionTrigger() {
         const sel = window.getSelection();
-        if (!sel || sel.rangeCount === 0) return '';
+        if (!sel || sel.rangeCount === 0) return null;
         const range = sel.getRangeAt(0);
-        if (!messageInput.contains(range.startContainer)) return '';
-        const pre = document.createRange();
-        pre.selectNodeContents(messageInput);
-        try { pre.setEnd(range.startContainer, range.startOffset); } catch (e) { return ''; }
-        return pre.toString();
+        const node = range.startContainer;
+        if (!messageInput.contains(node)) return null;
+        if (node.nodeType !== 3) return null; // 光标不在文本节点（如刚插入 chip）→ 不触发
+        const head = node.nodeValue.slice(0, range.startOffset);
+        const at = head.lastIndexOf('@');
+        if (at < 0) return null;
+        const q = head.slice(at + 1);
+        if (/\s/.test(q)) return null; // 已输入空格 → 视为查询结束
+        return q;
     }
 
     // 输入法（拼音/五笔）组合态：候选词确认阶段不能触发发送、也不能开 @ 弹窗
@@ -9632,16 +9643,15 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     messageInput.addEventListener('input', function () {
         const scan = scanInput();
         // @mention 检测（输入法组合期间跳过，避免候选词阶段误开弹窗）
-        const textBefore = isComposing ? '' : getTextBeforeCaret();
-        const atMatch = textBefore ? textBefore.match(/@([^@]*)$/) : null;
-        if (atMatch && currentConv && currentConv.type === 'group') {
+        const q = isComposing ? null : getMentionTrigger();
+        if (q !== null && currentConv && currentConv.type === 'group') {
             if (!mentionJustInserted) {
                 // 首次打开弹窗立即渲染；输入中改为防抖，避免每敲一字重算并重建全列表
                 if (!mentionPopup.classList.contains('show')) {
-                    showMentionPopup(atMatch[1]);
+                    showMentionPopup(q);
                 } else {
-                    mentionSearch.value = atMatch[1];
-                    debouncedFilterMention(atMatch[1]);
+                    mentionSearch.value = q;
+                    debouncedFilterMention(q);
                 }
             }
         } else {
