@@ -217,6 +217,59 @@ const IS_TAURI = _detectIsTauri();
     console.log('[Tauri] 已注册 Ctrl+Alt+Shift+F12 切换 DevTools');
 })();
 
+// ===== 浏览器（网页版）分支：注入 SDK 传输层 =====
+// Tauri 环境下 ocTransport 由上面的 initTauri 注入；浏览器环境必须在这里补上，
+// 否则 SDK 会直接抛「OC transport 未注入」，整个应用起不来。
+// 策略（先保证能用）：
+//   · 只把「接口请求」( /v1/ /v2/ ) 转发到同源 proxy.php，用于绕开 CORS；
+//   · 媒体直链（/v1/uploads/*、/channel-media/*、/v2/files/download、OSS）一律直连，
+//     绝不走代理 —— 媒体走代理会把全部流量压到服务器上。
+//     注：<img>/<audio>/<video> 标签加载本就不受 CORS 限制；MediaCache 用 fetch 抓媒体的
+//     部分在浏览器下会失败，已有兜底会降级为直接 <img> 加载，公开资源可正常显示。
+//   · WebSocket 不走代理，由 oldchat-ws-extension.js 直连（已按页面协议自动选 ws/wss）。
+if (!IS_TAURI) {
+    const PROXY_ENDPOINT = (function () {
+        try {
+            const m = String(location.search || '').match(/[?&]_proxy=([^&]+)/);
+            if (m && m[1]) return decodeURIComponent(m[1]);
+        } catch (e) {}
+        return 'proxy.php';
+    })();
+
+    // 只代理接口，媒体与下载端点全部排除
+    function isProxiableApi(url) {
+        let u;
+        try { u = new URL(url, location.href); } catch (e) { return false; }
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+        const p = u.pathname || '';
+        if (p.indexOf('/v1/uploads/') === 0 || p.indexOf('/v2/uploads/') === 0) return false;
+        if (p.indexOf('/channel-media/') === 0) return false;
+        if (p.indexOf('/v2/files/download') === 0) return false;
+        return p.indexOf('/v1/') === 0 || p.indexOf('/v2/') === 0;
+    }
+
+    // 相对路径补全为绝对地址（代理需要绝对 URL）。
+    // BACKEND_CANDIDATES 是 SDK 顶层的 let 绑定，经典 script 下跨文件可见（同 MEDIA_CANDIDATES）。
+    function toAbsoluteApi(url) {
+        try { new URL(url); return url; } catch (e) {}
+        let base = 'http://oc.mcl0.dpdns.org';
+        try {
+            if (typeof BACKEND_CANDIDATES !== 'undefined' && BACKEND_CANDIDATES && BACKEND_CANDIDATES[0]) {
+                base = BACKEND_CANDIDATES[0];
+            }
+        } catch (e) {}
+        return base + (String(url).indexOf('/') === 0 ? '' : '/') + url;
+    }
+
+    window.ocTransport = async function (url, init) {
+        if (isProxiableApi(url)) {
+            return fetch(PROXY_ENDPOINT + '?u=' + encodeURIComponent(toAbsoluteApi(url)), init);
+        }
+        return fetch(url, init);
+    };
+    console.log('[Web] 已注入 ocTransport：接口经 ' + PROXY_ENDPOINT + ' 转发，媒体与 WS 直连');
+}
+
 // ===== 后端 API / 媒体直链专用：封装 plugin-http invoke =====
 // 仅此函数走 Tauri 的 http 插件（绕过 CORS、受 capabilities 白名单 scope 约束）。
 // 普通 fetch（本地资源、同源资源，如读 app.css 主题元数据）一律走浏览器原生 window.fetch，
