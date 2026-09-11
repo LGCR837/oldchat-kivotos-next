@@ -9310,7 +9310,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 }
                 if (hit && !seen.has(hit.name)) {
                     seen.add(hit.name);
-                    mentions.push({ uid: hit.uid || hit.ncuid || '', ncuid: hit.ncuid || hit.uid || '', name: hit.name });
+                    mentions.push({
+                        uid: hit.rawUid || hit.uid || hit.ncuid || '',
+                        ncuid: hit.ncuid || hit.uid || '',
+                        name: hit.name
+                    });
                 }
             }
         }
@@ -9383,10 +9387,6 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
         // 带重试的发送逻辑
         const doSend = async () => {
-            console.warn('[SEND-DBG] mentions=' + mentions.length +
-                ' | msgType=' + msgType +
-                ' | pendingQuote=' + (pendingQuote ? 'Y' : 'N') +
-                ' | payload.body=' + String(payload.body).slice(0, 260));
             return currentConv.type === 'group'
                 ? await OC.sendGroup(payload)
                 : await OC.sendDirect(payload);
@@ -9471,7 +9471,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         const chip = document.createElement('span');
         chip.className = 'mention-chip';
         chip.contentEditable = 'false';
-        chip.dataset.uid = m.uid || '';
+        // uid 必须是服务端原始 uid（如 LGCR837）。用被折叠过的 ncuid 会让服务端
+        // 丢弃整个 mentions、只落库 text —— 即「@ 发出去变纯文本」。
+        chip.dataset.uid = m.rawUid || m.uid || '';
         chip.dataset.ncuid = m.ncuid || '';
         chip.dataset.name = m.name || '';
         chip.textContent = '@' + (m.name || '');
@@ -9704,6 +9706,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     return {
                         uid: m.uid || '',
                         ncuid: m.ncuid || '',
+                        rawUid: m.rawUid || '',  // 服务端原始 uid，@mention 载荷必须用这个
                         name: name,
                         avatar: m.avatar || '',
                         _py: _py,
@@ -9746,8 +9749,9 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     return p ? p[0] : ch.toLowerCase();
                 }).join('');
                 return {
-                    uid: m.uid || '',            // 旧 uid
+                    uid: m.uid || '',            // 旧 uid（注意：已被 SDK 折叠为 ncuid，真 uid 在 rawUid）
                     ncuid: m.ncuid || '',        // ncuid
+                    rawUid: m.rawUid || '',      // 服务端原始 uid，@mention 载荷必须用这个
                     name: name,
                     avatar: m.avatar || '',
                     _py: _py,
