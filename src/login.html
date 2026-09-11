@@ -207,10 +207,10 @@
                 <div class="tab-content active" id="login-form">
                     <form id="loginForm">
                         <div class="form-group">
-                            <input type="text" name="identifier" id="identifier" placeholder="账号 / 邮箱 / UID" required autofocus>
+                            <input type="text" name="identifier" id="identifier" placeholder="账号 / 邮箱 / UID" required autofocus autocomplete="username">
                         </div>
                         <div class="form-group">
-                            <input type="password" name="password" id="password" placeholder="密码" required>
+                            <input type="password" name="password" id="password" placeholder="密码" required autocomplete="current-password">
                         </div>
                         <div class="checkbox-group" style="display:flex;gap:16px;">
                             <div style="display:flex;align-items:center;gap:6px;">
@@ -225,13 +225,13 @@
                     <div class="geetest-status" id="geetestStatus"></div>
                     <form id="registerForm">
                         <div class="form-group">
-                            <input type="email" name="email" id="reg-email" placeholder="邮箱（仅支持 @qq.com / @vip.qq.com）" required>
+                            <input type="email" name="email" id="reg-email" placeholder="邮箱（仅支持 @qq.com / @vip.qq.com）" required autocomplete="email">
                         </div>
                         <div class="form-group">
                             <input type="text" name="username" id="reg-username" placeholder="用户名" required>
                         </div>
                         <div class="form-group">
-                            <input type="password" name="password" id="reg-password" placeholder="密码（至少6位）" required>
+                            <input type="password" name="password" id="reg-password" placeholder="密码（至少6位）" required autocomplete="new-password">
                         </div>
                         <div class="form-group email-row">
                             <input type="text" id="reg-email-code" placeholder="邮箱验证码" required>
@@ -443,6 +443,20 @@
             return BACKEND_ORIGIN;
         }
 
+        // 网页版（非 Tauri）必须经同源 proxy.php 转发，原因有二：
+        //   ① 直连后端会撞 CORS；
+        //   ② 页面走 https 而后端是 http 时，会被 mixed content 直接拦死。
+        // 桌面端保持原有直连行为不变（Tauri 下已把 fetch 换成 plugin:http invoke）。
+        function isWebMode() {
+            try {
+                return !(window.__TAURI__ !== undefined || window.__TAURI_INTERNALS__ !== undefined);
+            } catch (e) { return true; }
+        }
+        function apiUrl(path) {
+            var base = getApiBase();
+            return isWebMode() ? ('proxy.php?u=' + encodeURIComponent(base + path)) : (base + path);
+        }
+
         // ===== 自动填充 =====
         (function autoFill() {
             try {
@@ -487,7 +501,7 @@
             var btn = this.querySelector('button[type="submit"]');
             btn.disabled = true; btn.textContent = '登录中...';
             try {
-                var r = await fetch(getApiBase() + '/v1/auth/login', {
+                var r = await fetch(apiUrl('/v1/auth/login'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'User-Agent': 'OldChatForKivotosNext' },
                     body: JSON.stringify({
@@ -552,7 +566,7 @@
             var btn = this;
             btn.disabled = true; btn.textContent = '发送中...';
             try {
-                var r = await fetch(getApiBase() + '/v1/auth/email/send', {
+                var r = await fetch(apiUrl('/v1/auth/email/send'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'User-Agent': 'OldChatForKivotosNext' },
                     body: JSON.stringify({
@@ -607,7 +621,7 @@
             var btn = this.querySelector('button[type="submit"]');
             btn.disabled = true; btn.textContent = '注册中...';
             try {
-                var r = await fetch(getApiBase() + '/v1/auth/web/register', {
+                var r = await fetch(apiUrl('/v1/auth/web/register'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'User-Agent': 'OldChatForKivotosNext' },
                     body: JSON.stringify({
