@@ -33,10 +33,10 @@ const DEFAULT_BACKEND_CANDIDATES = [
     'https://oc.mcl0.dpdns.org',
     'http://60.205.94.101:8080'
 ];
-// 媒体文件：优先 60.205.94.101:8080（源服务器，速度最快；files 的音乐资源加载慢），其次 files.mcl0.dpdns.org（CF 原站，非 CDN），最后 oc.mcl0.dpdns.org
+// 非 /v1/uploads/ 的普通媒体相对路径所用镜像列表，按优先级排列（首项同时作为 MEDIA_ORIGIN/MEDIA_BASE）。
+// 注：files.mcl0.dpdns.org 已移除 —— 它不属于官端候选链，且实测对头像/媒体均直接 404（CF 原站，非 CDN）。
 const DEFAULT_MEDIA_CANDIDATES = [
     'http://60.205.94.101:8080',
-    'http://files.mcl0.dpdns.org',
     'http://oc.mcl0.dpdns.org',
     'https://oc.mcl0.dpdns.org'
 ];
@@ -123,15 +123,16 @@ function _uploadPath(url) {
     return (m && m[1]) ? m[1] : null;
 }
 
-// 生成 media 文件的完整候选源列表。优先级对齐官端 MediaUrlResolver.resolveCandidates()（nx10.md §38.1）：
+// 生成 /v1/uploads/ 资源的完整候选源列表。优先级对齐官端 MediaUrlResolver.resolveCandidates()（nx10.md §38.1）：
 //   1. OSS 阿里云（全量存储）
 //   2. 旧主服务器 60.205.94.101:8080/v1/uploads
 //   3. 当前主站 oc.mcl0.dpdns.org/v1/uploads
-// 注：files.mcl0.dpdns.org（CF 原站）不属于官端 media 候选链（它仅出现在 /download/sources 下载源列表），故已移除。
+// 注：files.mcl0.dpdns.org（CF 原站）不属于官端候选链（它仅出现在 /download/sources 下载源列表），故已移除。
 function mediaCandidates(url) {
     const p = _uploadPath(url);
-    // 作用域保持只覆盖 /v1/uploads/media/（avatars 维持原行为，暂不走 OSS）
-    if (!p || p.indexOf('media/') !== 0) return [url];
+    // 覆盖 /v1/uploads/ 下全部子目录（media/ 与 avatars/）。此前只限 media/，
+    // 实测头像同样只有 OSS 有货（某头像：OSS 200，60.205 502/超时，files 与 oc 均 404），故不再限定。
+    if (!p) return [url];
     // 保留输入 URL 中已有的 OSS 缩放参数（?x-oss-process=...），仅作用于 OSS 候选；
     // 60.205 / oc 镜像不支持该参数，不做拼接（回退到原图）。
     const q = (url.indexOf('?') >= 0) ? url.slice(url.indexOf('?')) : '';
@@ -157,9 +158,10 @@ function resolveMediaUrl(url, opts) {
         if (/^https?:/i.test(url)) return url;
         return 'http://oc.mcl0.dpdns.org' + (url.startsWith('/') ? '' : '/') + url;
     }
-    // media 文件：优先 OSS（全量存储）。opts.thumb=true（仅原图无独立缩略图的展示场景）时在 OSS 候选追加缩放参数；
+    // /v1/uploads/ 资源（media 与 avatars）：优先 OSS（全量存储，实测头像/媒体都只有 OSS 全量有货）。
+    // opts.thumb=true（仅原图无独立缩略图的展示场景）时在 OSS 候选追加缩放参数；
     // 「查看原图」等原图场景不传，走原图。60.205 / oc 镜像不支持该参数，由候选链回退到原图。
-    if (typeof url === 'string' && url.indexOf('/v1/uploads/media/') !== -1) {
+    if (typeof url === 'string' && url.indexOf(UPLOAD_PREFIX) !== -1) {
         const p = _uploadPath(url);
         if (p) {
             const needThumb = !!(opts && opts.thumb) && url.indexOf('x-oss-process') === -1;
