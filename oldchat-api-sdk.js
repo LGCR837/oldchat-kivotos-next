@@ -111,6 +111,11 @@ const UPLOAD_PREFIX = '/v1/uploads/';
 // 实测：部分文件仅存在于 OSS，服务器对其它镜像返回 403（非鉴权问题，是文件不在该节点）。
 // 仅原图（无独立缩略图）的媒体在 OSS 候选上优先请求缩放版，降低带宽；「查看原图」等原图场景不传此参数走原图。
 const OSS_PROCESS_PARAM = '?x-oss-process=image/resize,w_500,h_500,m_lfit/quality,Q_70';
+// 头像：界面只用 36px / 80px，高分屏按 3x 计最大 240px，故写死 240，不做动态适配。
+// 必须用 m_fill（等比缩放后居中裁剪为方形）而非 m_lfit：lfit 下短边会被长边约束
+// （实测横图 816x624 走 w_240,h_240,m_lfit 只得 240x184，短边不足 240）；
+// 而圆形头像本就按 cover 居中裁切，m_fill 正好等价且更省（实测 240x240 = 16.8KB，原图 162KB，省 90%）。
+const OSS_AVATAR_PROCESS_PARAM = '?x-oss-process=image/resize,w_240,h_240,m_fill/quality,Q_85';
 
 // 取出统一 PATH：同时兼容 /v1/uploads/{type}/{name}（相对或绝对 URL）与 OSS 绝对 URL 两种输入形式
 function _uploadPath(url) {
@@ -135,7 +140,10 @@ function mediaCandidates(url) {
     if (!p) return [url];
     // 保留输入 URL 中已有的 OSS 缩放参数（?x-oss-process=...），仅作用于 OSS 候选；
     // 60.205 / oc 镜像不支持该参数，不做拼接（回退到原图）。
-    const q = (url.indexOf('?') >= 0) ? url.slice(url.indexOf('?')) : '';
+    // 输入未带参数且为头像时补上写死的头像缩放参数，保证直接调用本函数也拿到缩放版。
+    const q = (url.indexOf('?') >= 0)
+        ? url.slice(url.indexOf('?'))
+        : (p.indexOf('avatars/') === 0 ? OSS_AVATAR_PROCESS_PARAM : '');
     return [
         OSS_ORIGIN + '/' + p + q,
         'http://60.205.94.101:8080' + UPLOAD_PREFIX + p,
@@ -159,13 +167,17 @@ function resolveMediaUrl(url, opts) {
         return 'http://oc.mcl0.dpdns.org' + (url.startsWith('/') ? '' : '/') + url;
     }
     // /v1/uploads/ 资源（media 与 avatars）：优先 OSS（全量存储，实测头像/媒体都只有 OSS 全量有货）。
-    // opts.thumb=true（仅原图无独立缩略图的展示场景）时在 OSS 候选追加缩放参数；
-    // 「查看原图」等原图场景不传，走原图。60.205 / oc 镜像不支持该参数，由候选链回退到原图。
+    // 头像无条件写死缩放（见 OSS_AVATAR_PROCESS_PARAM）；media 由 opts.thumb 决定（仅原图无独立缩略图的展示场景）。
+    // 60.205 / oc 镜像不支持该参数，由候选链回退到原图。
     if (typeof url === 'string' && url.indexOf(UPLOAD_PREFIX) !== -1) {
         const p = _uploadPath(url);
         if (p) {
-            const needThumb = !!(opts && opts.thumb) && url.indexOf('x-oss-process') === -1;
-            return OSS_ORIGIN + '/' + p + (needThumb ? OSS_PROCESS_PARAM : '');
+            // 已带 x-oss-process 的输入原样保留 —— 保证本函数幂等，避免二次调用把缩放参数剥掉、退回加载原图。
+            const qi = url.indexOf('?');
+            const inQuery = qi >= 0 ? url.slice(qi) : '';
+            if (inQuery.indexOf('x-oss-process') !== -1) return OSS_ORIGIN + '/' + p + inQuery;
+            if (p.indexOf('avatars/') === 0) return OSS_ORIGIN + '/' + p + OSS_AVATAR_PROCESS_PARAM;
+            return OSS_ORIGIN + '/' + p + ((opts && opts.thumb) ? OSS_PROCESS_PARAM : '');
         }
     }
     if (/^(https?:|data:|blob:)/.test(url)) return url;
