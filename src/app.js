@@ -6278,15 +6278,14 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             reEdit.style.cssText = 'color:var(--accent);cursor:pointer;text-decoration:none;margin-left:6px;';
             reEdit.onclick = (ev) => {
                 ev.stopPropagation();
-                messageInput.value = originalText;
-                messageInput.style.height = 'auto';
+                setInputText(originalText);
                 if (originalQuote) {
                     pendingQuote = originalQuote;
                     quotePreviewText.textContent = `引用: ${originalQuote.from_name || ''} - ${(originalQuote.text || '').substring(0, 50)}`;
                     quotePreview.style.display = 'flex';
                 }
                 messageInput.focus();
-                messageInput.setSelectionRange(originalText.length, originalText.length);
+                placeCaretAtEnd();
             };
             sep.appendChild(label);
             sep.appendChild(reEdit);
@@ -9282,7 +9281,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     }
 
 
-    async function sendMessage(body, msgType = 'text', mediaUrl = null, thumbUrl = null, burnAfterSeconds = 0, durationMs = 0) {
+    async function sendMessage(body, msgType = 'text', mediaUrl = null, thumbUrl = null, burnAfterSeconds = 0, durationMs = 0, mentionsOverride = null) {
         if (!currentConv) return;
 
         // 私聊用 displayUid（旧 uid）作为 to_uid，避免 NCUID 不被服务器接受
@@ -9295,16 +9294,23 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             }
         }
 
-        // 检测 @mention 并转换为 v2 格式
-        const mentions = [];
-        if (msgType === 'text' && currentConv.type === 'group') {
-            const mentionRegex = /@([^\u200B@]+)/g;
-            let match;
-            while ((match = mentionRegex.exec(body)) !== null) {
-                const name = match[1];
-                const member = mentionMembers.find(m => m.name === name);
-                if (member) {
-                    mentions.push({ uid: member.uid || member.ncuid || '', ncuid: member.ncuid || member.uid || '', name: member.name });
+        // 检测 @mention 并转换为 v2 格式。
+        // 首选：富文本输入框直接给出（chip 自带 uid/ncuid/name，无需求助字符串匹配）。
+        // 兜底：其它调用点传入的纯文本，按「最长成员名优先」匹配，兼容名字含空格的情况。
+        const mentions = Array.isArray(mentionsOverride) ? mentionsOverride.slice() : [];
+        if (!mentions.length && msgType === 'text' && currentConv.type === 'group') {
+            const seen = new Set();
+            for (let i = 0; i < body.length; i++) {
+                if (body.charAt(i) !== '@') continue;
+                let hit = null;
+                for (const m of (Array.isArray(mentionMembers) ? mentionMembers : [])) {
+                    const nm = m && m.name ? m.name : '';
+                    if (!nm) continue;
+                    if (body.startsWith(nm, i + 1) && (!hit || nm.length > (hit.name || '').length)) hit = m;
+                }
+                if (hit && !seen.has(hit.name)) {
+                    seen.add(hit.name);
+                    mentions.push({ uid: hit.uid || hit.ncuid || '', ncuid: hit.ncuid || hit.uid || '', name: hit.name });
                 }
             }
         }
@@ -9434,19 +9440,152 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             seenMsgIds[currentConv.key]?.delete(tempId);
             // 将原始文本退回输入框
             if (msgType === 'text') {
-                let originalBody = body;
-                try {
-                    const parsed = JSON.parse(body);
-                    if (parsed.v === 2) originalBody = parsed.text || '';
-                } catch (e) {}
-                messageInput.value = originalBody;
-                messageInput.focus();
-                messageInput.dispatchEvent(new Event('input'));
+            let originalBody = body;
+            let originalMentions = [];
+            try {
+                const parsed = JSON.parse(body);
+                if (parsed.v === 2) {
+                    originalBody = parsed.text || '';
+                    if (Array.isArray(parsed.mentions)) originalMentions = parsed.mentions;
+                }
+            } catch (e) {}
+            // 连同 mentions 一起回填，chip 会按 @名字 复原，不丢失 @ 语义
+            setInputText(originalBody, originalMentions);
+            messageInput.focus();
+            messageInput.dispatchEvent(new Event('input'));
             }
         }
     }
 
+    // ===== 富文本输入框（contenteditable）=====
+    // @ 成员改由 chip（<span.mention-chip>）承载，uid/ncuid/name 存在 dataset 上；
+    // 发送时直接从 DOM 取 text + mentions，不再依赖「零宽空格 + 成员名字符串回查」。
+    // 这样既去掉了隐藏字符，也根除了「名字匹配失败 → 静默退化成纯文本」的脆弱性。
+    let isComposing = false;
+
+    function buildMentionChip(m) {
+        const chip = document.createElement('span');
+        chip.className = 'mention-chip';
+        chip.contentEditable = 'false';
+        chip.dataset.uid = m.uid || '';
+        chip.dataset.ncuid = m.ncuid || '';
+        chip.dataset.name = m.name || '';
+        chip.textContent = '@' + (m.name || '');
+        return chip;
+    }
+
+    // 遍历输入框还原纯文本与 mentions：文本节点取原文，chip 取 @name，<br> 与块级容器视作换行
+    function scanInput() {
+        let text = '';
+        const mentions = [];
+        (function walk(node, depth) {
+            if (depth > 32) return;
+            for (const c of Array.from(node.childNodes)) {
+                if (c.nodeType === 3) { text += c.nodeValue; continue; }
+                if (c.nodeType !== 1) continue;
+                if (c.classList && c.classList.contains('mention-chip')) {
+                    const uid = c.dataset.uid || '';
+                    const ncuid = c.dataset.ncuid || '';
+                    const name = c.dataset.name || '';
+                    text += '@' + name;
+                    if (name) mentions.push({ uid: uid || ncuid, ncuid: ncuid || uid, name: name });
+                    continue;
+                }
+                if (c.tagName === 'BR') { text += '\n'; continue; }
+                if (c.tagName === 'DIV' || c.tagName === 'P') {
+                    if (text && !/\n$/.test(text)) text += '\n';
+                    walk(c, depth + 1);
+                    continue;
+                }
+                walk(c, depth + 1);
+            }
+        })(messageInput, 0);
+        return { text: text, mentions: mentions };
+    }
+
+    function getInputText() { return scanInput().text; }
+    function getInputMentions() { return scanInput().mentions; }
+
+    function clearInput() {
+        messageInput.innerHTML = '';
+    }
+
+    // 回填纯文本；传 mentions 时按「@名字」位置复原为 chip
+    function setInputText(text, mentions) {
+        messageInput.innerHTML = '';
+        if (!text) { placeCaretAtEnd(); return; }
+        const list = (Array.isArray(mentions) ? mentions : []).slice();
+        let rest = String(text);
+        let guard = 0;
+        while (list.length && guard++ < 100) {
+            let best = -1, bestM = null;
+            for (const m of list) {
+                const token = '@' + (m.name || '');
+                const p = token ? rest.indexOf(token) : -1;
+                if (p >= 0 && (best === -1 || p < best)) { best = p; bestM = m; }
+            }
+            if (!bestM) break;
+            if (best > 0) messageInput.appendChild(document.createTextNode(rest.slice(0, best)));
+            messageInput.appendChild(buildMentionChip(bestM));
+            rest = rest.slice(best + ('@' + bestM.name).length);
+            list.splice(list.indexOf(bestM), 1);
+        }
+        if (rest) messageInput.appendChild(document.createTextNode(rest));
+        placeCaretAtEnd();
+    }
+
+    function placeCaretAtEnd() {
+        try {
+            const r = document.createRange();
+            r.selectNodeContents(messageInput);
+            r.collapse(false);
+            const s = window.getSelection();
+            s.removeAllRanges();
+            s.addRange(r);
+        } catch (e) {}
+    }
+
+    // 在输入框末尾追加一个 @ chip（右键菜单「提及此人」用；此处没有等待替换的 @查询词）
+    function appendMention(member) {
+        if (!member) return;
+        try {
+            const cur = getInputText();
+            if (cur && !/\s$/.test(cur)) messageInput.appendChild(document.createTextNode(' '));
+            const chip = buildMentionChip(member);
+            const space = document.createTextNode(' ');
+            messageInput.appendChild(chip);
+            messageInput.appendChild(space);
+            const r = document.createRange();
+            r.setStart(space, space.nodeValue.length);
+            r.collapse(true);
+            const s = window.getSelection();
+            s.removeAllRanges();
+            s.addRange(r);
+        } catch (e) {}
+    }
+
+    // 光标之前的纯文本（用于 @ 触发判断）
+    function getTextBeforeCaret() {
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return '';
+        const range = sel.getRangeAt(0);
+        if (!messageInput.contains(range.startContainer)) return '';
+        const pre = document.createRange();
+        pre.selectNodeContents(messageInput);
+        try { pre.setEnd(range.startContainer, range.startOffset); } catch (e) { return ''; }
+        return pre.toString();
+    }
+
+    // 输入法（拼音/五笔）组合态：候选词确认阶段不能触发发送、也不能开 @ 弹窗
+    messageInput.addEventListener('compositionstart', function () { isComposing = true; });
+    messageInput.addEventListener('compositionend', function () {
+        isComposing = false;
+        try { messageInput.dispatchEvent(new Event('input')); } catch (e) {}
+    });
+
     messageInput.addEventListener('keydown', function (e) {
+        // 输入法组合中：Enter / 空格属于「候选词确认」，绝不能当作发送或选中 mention
+        if (e.isComposing || e.keyCode === 229 || isComposing) return;
         // @mention 弹窗激活时拦截按键
         if (mentionPopup && mentionPopup.classList.contains('show')) {
             const items = mentionList.querySelectorAll('.mention-item');
@@ -9481,25 +9620,20 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            const text = this.value.trim();
+            const scan = scanInput();
+            const text = scan.text.trim();
             if (text) {
-                sendMessage(text);
-                this.value = '';
-                this.style.height = 'auto';
+                sendMessage(text, 'text', null, null, 0, 0, scan.mentions);
+                clearInput();
             }
         }
     });
 
     messageInput.addEventListener('input', function () {
-        this.style.height = 'auto';
-        const maxH = Math.floor(window.innerHeight * 0.35);
-        this.style.height = Math.min(this.scrollHeight, maxH) + 'px';
-
-        // @mention 检测
-        const val = this.value;
-        const cursorPos = this.selectionStart;
-        const textBefore = val.substring(0, cursorPos);
-        const atMatch = textBefore.match(/@([^\u200B@]*)$/);
+        const scan = scanInput();
+        // @mention 检测（输入法组合期间跳过，避免候选词阶段误开弹窗）
+        const textBefore = isComposing ? '' : getTextBeforeCaret();
+        const atMatch = textBefore ? textBefore.match(/@([^@]*)$/) : null;
         if (atMatch && currentConv && currentConv.type === 'group') {
             if (!mentionJustInserted) {
                 // 首次打开弹窗立即渲染；输入中改为防抖，避免每敲一字重算并重建全列表
@@ -9514,8 +9648,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             hideMentionPopup();
         }
 
+        // 清空后浏览器常残留一个 <br>，会让 :empty 占位符失效
+        if (!scan.text && messageInput.innerHTML === '<br>') messageInput.innerHTML = '';
+
         // 文本不为空时发送 Typing 状态
-        if (val.trim() && currentConv) {
+        if (scan.text.trim() && currentConv) {
             sendTypingStatus();
         }
     });
@@ -9619,6 +9756,15 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     }
 
     function showMentionPopup(filter) {
+        // 记住打开弹窗时的光标位置：用户可能用鼠标点选列表项，届时焦点已离开输入框，
+        // 直接读 getSelection() 会拿不到有效选区，必须靠这份快照复原插入点。
+        try {
+            const s = window.getSelection();
+            if (s && s.rangeCount) {
+                const r0 = s.getRangeAt(0);
+                if (messageInput.contains(r0.startContainer)) mentionCaretRange = r0.cloneRange();
+            }
+        } catch (e) {}
         mentionPopup.classList.add('show');
         mentionSearch.value = filter;
         filterMentionList(filter);
@@ -9683,20 +9829,51 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     }
 
     let mentionJustInserted = false;
+    let mentionCaretRange = null;
     function insertMention(member) {
-        const val = messageInput.value;
-        const cursorPos = messageInput.selectionStart;
-        const textBefore = val.substring(0, cursorPos);
-        const textAfter = val.substring(cursorPos);
-        const newBefore = textBefore.replace(/@[^\u200B@]*$/, '@' + member.name + '\u200B ');
-        messageInput.value = newBefore + textAfter;
-        messageInput.focus();
-        const newPos = newBefore.length;
-        messageInput.setSelectionRange(newPos, newPos);
+        if (!member) return;
         hideMentionPopup();
+        try {
+            // 插入点：优先用当前选区；焦点已被弹窗夺走时用弹窗打开时的快照
+            let range = null;
+            const sel0 = window.getSelection();
+            if (sel0 && sel0.rangeCount) {
+                const r0 = sel0.getRangeAt(0);
+                if (messageInput.contains(r0.startContainer)) range = r0;
+            }
+            if (!range && mentionCaretRange) range = mentionCaretRange.cloneRange();
+            if (!range) return;
+
+            // 回溯删除光标前正在输入的「@查询词」
+            const node = range.startContainer;
+            if (node.nodeType === 3) {
+                const head = node.nodeValue.slice(0, range.startOffset);
+                const at = head.lastIndexOf('@');
+                if (at >= 0) {
+                    range.setStart(node, at);
+                    range.deleteContents();
+                }
+            }
+            const chip = buildMentionChip(member);
+            range.insertNode(chip);
+            // chip 后补一个普通空格：光标可停留，后续输入正常接续（不再使用零宽空格）
+            const space = document.createTextNode(' ');
+            chip.parentNode.insertBefore(space, chip.nextSibling);
+            const after = document.createRange();
+            after.setStart(space, space.nodeValue.length);
+            after.collapse(true);
+            // 先聚焦再把选区放回去，顺序反了选区会被 focus 清掉
+            messageInput.focus();
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(after);
+        } catch (e) {
+            messageInput.focus();
+        }
         mentionJustInserted = true;
-        messageInput.dispatchEvent(new Event('input'));
+        try { messageInput.dispatchEvent(new Event('input')); } catch (e) {}
         mentionJustInserted = false;
+        mentionCaretRange = null;
     }
 
     mentionSearch.addEventListener('input', function () {
@@ -9731,8 +9908,45 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
 
     // 图片粘贴の上传判定
     messageInput.addEventListener('paste', async (e) => {
-        const items = (e.clipboardData || window.clipboardData).items;
+        const items = (e.clipboardData || window.clipboardData)?.items;
         if (!items) return;
+
+        // 富文本输入框：文本粘贴必须走纯文本插入，否则 HTML 标签会混进消息体
+        let hasImage = false;
+        for (let i = 0; i < items.length; i++) {
+            if (String(items[i].type || '').startsWith('image/')) { hasImage = true; break; }
+        }
+        if (!hasImage) {
+            const plain = (e.clipboardData || window.clipboardData)?.getData('text/plain');
+            if (plain) {
+                e.preventDefault();
+                try {
+                    const sel = window.getSelection();
+                    if (sel && sel.rangeCount) {
+                        const range = sel.getRangeAt(0);
+                        range.deleteContents();
+                        const parts = String(plain).split('\n');
+                        parts.forEach((part, idx) => {
+                            if (idx > 0) {
+                                const br = document.createElement('br');
+                                range.insertNode(br);
+                                range.setStartAfter(br);
+                            }
+                            const tn = document.createTextNode(part);
+                            range.insertNode(tn);
+                            range.setStartAfter(tn);
+                        });
+                        range.collapse(true);
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    } else {
+                        messageInput.appendChild(document.createTextNode(String(plain)));
+                    }
+                } catch (err) {}
+                try { messageInput.dispatchEvent(new Event('input')); } catch (err) {}
+            }
+            return;
+        }
 
         for (let i = 0; i < items.length; i++) {
             if (items[i].type.startsWith('image/')) {
@@ -9752,11 +9966,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
     });
 
     sendBtn.addEventListener('click', () => {
-        const text = messageInput.value.trim();
+        const scan = scanInput();
+        const text = scan.text.trim();
         if (text) {
-            sendMessage(text);
-            messageInput.value = '';
-            messageInput.style.height = 'auto';
+            sendMessage(text, 'text', null, null, 0, 0, scan.mentions);
+            clearInput();
         }
     });
 
@@ -10475,16 +10689,19 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 const action = event.target.dataset.action;
                 if (action === 'mention') {
                     if (currentConv && currentConv.type === 'group' && !isOwn) {
-                        // 与 @ 弹窗插入一致：@名字 + 零宽字符(\u200B) + 空格。
-                        // 发送端用 /@([^\u200B@]+)/ 提取名字并与成员表精确匹配；
-                        // 若只写普通空格会把尾随空格/后续文字一并吞入导致匹配失败(退化为纯文本)。
+                        // 与 @ 弹窗插入一致：插入 @ chip（携带 uid/ncuid/name），不再使用零宽空格。
                         let mName = fromName;
                         const mTarget = (Array.isArray(mentionMembers) ? mentionMembers : []).find(m =>
                             (m.uid && String(m.uid).toUpperCase() === String(fromUid).toUpperCase()) ||
                             (m.ncuid && String(m.ncuid).toUpperCase() === String(fromUid).toUpperCase())
                         );
                         if (mTarget && mTarget.name) mName = mTarget.name;
-                        messageInput.value = (messageInput.value || '') + '@' + mName + '\u200B ';
+                        // 富文本：插入 @ chip（携带 uid/ncuid/name），不再拼零宽空格
+                        appendMention({
+                            uid: (mTarget && mTarget.uid) || fromUid || '',
+                            ncuid: (mTarget && mTarget.ncuid) || fromUid || '',
+                            name: mName
+                        });
                         messageInput.focus();
                         // 抑制 @ 输入监听的弹窗误开，并同步高度/typing
                         mentionJustInserted = true;

@@ -1114,7 +1114,8 @@ body::-webkit-scrollbar {
 	flex-shrink: 0;
 }
 
-.input-area textarea {
+.input-area textarea,
+.input-area .rich-input {
 	width: 100%;
 	resize: none;
 	border: none;
@@ -1130,10 +1131,33 @@ body::-webkit-scrollbar {
 	line-height: 1.4;
 	box-sizing: border-box;
 }
-.input-area textarea:focus {
+.input-area textarea:focus,
+.input-area .rich-input:focus {
 	border: none;
 	box-shadow: none;
 	background: rgba(0,0,0,0.025);
+}
+/* 富文本输入框：高度自适应到视口 35%，超出滚动（替代原先 JS 计算 scrollHeight） */
+.input-area .rich-input {
+	max-height: 35vh;
+	overflow-y: auto;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+	word-break: break-word;
+}
+.input-area .rich-input:empty::before {
+	content: attr(data-placeholder);
+	color: var(--secondary-text);
+	pointer-events: none;
+}
+
+/* @ 成员标记（输入态）：变色 + 加粗，承载 uid/ncuid/name，发送时直接从 DOM 取 */
+.mention-chip {
+	color: var(--link);
+	font-weight: 600;
+	font-family: 'zyyt','微软雅黑','Microsoft YaHei',sans-serif;
+	white-space: nowrap;
+	user-select: none;
 }
 
 .input-buttons {
@@ -3218,7 +3242,8 @@ body::-webkit-scrollbar {
         display: flex;
     }
 
-    .input-area textarea {
+    .input-area textarea,
+    .input-area .rich-input {
         min-height: auto;
     }
 
@@ -3874,6 +3899,7 @@ body.android .music-win-controls {
 .chat-area .message-sender,
 .chat-area .message-bubble,
 .chat-area .input-area textarea,
+.chat-area .input-area .rich-input,
 .chat-area .input-area input {
     -webkit-user-select: text;
     user-select: text;
