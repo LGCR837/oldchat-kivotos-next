@@ -925,6 +925,11 @@ async function ocTransport(input, init) {
     return {
       uid: uid,
       ncuid: raw.ncuid || '',
+      // 服务端原始 uid（旧式短 uid，如 LGCR837）。
+      // 注意 uid 走 pickUid 会被折叠成 ncuid；而 @mention 的 v2 载荷里
+      // uid 必须是真实 uid，否则服务端会丢弃整个 mentions 只存 text（表现为「@ 变成纯文本」）。
+      // 纯新增字段，不改变既有任何字段语义。
+      rawUid: raw.uid || '',
       displayUid: (raw.ncuid || raw.uid || '').toUpperCase(),
       name: raw.display_name || raw.username || uid,
       username: raw.username || '',
