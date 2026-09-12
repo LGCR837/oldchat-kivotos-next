@@ -28,16 +28,20 @@
 //           不引打包工具、不碰 DOM（传输层除外）；不在 SDK 内写具体网络实现。
 // =====================================================================
 
+// 后端候选：https 置于最前。
+// 不能写成协议相对地址（//oc…）：本 SDK 被十几个消费端共用，其中含 **Node 环境**
+// （无文档基址），`fetch('//host/path')` 会直接解析失败。用 https 同样能避免
+// 「https 页面引用 http 资源」被浏览器拦截，且在任何环境都合法。
+// 60.205.94.101:8080 无 TLS（实测 443 不通），只能保持 http，作为桌面端末位兜底。
 const DEFAULT_BACKEND_CANDIDATES = [
-    'http://oc.mcl0.dpdns.org',
     'https://oc.mcl0.dpdns.org',
     'http://60.205.94.101:8080'
 ];
 // 非 /v1/uploads/ 的普通媒体相对路径所用镜像列表，按优先级排列（首项同时作为 MEDIA_ORIGIN/MEDIA_BASE）。
 // 注：files.mcl0.dpdns.org 已移除 —— 它不属于官端候选链，且实测对头像/媒体均直接 404（CF 原站，非 CDN）。
+// oc 只保留 https 一条：http 版在 https 页面下必被 mixed content 拦，留着只是白跑一轮。
 const DEFAULT_MEDIA_CANDIDATES = [
     'http://60.205.94.101:8080',
-    'http://oc.mcl0.dpdns.org',
     'https://oc.mcl0.dpdns.org'
 ];
 
@@ -73,7 +77,7 @@ function _getSavedMediaCandidates() {
 
 let BACKEND_CANDIDATES = _getSavedBackendCandidates();
 let MEDIA_CANDIDATES   = _getSavedMediaCandidates();
-let BACKEND_ORIGIN = BACKEND_CANDIDATES[0] || 'http://oc.mcl0.dpdns.org';
+let BACKEND_ORIGIN = BACKEND_CANDIDATES[0] || 'https://oc.mcl0.dpdns.org';
 let MEDIA_ORIGIN   = MEDIA_CANDIDATES[0] || 'http://60.205.94.101:8080';
 const BACKEND_HOST = (function() {
     try { return new URL(BACKEND_ORIGIN).host; } catch (e) { return 'oc.mcl0.dpdns.org'; }
@@ -90,7 +94,7 @@ let MEDIA_BASE = MEDIA_ORIGIN;
 function refreshEndpoints() {
     BACKEND_CANDIDATES = _getSavedBackendCandidates();
     MEDIA_CANDIDATES   = _getSavedMediaCandidates();
-    BACKEND_ORIGIN = BACKEND_CANDIDATES[0] || 'http://oc.mcl0.dpdns.org';
+    BACKEND_ORIGIN = BACKEND_CANDIDATES[0] || 'https://oc.mcl0.dpdns.org';
     MEDIA_ORIGIN   = MEDIA_CANDIDATES[0] || 'http://60.205.94.101:8080';
     const host = (function() { try { return new URL(BACKEND_ORIGIN).host; } catch (e) { return BACKEND_HOST; } })();
     WS_HOST    = host;
@@ -147,7 +151,7 @@ function mediaCandidates(url) {
     return [
         OSS_ORIGIN + '/' + p + q,
         'http://60.205.94.101:8080' + UPLOAD_PREFIX + p,
-        'http://oc.mcl0.dpdns.org' + UPLOAD_PREFIX + p,
+        'https://oc.mcl0.dpdns.org' + UPLOAD_PREFIX + p,
     ];
 }
 
@@ -158,13 +162,13 @@ function resolveMediaUrl(url, opts) {
     // 注意：保留签名串原样（含可能的 ?query），不要剥扩展名、不要换 host。
     if (typeof url === 'string' && url.startsWith('channel-private:')) {
         const rest = url.slice('channel-private:'.length);
-        return 'http://oc.mcl0.dpdns.org/channel-media/' + rest;
+        return 'https://oc.mcl0.dpdns.org/channel-media/' + rest;
     }
     // 已经是 /channel-media/ 形式的路径或绝对 URL：只能走 oc 主机，禁止用 MEDIA_BASE / 候选 host 拼接
     // （否则签名失效 → 404）。鉴权完全依赖 URL 自带的 ?exp=&sig=，必须原样保留查询串、不能换 host、不能加鉴权头。
     if (typeof url === 'string' && url.indexOf('/channel-media/') !== -1) {
         if (/^https?:/i.test(url)) return url;
-        return 'http://oc.mcl0.dpdns.org' + (url.startsWith('/') ? '' : '/') + url;
+        return 'https://oc.mcl0.dpdns.org' + (url.startsWith('/') ? '' : '/') + url;
     }
     // /v1/uploads/ 资源（media 与 avatars）：优先 OSS（全量存储，实测头像/媒体都只有 OSS 全量有货）。
     // 头像无条件写死缩放（见 OSS_AVATAR_PROCESS_PARAM）；media 由 opts.thumb 决定（仅原图无独立缩略图的展示场景）。
@@ -645,7 +649,7 @@ async function _fetchWithCandidates(url, options, strictV2) {
         // 绝对地址（如媒体直链）不走候选降级
         return await ocTransport(url, options);
     }
-    // 注意：候选项存的是「裸 origin」（如 http://oc.mcl0.dpdns.org，不含 /v1）。
+    // 注意：候选项存的是「裸 origin」（如 https://oc.mcl0.dpdns.org，不含 /v1）。
     // url 本身已带 /v1 前缀（如 /v1/me），所以必须直接拼接，不能切掉 /v1，
     // 否则会打到 /me 这种不存在的路由，后端返回纯文本 "404 page not found"，
     // 前端 res.json() 就会抛 "Unexpected non-whitespace character after JSON at position 4"。

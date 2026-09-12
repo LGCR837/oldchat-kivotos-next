@@ -155,7 +155,7 @@ SDK 接管的是「带 token 发请求」与「401 自动刷新」。刷新失�
 ```js
 // 宿主登录示例 (伪代码) 
 async function login(username, password) {
-  const res = await window.ocTransport('http://oc.mcl0.dpdns.org/v1/auth/login', {
+  const res = await window.ocTransport('https://oc.mcl0.dpdns.org/v1/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password, device_id: crypto.randomUUID() })
@@ -200,7 +200,7 @@ window.__httpSession = {
 默认后端候选 (按优先级) ：
 
 ```
-http://oc.mcl0.dpdns.org
+https://oc.mcl0.dpdns.org
 https://oc.mcl0.dpdns.org
 http://60.205.94.101:8080
 ```
@@ -210,7 +210,7 @@ http://60.205.94.101:8080
 ```
 http://60.205.94.101:8080
 http://files.mcl0.dpdns.org
-http://oc.mcl0.dpdns.org
+https://oc.mcl0.dpdns.org
 https://oc.mcl0.dpdns.org
 ```
 
@@ -292,7 +292,7 @@ refreshEndpoints(); // 重新计算 API_BASE / WS_HOST / 候选数组
 把后端返回的相对/特殊媒体路径解析为可加载的绝对 URL。
 
 - 已是绝对 `http(s):`/`data:`/`blob:` URL → 原样返回。
-- `channel-private:<file>?sig=...` 频道媒体 scheme → 映射到 `http://oc.mcl0.dpdns.org/channel-media/<file>` (签名串原样保留，**不能换 host、不能剥扩展名**) 。
+- `channel-private:<file>?sig=...` 频道媒体 scheme → 映射到 `https://oc.mcl0.dpdns.org/channel-media/<file>` (签名串原样保留，**不能换 host、不能剥扩展名**) 。
 - 含 `/channel-media/` 的路径 → 强制走 `oc.mcl0.dpdns.org` 主机 (签名依赖原 host) 。
 - 以 `/` 开头的相对路径 → 拼接当前媒体域名 `MEDIA_BASE`。
 
