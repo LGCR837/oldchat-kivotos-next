@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#101418">
+<meta name="color-scheme" content="dark light">
+<title>OCKNLite</title>
+<link rel="icon" href="assets/oldchat_logo.png" type="image/png">
+<style>
+/* =====================================================================
+   OCKNLite —— 手表端极简客户端
+   设计约束：
+   1) 不缓存 DOM：切换会话即清空渲染节点，只保留数据数组（上限 MSG_CAP 条）
+   2) 零动画、零阴影、零滤镜（低端 GPU 上这些最贵）
+   3) 单列铺满 + 安全区内边距，适配圆屏与超小分辨率
+   ===================================================================== */
+:root{
+	--bg:#101418;
+	--panel:#171c22;
+	--field:#1e242c;
+	--border:#2b333d;
+	--text:#e8ecf1;
+	--muted:#8b96a3;
+	--accent:#fa94a6;
+	--bubble-other:#2c353f;
+	--bubble-self:#3f6ea8;
+	--bub-text:#ffffff;
+	--danger:#ff8080;
+}
+@media (prefers-color-scheme: light){
+	:root{
+		--bg:#f4f7f8;
+		--panel:#ffffff;
+		--field:#eceff1;
+		--border:#d9dee3;
+		--text:#1a1a1a;
+		--muted:#6b7480;
+		--accent:#e88294;
+		--bubble-other:#e8eaed;
+		--bubble-self:#4a8acb;
+		--bub-text:#1a1a1a;
+		--danger:#c62828;
+	}
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none}
+body{
+	background:var(--bg);color:var(--text);
+	font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+	-webkit-font-smoothing:antialiased;
+}
+#app{position:absolute;inset:0}
+.view{position:absolute;inset:0;display:none;flex-direction:column}
+.view.on{display:flex}
+.ellipsis{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.empty{color:var(--muted);font-size:12px;text-align:center;padding:24px 16px}
+
+/* ---------- 顶栏 ---------- */
+.hdr{
+	display:flex;align-items:center;gap:6px;flex:0 0 auto;
+	min-height:44px;padding:0 10px;
+	padding-top:env(safe-area-inset-top);
+	background:var(--panel);border-bottom:1px solid var(--border);
+}
+.hdr-title{font-size:13px;font-weight:500;letter-spacing:.4px;flex:1;min-width:0}
+.hdr-btn{
+	flex:0 0 auto;min-width:44px;min-height:36px;
+	background:none;border:none;color:var(--accent);
+	font-size:13px;font-family:inherit;padding:6px 8px;border-radius:8px;
+}
+.hdr-btn:active{background:var(--field)}
+.hdr-btn.back{color:var(--text);font-size:20px;line-height:1;padding:0 4px;min-width:32px}
+
+/* ---------- 登录 ---------- */
+#vLogin .login-box{
+	flex:1;display:flex;flex-direction:column;justify-content:center;gap:10px;
+	padding:20px 18px;padding-bottom:calc(20px + env(safe-area-inset-bottom));
+}
+.brand{font-size:16px;font-weight:500;color:var(--accent);text-align:center;letter-spacing:1.5px;margin-bottom:4px}
+.in{
+	width:100%;min-height:44px;padding:10px 12px;
+	background:var(--field);border:1px solid var(--border);border-radius:10px;
+	color:var(--text);font-size:15px;font-family:inherit;outline:none;
+}
+.in::placeholder{color:var(--muted)}
+.btn{
+	width:100%;min-height:46px;border:none;border-radius:10px;
+	font-size:15px;font-family:inherit;font-weight:500;
+	background:var(--field);color:var(--text);
+}
+.btn.primary{background:var(--accent);color:#fff}
+.btn:disabled{opacity:.55}
+.msg{font-size:12px;color:var(--danger);text-align:center;min-height:16px}
+
+/* ---------- 会话列表 ---------- */
+.list{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;background:var(--bg)}
+.row{
+	display:flex;align-items:center;gap:10px;
+	min-height:58px;padding:9px 12px;
+	border-bottom:1px solid var(--border);
+}
+.row:active{background:var(--field)}
+.av{width:36px;height:36px;flex:0 0 auto;border-radius:50%;object-fit:cover;background:var(--field)}
+.row-main{flex:1;min-width:0}
+.row-name{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row-sub{
+	margin-top:2px;font-size:12px;color:var(--muted);
+	overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.row-right{flex:0 0 auto;text-align:right;min-width:26px}
+.row-time{font-size:11px;color:var(--muted)}
+.badge{
+	display:inline-block;margin-top:3px;min-width:18px;height:18px;
+	padding:0 5px;border-radius:9px;background:var(--accent);color:#fff;
+	font-size:11px;line-height:18px;text-align:center;
+}
+
+/* ---------- 聊天 ---------- */
+.msgs{
+	flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;
+	display:flex;flex-direction:column;gap:8px;
+	padding:10px 10px 6px;
+}
+.m{display:flex;gap:7px;align-items:flex-end;max-width:100%}
+.m.self{flex-direction:row-reverse}
+.av2{width:26px;height:26px;flex:0 0 auto;border-radius:50%;object-fit:cover;background:var(--field)}
+.mcol{display:flex;flex-direction:column;min-width:0;max-width:80%}
+.m.self .mcol{align-items:flex-end}
+.mname{font-size:11px;color:var(--muted);margin:0 2px 2px}
+.bub{
+	padding:7px 10px;border-radius:12px;
+	background:var(--bubble-other);color:var(--bub-text);
+	font-size:14px;word-break:break-word;white-space:pre-wrap;
+}
+.m.self .bub{background:var(--bubble-self);color:#fff}
+.ph{opacity:.75}
+.mimg{display:block;max-width:100%;max-height:200px;border-radius:10px}
+
+/* ---------- 输入区 ---------- */
+.composer{
+	flex:0 0 auto;display:flex;align-items:center;gap:6px;
+	padding:8px 8px;padding-bottom:calc(8px + env(safe-area-inset-bottom));
+	background:var(--panel);border-top:1px solid var(--border);
+}
+.composer-in{flex:1;min-width:0;min-height:40px;padding:8px 10px;font-size:14px;border-radius:10px}
+.cbtn{
+	flex:0 0 auto;width:40px;height:40px;padding:0;
+	display:flex;align-items:center;justify-content:center;
+	background:var(--field);border:1px solid var(--border);border-radius:10px;
+	color:var(--text);font-size:19px;font-family:inherit;line-height:1;
+}
+.cbtn:active{opacity:.7}
+.cbtn.send{background:var(--accent);border-color:transparent;color:#fff}
+.cbtn:disabled{opacity:.45}
+
+/* ---------- 轻提示 ---------- */
+#toast{
+	position:absolute;left:16px;right:16px;bottom:calc(70px + env(safe-area-inset-bottom));
+	background:rgba(0,0,0,.82);color:#fff;font-size:12px;
+	padding:8px 12px;border-radius:10px;text-align:center;
+	display:none;z-index:50;
+}
+#toast.on{display:block}
+
+/* ---------- 超小屏 / 横向小高度适配 ---------- */
+@media (max-width:240px){
+	.hdr{min-height:38px;padding:0 6px}
+	.hdr-title{font-size:12px}
+	.row{min-height:52px;padding:7px 8px;gap:8px}
+	.av{width:30px;height:30px}
+	.row-name{font-size:13px}
+	.row-sub{font-size:11px}
+	.composer{gap:4px;padding:6px 5px;padding-bottom:calc(6px + env(safe-area-inset-bottom))}
+	.cbtn{width:36px;height:36px;font-size:17px}
+	.composer-in{min-height:36px;font-size:13px}
+	.bub{font-size:13px;padding:6px 8px}
+	.mcol{max-width:84%}
+}
+@media (max-height:240px){
+	.hdr{min-height:34px}
+	.msgs{padding:6px;gap:5px}
+	.composer{padding:5px}
+	.cbtn{width:34px;height:34px}
+}
+</style>
+</head>
+<body>
+<div id="app">
+
+	<!-- ========== 登录 ========== -->
+	<section id="vLogin" class="view">
+		<div class="login-box">
+			<div class="brand">OCKNLite</div>
+			<input id="inId" class="in" type="text" placeholder="账号 / 邮箱 / UID"
+				autocomplete="username" autocapitalize="off" autocorrect="off" enterkeyhint="next">
+			<input id="inPwd" class="in" type="password" placeholder="密码"
+				autocomplete="current-password" enterkeyhint="go">
+			<button id="btnLogin" class="btn primary">登录</button>
+			<div id="loginMsg" class="msg"></div>
+		</div>
+	</section>
+
+	<!-- ========== 会话列表 ========== -->
+	<section id="vList" class="view">
+		<header class="hdr">
+			<span class="hdr-title">OCKNLite</span>
+			<button id="btnLogout" class="hdr-btn">登出</button>
+		</header>
+		<div id="convList" class="list"></div>
+	</section>
+
+	<!-- ========== 聊天 ========== -->
+	<section id="vChat" class="view">
+		<header class="hdr">
+			<button id="btnBack" class="hdr-btn back" aria-label="返回">&#8249;</button>
+			<span id="chatTitle" class="hdr-title ellipsis"></span>
+		</header>
+		<div id="msgList" class="msgs"></div>
+		<div class="composer">
+			<input id="inMsg" class="in composer-in" type="text" placeholder="发消息" enterkeyhint="send">
+			<button id="btnPlus" class="cbtn" aria-label="发送图片">+</button>
+			<button id="btnSend" class="cbtn send" aria-label="发送">&gt;</button>
+		</div>
+	</section>
+
+	<div id="toast"></div>
+</div>
+<input id="filePick" type="file" accept="image/*" hidden>
+
+<script src="oldchat-api-sdk-javascript/oldchat-api-sdk.js"></script>
+<script>
+(function () {
+'use strict';
+
+/* =====================================================================
+   0. 配置
+   ===================================================================== */
+var PROXY      = 'proxy.php';   // 与 lite.html 同级；接口一律经同源代理，绕开 CORS / 混合内容
+var MSG_CAP    = 30;            // 单个会话最多保留的消息条数（只保留当前会话，不驻留其它会话）
+var POLL_LIST  = 25000;         // 列表页轮询间隔
+var POLL_CHAT  = 15000;         // 聊天页轮询间隔
+var LS_TOKEN   = 'oc_access_token';
+var LS_USER    = 'oc_user';
+var LS_CONVS   = 'oc_lite_convs';
+
+/* =====================================================================
+   1. 传输层：ocTransport 必须在 SDK 加载之后注入
+      SDK 内部有同名 wrapper，先注入会被覆盖 → 自递归。
+   ===================================================================== */
+function absApi(u) {
+	var s = String(u || '');
+	if (/^https?:\/\//i.test(s)) return s;
+	var base = 'https://oc.mcl0.dpdns.org';
+	try {
+		if (typeof BACKEND_CANDIDATES !== 'undefined' && BACKEND_CANDIDATES && BACKEND_CANDIDATES[0]) {
+			base = BACKEND_CANDIDATES[0];
+		}
+	} catch (e) {}
+	if (base.indexOf('//') === 0) base = location.protocol + base;
+	return base + (s.charAt(0) === '/' ? '' : '/') + s;
+}
+// 媒体（图片/头像/频道媒体/文件下载）绝不走代理：流量会全压到服务器上。
+function isMediaPath(p) {
+	return p.indexOf('/v1/uploads/') === 0 || p.indexOf('/v2/uploads/') === 0 ||
+	       p.indexOf('/channel-media/') === 0 || p.indexOf('/v2/files/download') === 0;
+}
+window.ocTransport = function (url, init) {
+	var p = '';
+	try { p = new URL(String(url), location.href).pathname || ''; } catch (e) {}
+	if (isMediaPath(p)) return fetch(url, init);
+	return fetch(PROXY + '?u=' + encodeURIComponent(absApi(url)), init);
+};
+
+/* =====================================================================
+   2. v2 会话（ECDH P-256）
+      实现在此重写一份，不改共享 SDK —— SDK 只消费 window.__httpSession。
+      注意：这是「HTTP 专用会话」，与 WS 会话严格隔离；
+      握手走 /v1/auth/handshake（非 /v2/ 路径），v2SignHeaders 会立即返回 {}，
+      因此不会与签名流程递归。
+   ===================================================================== */
+var sId = null, sEnc = null, sMac = null, sPending = null;
+
+function ensureSession() {
+	if (sId && sEnc && sMac) return Promise.resolve();
+	if (sPending) return sPending;
+	sPending = (async function () {
+		if (sId && sEnc && sMac) return;
+		if (!window.crypto || !crypto.subtle) {
+			throw new Error('需要 HTTPS：当前环境无 WebCrypto');
+		}
+		var keys = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+		var spki = await crypto.subtle.exportKey('spki', keys.publicKey);
+		var r = await apiFetch('/v1/auth/handshake', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ client_pub: Crypto.bytesToBase64(new Uint8Array(spki)) })
+		});
+		var d = await r.json();
+		if (d.error) throw new Error(d.error);
+		var srv = await crypto.subtle.importKey(
+			'spki', Crypto.base64ToBytes(d.server_pub), { name: 'ECDH', namedCurve: 'P-256' }, false, []
+		);
+		var secret = new Uint8Array(
+			await crypto.subtle.deriveBits({ name: 'ECDH', public: srv }, keys.privateKey, 256)
+		);
+		sEnc = await Crypto.sha256(Crypto.concatBytes(secret, new TextEncoder().encode('enc')));
+		sMac = await Crypto.sha256(Crypto.concatBytes(secret, new TextEncoder().encode('mac')));
+		sId  = d.session_id;
+	})().finally(function () { sPending = null; });
+	return sPending;
+}
+
+window.__httpSession = {
+	ensure: ensureSession,
+	getMacKey: function () { return sMac; },
+	getEncKey: function () { return sEnc; },
+	getSessionId: function () { return sId; },
+	clear: function () { sId = null; sEnc = null; sMac = null; }
+};
+
+/* =====================================================================
+   3. 状态：只放数据，不放 DOM
+   ===================================================================== */
+var S = {
+	me: null,          // 我的用户对象
+	convs: [],         // 会话元数据列表（轻量）
+	cur: null,         // 当前会话
+	msgs: [],          // 当前会话的消息（≤ MSG_CAP 条）
+	sig: '',           // 消息集指纹，用于跳过无变化的重绘
+	timer: null
+};
+
+/* =====================================================================
+   4. 工具
+   ===================================================================== */
+function $(id) { return document.getElementById(id); }
+function esc(s) {
+	return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+		return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+	});
+}
+function show(id) {
+	['vLogin', 'vList', 'vChat'].forEach(function (v) { $(v).classList.toggle('on', v === id); });
+}
+var toastTimer = null;
+function toast(text) {
+	var el = $('toast');
+	if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+	if (!text) { el.classList.remove('on'); return; }
+	el.textContent = text;
+	el.classList.add('on');
+	toastTimer = setTimeout(function () { el.classList.remove('on'); }, 2600);
+}
+// 文本 body 可能是 v2 JSON（{"v":2,"text":...,"mentions":[...]}）
+function bodyText(b) {
+	if (typeof b !== 'string') return '';
+	if (b.charAt(0) === '{') {
+		try {
+			var o = JSON.parse(b);
+			if (o && o.v === 2 && typeof o.text === 'string') return o.text;
+		} catch (e) {}
+	}
+	return b;
+}
+function phLabel(t) {
+	switch (t) {
+		case 'image':      return '[图片]';
+		case 'voice':
+		case 'audio':      return '[语音]';
+		case 'video':      return '[视频]';
+		case 'file':       return '[文件]';
+		case 'red_packet': return '[红包]';
+		case 'sticker':    return '[表情]';
+		default:           return '[消息]';
+	}
+}
+function hhmm(ts) {
+	var n = Number(ts) || 0;
+	if (!n) return '';
+	var d = new Date(n * 1000), now = new Date();
+	var p = function (x) { return (x < 10 ? '0' : '') + x; };
+	if (d.toDateString() === now.toDateString()) return p(d.getHours()) + ':' + p(d.getMinutes());
+	return (d.getMonth() + 1) + '/' + d.getDate();
+}
+// 头像：SDK 默认给 240x240；表上只显示 26~36px，换成 96x96
+// （省流量，更重要的是把解码位图从约 230KB 降到约 37KB）。参数变了也只是退回 240，不会坏。
+function avUrl(a) {
+	var u = '';
+	try { u = resolveMediaUrl(a || ''); } catch (e) { u = a || ''; }
+	if (!u) return '';
+	return String(u).replace('w_240,h_240', 'w_96,h_96');
+}
+function mediaUrl(u) {
+	try { return cachedResolveMediaUrl(u, { thumb: true }); } catch (e) { return u; }
+}
+function getDeviceId() {
+	var k = 'oldchat_device_id', v = null;
+	try { v = localStorage.getItem(k); } catch (e) {}
+	if (!v) {
+		v = 'lite-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+		try { localStorage.setItem(k, v); } catch (e) {}
+	}
+	return v;
+}
+
+/* =====================================================================
+   5. 登录 / 登出
+   ===================================================================== */
+async function doLogin() {
+	var id = $('inId').value.trim();
+	var pwd = $('inPwd').value;
+	if (!id || !pwd) { $('loginMsg').textContent = '请输入账号和密码'; return; }
+	var btn = $('btnLogin');
+	btn.disabled = true; btn.textContent = '登录中…';
+	$('loginMsg').textContent = '';
+	try {
+		var r = await apiFetch('/v1/auth/login', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				identifier: id, password: pwd,
+				device_id: getDeviceId(), device_name: 'OCKNLite',
+				platform: 'web', app_version: 'lite'
+			})
+		});
+		var d = await r.json();
+		if (!r.ok || !d.access_token) {
+			throw new Error(d.msg || d.error || ('登录失败 (' + r.status + ')'));
+		}
+		try {
+			localStorage.setItem(LS_TOKEN, d.access_token);
+			localStorage.setItem('oc_refresh_token', d.refresh_token || '');
+			localStorage.setItem(LS_USER, JSON.stringify(d.user || {}));
+		} catch (e) {}
+		S.me = d.user || {};
+		$('inPwd').value = '';
+		await loadMe();
+		openList(true);
+	} catch (e) {
+		$('loginMsg').textContent = e && e.message ? e.message : '网络错误';
+	} finally {
+		btn.disabled = false; btn.textContent = '登录';
+	}
+}
+
+function logout() {
+	stopPoll();
+	try {
+		localStorage.removeItem(LS_TOKEN);
+		localStorage.removeItem('oc_refresh_token');
+		localStorage.removeItem(LS_USER);
+		localStorage.removeItem(LS_CONVS);
+	} catch (e) {}
+	S.me = null; S.convs = []; S.cur = null; S.msgs = []; S.sig = '';
+	$('convList').innerHTML = '';
+	$('msgList').innerHTML = '';
+	$('inMsg').value = '';
+	$('loginMsg').textContent = '';
+	show('vLogin');
+}
+
+// 拉一次自己的资料：登录返回的 user 字段未必齐全，而「自己的消息」判定与头像都依赖它
+async function loadMe() {
+	try {
+		var u = await OC.getMe();
+		if (u && (u.ncuid || u.uid)) {
+			S.me = Object.assign({}, S.me || {}, u);
+			try { localStorage.setItem(LS_USER, JSON.stringify(S.me)); } catch (e) {}
+		}
+	} catch (e) {}
+}
+
+// 鉴权失效（token 过期且刷新失败）→ 直接回登录页，避免一直空转
+function isAuthError(e) {
+	var s = '';
+	try {
+		s = String((e && e.message) || '') + ' ' +
+		    String((e && e.code) || '') + ' ' +
+		    String((e && e.raw) || '');
+	} catch (x) {}
+	return /401|403|unauthorized|missing_session|invalid_token|token_expired/i.test(s);
+}
+
+/* =====================================================================
+   6. 会话列表
+   ===================================================================== */
+function saveConvCache() {
+	try {
+		localStorage.setItem(LS_CONVS, JSON.stringify({
+			t: Date.now(),
+			list: S.convs.map(function (c) {
+				return { type: c.type, id: c.id, key: c.key, name: c.name, avatar: c.avatar,
+				         unread: c.unread, last: c.last, toUid: c.toUid, ncuid: c.ncuid };
+			})
+		}));
+	} catch (e) {}
+}
+function loadConvCache() {
+	try {
+		var o = JSON.parse(localStorage.getItem(LS_CONVS) || 'null');
+		if (o && o.list && o.list.length) { S.convs = o.list; renderConvs(); return true; }
+	} catch (e) {}
+	return false;
+}
+
+function renderConvs() {
+	var box = $('convList');
+	if (!S.convs.length) {
+		box.innerHTML = '<div class="empty">暂无会话</div>';
+		return;
+	}
+	var h = [];
+	for (var i = 0; i < S.convs.length; i++) {
+		var c = S.convs[i];
+		var a = avUrl(c.avatar);
+		h.push('<div class="row" data-key="' + esc(c.key) + '">');
+		h.push('<img class="av" alt=""' + (a ? ' src="' + esc(a) + '"' : '') + '>');
+		h.push('<div class="row-main"><div class="row-name">' + esc(c.name) + '</div>');
+		if (c.last && c.last.text) {
+			h.push('<div class="row-sub">' + esc(String(c.last.text).slice(0, 60)) + '</div>');
+		}
+		h.push('</div><div class="row-right">');
+		if (c.last && c.last.ts) h.push('<div class="row-time">' + esc(hhmm(c.last.ts)) + '</div>');
+		if (c.unread) h.push('<div class="badge">' + (c.unread > 99 ? '99+' : c.unread) + '</div>');
+		h.push('</div></div>');
+	}
+	box.innerHTML = h.join('');
+}
+
+async function loadConvs() {
+	try {
+		var res = await Promise.all([
+			OC.getGroups(),
+			OC.getFriends(),
+			OC.getUnreadGroups(100).catch(function () { return []; }),
+			OC.getUnreadDirect(100).catch(function () { return []; })
+		]);
+	} catch (e) {
+		if (isAuthError(e)) { logout(); return; }
+		if (!S.convs.length) $('convList').innerHTML = '<div class="empty">加载失败：' + esc(e.message || '') + '</div>';
+		return;
+	}
+	var groups = res[0] || [], friends = res[1] || [], ug = res[2] || [], ud = res[3] || [];
+	var map = {};
+
+	groups.forEach(function (g) {
+		var id = String(g.id || '');
+		if (!id) return;
+		map['group:' + id] = { type: 'group', id: id, key: 'group:' + id,
+			name: g.name || id, avatar: g.avatar || '', unread: 0, last: null };
+	});
+	friends.forEach(function (f) {
+		var id = f.ncuid || f.uid || '';
+		if (!id) return;
+		map['direct:' + id] = { type: 'direct', id: id, key: 'direct:' + id,
+			name: f.name || id, avatar: f.avatar || '', unread: 0, last: null,
+			toUid: f.rawUid || f.uid || '', ncuid: f.ncuid || '' };
+	});
+
+	function bump(c, m) {
+		c.unread++;
+		var ts = Number(m.created_at) || 0;
+		if (!c.last || ts > c.last.ts) c.last = { ts: ts, text: bodyText(m.body) };
+	}
+	ug.forEach(function (m) {
+		var c = m.group_id ? map['group:' + m.group_id] : null;
+		if (c) bump(c, m);
+	});
+	ud.forEach(function (m) {
+		var k = m.from_ncuid || m.from_uid || '';
+		var c = k ? map['direct:' + k] : null;
+		if (c) bump(c, m);
+	});
+
+	S.convs = Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) {
+		if (!!b.unread !== !!a.unread) return (b.unread ? 1 : 0) - (a.unread ? 1 : 0);
+		return ((b.last && b.last.ts) || 0) - ((a.last && a.last.ts) || 0);
+	});
+	saveConvCache();
+	renderConvs();
+}
+
+function openList(refresh) {
+	show('vList');
+	renderConvs();               // 例如从聊天返回时，把已读后的未读徽标立刻刷掉
+	if (refresh || !S.convs.length) loadConvs();
+	restartPoll();
+}
+
+/* =====================================================================
+   7. 聊天
+   ===================================================================== */
+function findConv(key) {
+	for (var i = 0; i < S.convs.length; i++) if (S.convs[i].key === key) return S.convs[i];
+	return null;
+}
+
+async function openChat(key) {
+	var c = findConv(key);
+	if (!c) return;
+	S.cur = c;
+	// 不缓存上一个会话的 DOM：直接清空并由数据重建
+	S.msgs = []; S.sig = '';
+	$('chatTitle').textContent = c.name;
+	$('msgList').innerHTML = '<div class="empty">加载中…</div>';
+	show('vChat');
+	await loadMsgs(true);
+	markRead();
+	restartPoll();
+}
+
+function msgSig() {
+	var n = S.msgs.length;
+	return n + '|' + (n ? (S.msgs[n - 1].id || '') : '');
+}
+
+async function loadMsgs(initial) {
+	if (!S.cur) return;
+	var c = S.cur;
+	try {
+		var raw = c.type === 'group'
+			? await OC.getGroupMessages(c.id, { limit: MSG_CAP, offset: 0 })
+			: await OC.getDirectMessages(c.id, { limit: MSG_CAP, offset: 0 });
+		// 接口返回「新 → 旧」，转成升序；再截断，只留最近 MSG_CAP 条
+		S.msgs = (raw || []).slice().reverse().slice(-MSG_CAP);
+		var sig = msgSig();
+		if (sig !== S.sig) { S.sig = sig; renderMsgs(); }
+	} catch (e) {
+		if (isAuthError(e)) { logout(); return; }
+		if (initial) $('msgList').innerHTML = '<div class="empty">加载失败：' + esc(e.message || '') + '</div>';
+	}
+}
+
+function renderMsgs() {
+	var box = $('msgList');
+	if (!S.msgs.length) {
+		box.innerHTML = '<div class="empty">还没有消息</div>';
+		return;
+	}
+	var me = S.me || {};
+	var meIds = [me.ncuid || '', me.uid || ''].filter(Boolean);
+	var h = [], prevUid = null;
+	for (var i = 0; i < S.msgs.length; i++) {
+		var m = S.msgs[i];
+		var uid = m.from_ncuid || m.from_uid || '';
+		var self = meIds.indexOf(uid) >= 0;
+		var t = m.msg_type || 'text';
+		var inner;
+		if (t === 'text') {
+			inner = esc(bodyText(m.body));
+		} else if (t === 'image' && (m.media_url || m.body)) {
+			inner = '<img class="mimg" alt="" loading="lazy" src="' +
+			        esc(mediaUrl(m.thumb_url || m.media_url || m.body)) + '">';
+		} else {
+			inner = '<span class="ph">' + esc(phLabel(t)) + '</span>';
+		}
+		var newSender = !self && uid !== prevUid;
+		h.push('<div class="m' + (self ? ' self' : '') + '">');
+		if (!self) {
+			var a = newSender ? avUrl(m.from_avatar) : '';
+			h.push('<img class="av2" alt=""' + (a ? ' src="' + esc(a) + '"' : ' style="visibility:hidden"') + '>');
+		}
+		h.push('<div class="mcol">');
+		if (newSender) h.push('<div class="mname">' + esc(m.from_name || uid) + '</div>');
+		h.push('<div class="bub">' + inner + '</div></div></div>');
+		prevUid = uid;
+	}
+	box.innerHTML = h.join('');
+	box.scrollTop = box.scrollHeight;
+}
+
+function markRead() {
+	if (!S.cur) return;
+	var c = S.cur;
+	c.unread = 0;
+	try {
+		var p = c.type === 'group' ? OC.markGroupRead(c.id) : OC.markDirectRead(c.id);
+		if (p && p.catch) p.catch(function () {});
+	} catch (e) {}
+}
+
+async function sendText() {
+	if (!S.cur) return;
+	var v = $('inMsg').value.trim();
+	if (!v) return;
+	var c = S.cur;
+	$('inMsg').value = '';
+	var me = S.me || {};
+	var payload = c.type === 'group'
+		? { group_id: c.id, body: v, msg_type: 'text', media_url: '', thumb_url: '' }
+		: { body: v, msg_type: 'text', media_url: '', thumb_url: '',
+		    to_uid: c.toUid || c.id, to_ncuid: c.ncuid || c.id };
+	// 乐观上屏（纯数据，不做 DOM 缓存）
+	var tmp = {
+		id: 'tmp' + Date.now(), from_uid: me.uid || '', from_ncuid: me.ncuid || '',
+		from_name: me.display_name || me.username || '', from_avatar: me.avatar_url || '',
+		body: v, msg_type: 'text', created_at: Math.floor(Date.now() / 1000)
+	};
+	S.msgs.push(tmp);
+	S.sig = msgSig();
+	renderMsgs();
+	try {
+		var d = c.type === 'group' ? await OC.sendGroup(payload) : await OC.sendDirect(payload);
+		if (d && d.error) throw new Error(d.error);
+	} catch (e) {
+		// 失败回滚：移除乐观消息并把文本放回输入框
+		S.msgs.pop();
+		S.sig = msgSig();
+		renderMsgs();
+		$('inMsg').value = v;
+		toast('发送失败：' + (e && e.message ? e.message : ''));
+	}
+}
+
+async function sendImage(file) {
+	if (!S.cur || !file) return;
+	var c = S.cur;
+	toast('上传中…');
+	try {
+		var fd = new FormData();
+		fd.append('file', file);
+		var up = await OC.uploadMedia(fd);
+		if (up && up.error) throw new Error(up.error);
+		var url = up.media_url || up.url || up.path || up.file_url || '';
+		if (!url) throw new Error('上传未返回地址');
+		var payload = c.type === 'group'
+			? { group_id: c.id, body: '', msg_type: 'image', media_url: url, thumb_url: up.thumb_url || '' }
+			: { body: '', msg_type: 'image', media_url: url, thumb_url: up.thumb_url || '',
+			    to_uid: c.toUid || c.id, to_ncuid: c.ncuid || c.id };
+		var r = c.type === 'group' ? await OC.sendGroup(payload) : await OC.sendDirect(payload);
+		if (r && r.error) throw new Error(r.error);
+		toast('');
+		await loadMsgs(false);
+	} catch (e) {
+		toast('发送失败：' + (e && e.message ? e.message : ''));
+	}
+}
+
+/* =====================================================================
+   8. 轮询（可见才跑；隐藏即停，恢复时立刻追一次）
+   ===================================================================== */
+function stopPoll() {
+	if (S.timer) { clearInterval(S.timer); S.timer = null; }
+}
+function restartPoll() {
+	stopPoll();
+	if (document.hidden) return;
+	var inChat = $('vChat').classList.contains('on');
+	S.timer = setInterval(tick, inChat ? POLL_CHAT : POLL_LIST);
+}
+async function tick() {
+	if (document.hidden) return;
+	if ($('vChat').classList.contains('on')) await loadMsgs(false);
+	else await loadConvs();
+}
+document.addEventListener('visibilitychange', function () {
+	if (document.hidden) { stopPoll(); return; }
+	tick();
+	restartPoll();
+});
+window.addEventListener('pagehide', stopPoll);
+window.addEventListener('pageshow', function () {
+	if (!document.hidden) { tick(); restartPoll(); }
+});
+
+/* =====================================================================
+   9. 事件绑定
+   ===================================================================== */
+$('btnLogin').addEventListener('click', doLogin);
+$('inPwd').addEventListener('keydown', function (e) {
+	if (e.key === 'Enter') { e.preventDefault(); doLogin(); }
+});
+$('btnLogout').addEventListener('click', logout);
+
+// 不依赖 Element.closest（老 WebView 未必实现），手动向上找 .row
+function closestRow(el) {
+	var root = $('convList');
+	while (el && el !== root) {
+		if (el.classList && el.classList.contains('row')) return el;
+		el = el.parentNode;
+	}
+	return null;
+}
+$('convList').addEventListener('click', function (e) {
+	var row = closestRow(e.target);
+	if (!row) return;
+	var k = row.getAttribute('data-key');
+	if (k) openChat(k);
+});
+
+$('btnBack').addEventListener('click', function () { openList(false); });
+
+$('btnSend').addEventListener('click', sendText);
+$('inMsg').addEventListener('keydown', function (e) {
+	if (e.key !== 'Enter') return;
+	if (e.isComposing || e.keyCode === 229) return;   // 中文输入法候选确认，不当作发送
+	e.preventDefault();
+	sendText();
+});
+$('btnPlus').addEventListener('click', function () { $('filePick').click(); });
+$('filePick').addEventListener('change', function (e) {
+	var f = e.target.files && e.target.files[0];
+	e.target.value = '';
+	if (!f) return;
+	if (!/^image\//.test(f.type)) { toast('暂只支持图片'); return; }
+	sendImage(f);
+});
+
+/* =====================================================================
+   10. 启动
+   ===================================================================== */
+(function boot() {
+	var token = null, user = null;
+	try {
+		token = localStorage.getItem(LS_TOKEN);
+		user = JSON.parse(localStorage.getItem(LS_USER) || 'null');
+	} catch (e) {}
+	if (!token) { show('vLogin'); return; }
+	S.me = user || {};
+	loadConvCache();          // 先用缓存立即出列表，再后台刷新
+	show('vList');
+	loadMe();
+	loadConvs();
+	restartPoll();
+})();
+
+})();
+</script>
+</body>
+</html>
