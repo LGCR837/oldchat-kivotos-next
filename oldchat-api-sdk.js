@@ -279,7 +279,7 @@ const V1_TO_V2 = {
     '/v1/friends/remark': '/v2/friends/remark',
     '/v1/friends/delete': '/v2/friends/delete',
     // 个人
-    '/v1/me': '/v2/me',
+    // '/v1/me' 不映射 v2：后端未实现 /v2/me（实测 404），保留 v1 直连（getMe 用）。
     '/v1/me/uid': '/v2/me/uid',
     '/v1/me/profile': '/v2/me/profile',
     '/v1/me/avatar': '/v2/me/avatar',
