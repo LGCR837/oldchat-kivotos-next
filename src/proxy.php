@@ -134,10 +134,59 @@ if (!$hasAcceptEncoding) {
 $finalUrl = $target;
 
 // ===== 读取原始请求体 =====
+// multipart/form-data 的 php://input 恒为空（PHP 已解析进 $_POST/$_FILES），
+// 必须按【原始】Content-Type 里的 boundary 重建请求体，否则转发上传会丢 body → 后端 400。
+function oc_req_content_type() {
+    if (function_exists('getallheaders')) {
+        foreach (getallheaders() as $k => $v) {
+            if (strtolower($k) === 'content-type') return $v;
+        }
+    }
+    if (isset($_SERVER['CONTENT_TYPE'])) return $_SERVER['CONTENT_TYPE'];
+    if (isset($_SERVER['HTTP_CONTENT_TYPE'])) return $_SERVER['HTTP_CONTENT_TYPE'];
+    return '';
+}
+function oc_mp_field($boundary, $name, $val) {
+    $out = '';
+    if (is_array($val)) {
+        foreach ($val as $v) { $out .= oc_mp_field($boundary, $name . '[]', $v); }
+        return $out;
+    }
+    $out .= '--' . $boundary . "\r\n";
+    $out .= 'Content-Disposition: form-data; name="' . $name . '"' . "\r\n\r\n";
+    $out .= $val . "\r\n";
+    return $out;
+}
+function oc_build_multipart($boundary) {
+    $body = '';
+    foreach ($_POST as $name => $val) { $body .= oc_mp_field($boundary, $name, $val); }
+    foreach ($_FILES as $name => $f) {
+        if (!isset($f['tmp_name']) || !is_uploaded_file($f['tmp_name'])) continue;
+        $data = file_get_contents($f['tmp_name']);
+        if ($data === false) continue;
+        $fname = isset($f['name']) ? $f['name'] : 'upload.bin';
+        $ftype = isset($f['type']) && $f['type'] ? $f['type'] : 'application/octet-stream';
+        $body .= '--' . $boundary . "\r\n";
+        $body .= 'Content-Disposition: form-data; name="' . $name . '"; filename="' . $fname . '"' . "\r\n";
+        $body .= 'Content-Type: ' . $ftype . "\r\n\r\n";
+        $body .= $data . "\r\n";
+    }
+    $body .= '--' . $boundary . '--' . "\r\n";
+    return $body;
+}
+
 $body = null;
 if ($method !== 'GET' && $method !== 'HEAD') {
-    $body = file_get_contents('php://input');
-    if ($body === false) $body = null;
+    $reqCtype = oc_req_content_type();
+    if (stripos($reqCtype, 'multipart/form-data') !== false) {
+        // 走代理的多路上传：用原始 boundary 把 $_POST/$_FILES 重组为 multipart 体
+        $boundary = '';
+        if (preg_match('/boundary=(.+)$/i', $reqCtype, $m)) { $boundary = trim($m[1], '"'); }
+        $body = $boundary !== '' ? oc_build_multipart($boundary) : '';
+    } else {
+        $body = file_get_contents('php://input');
+        if ($body === false) $body = null;
+    }
 }
 
 // ===== 发起请求 =====
