@@ -38,15 +38,15 @@ const DEFAULT_BACKEND_CANDIDATES = [
     'http://60.205.94.101:8080'
 ];
 // ===== 媒体源优先级 =====
-// OSS（阿里云，全量存储，绝大多数媒体只有它）→ 60.205（旧主服务器）→ oc（仅剩少量老资源，
-// 老群头像 / 元老级用户头像可能只在这里；实测存留不足 80 个文件，故只作最后兜底）。
+// OSS（阿里云，全量存储，绝大多数媒体只有它）→ 60.205（旧主服务器）。
+// oc 已从媒体源移除（用户 2026-09-12 决定）：其 /v1/uploads/ 下存留不足 80 个文件，
+// 命中率极低，每张图都要多打一次必然 404 的请求；60.205 兜底已覆盖该职责。
 // 注意：OSS 的路径结构是 /media/x，而非其它镜像的 /v1/uploads/media/x，
 // 由 mediaCandidates() / resolveMediaUrl() 专门 remap，**不能参与「同形 host 前缀互换」**。
 const OSS_ORIGIN = 'https://ocf.oss-cn-shanghai.aliyuncs.com';
 const DEFAULT_MEDIA_CANDIDATES = [
     OSS_ORIGIN,
-    'http://60.205.94.101:8080',
-    'https://oc.mcl0.dpdns.org'
+    'http://60.205.94.101:8080'
 ];
 // 注：files.mcl0.dpdns.org 已移除 —— 不属于官端候选链，实测对头像/媒体均直接 404（CF 原站，非 CDN）。
 
@@ -146,18 +146,21 @@ function _uploadPath(url) {
     return (m && m[1]) ? m[1] : null;
 }
 
-// 生成 /v1/uploads/ 资源的完整候选源列表。优先级对齐官端 MediaUrlResolver.resolveCandidates()（nx10.md §38.1）：
-//   1. OSS 阿里云（全量存储）
-//   2. 旧主服务器 60.205.94.101:8080/v1/uploads
-//   3. 当前主站 oc.mcl0.dpdns.org/v1/uploads
-// 注：files.mcl0.dpdns.org（CF 原站）不属于官端候选链（它仅出现在 /download/sources 下载源列表），故已移除。
+// 生成 /v1/uploads/ 资源的完整候选源列表。基于官端 MediaUrlResolver.resolveCandidates()（nx10.md §38.1），
+// 并按本项目实测收敛为两项：
+//   1. OSS 阿里云（全量存储，实测头像与媒体都只有它全量有货）
+//   2. 旧主服务器 60.205.94.101:8080/v1/uploads（兜底）
+// 已移除：
+//   · files.mcl0.dpdns.org —— 不属于官端候选链（仅出现在 /download/sources 下载源列表），实测直接 404。
+//   · oc.mcl0.dpdns.org/v1/uploads —— 存留不足 80 个文件，命中率极低，每张图多打一次必然 404 的请求。
+// 注：channel-media 走的是另一套签名下载端点，oc 是其协议唯一宿主，不受此处影响。
 function mediaCandidates(url) {
     const p = _uploadPath(url);
     // 覆盖 /v1/uploads/ 下全部子目录（media/ 与 avatars/）。此前只限 media/，
     // 实测头像同样只有 OSS 有货（某头像：OSS 200，60.205 502/超时，files 与 oc 均 404），故不再限定。
     if (!p) return [url];
     // 保留输入 URL 中已有的 OSS 缩放参数（?x-oss-process=...），仅作用于 OSS 候选；
-    // 60.205 / oc 镜像不支持该参数，不做拼接（回退到原图）。
+    // 60.205 镜像不支持该参数，不做拼接（回退到原图）。
     // 输入未带参数且为头像时补上写死的头像缩放参数，保证直接调用本函数也拿到缩放版。
     const q = (url.indexOf('?') >= 0)
         ? url.slice(url.indexOf('?'))
@@ -165,7 +168,6 @@ function mediaCandidates(url) {
     return [
         OSS_ORIGIN + '/' + p + q,
         'http://60.205.94.101:8080' + UPLOAD_PREFIX + p,
-        'https://oc.mcl0.dpdns.org' + UPLOAD_PREFIX + p,
     ];
 }
 
