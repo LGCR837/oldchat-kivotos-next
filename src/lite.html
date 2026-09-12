@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-page-node-id="C2KJoA7pcEjlibDOnhuEJu">
-<head data-page-node-id="PATLGlO5rUXeV7vwdjOusP">
-<meta charset="UTF-8" data-page-node-id="OdfiRQcAyl81yxmpVxwQcQ">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" data-page-node-id="qmYtiH6025VCHSRA2ZYQ4O">
-<meta name="theme-color" content="#000000" data-page-node-id="pz9TAvvJHkDe4Cjs6Pghg2">
-<meta name="color-scheme" content="dark" data-page-node-id="j79BRHOlmZRqdkmq3b0qZE">
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="color-scheme" content="dark">
 <title>OCKNLite</title>
-<link rel="icon" href="assets/oldchat_logo.png" type="image/png" data-page-node-id="YTHjHGnGqK7eO7zvMmuR4w">
+<link rel="icon" href="assets/oldchat_logo.png" type="image/png">
 <style>
 /* =====================================================================
    OCKNLite —— 手表端极简客户端
@@ -215,56 +215,56 @@ body{
 }
 </style>
 </head>
-<body data-page-node-id="G6P9Ed5uHkh8EXWjOjFPj4">
-<div id="app" data-page-node-id="q6d7rb567zRAiUN8fqCY0B">
+<body>
+<div id="app">
 
 	<!-- ========== 登录 ========== -->
-	<section id="vLogin" class="view" data-page-node-id="u6lkIsBtJSlx6t8fTuM61O">
-		<div class="login-box" data-page-node-id="RuOTIu66WdC55jofdC6Z7R">
-			<div class="brand" data-page-node-id="DYOp3xuM1GiAbcoylOA9p0">OCKNLite</div>
-			<form id="loginForm" autocomplete="on" data-page-node-id="89hMKGeA6wqwxMQNorKCCO">
+	<section id="vLogin" class="view">
+		<div class="login-box">
+			<div class="brand">OCKNLite</div>
+			<form id="loginForm" autocomplete="on">
 				<input id="inId" class="in" type="text" placeholder="账号 / 邮箱 / UID"
-					autocomplete="username" autocapitalize="off" autocorrect="off" enterkeyhint="next" required data-page-node-id="DhwfibwZ5gb2QPYeZwESG4">
+					autocomplete="username" autocapitalize="off" autocorrect="off" enterkeyhint="next" required>
 				<input id="inPwd" class="in" type="password" placeholder="密码"
-					autocomplete="current-password" enterkeyhint="go" required style="margin-top:8px" data-page-node-id="nLecFU98MMwD3wf7r9f2gF">
-				<button id="btnLogin" class="btn primary" type="submit" style="margin-top:12px" data-page-node-id="I3iasEfVuTYbbJtkZSHYUH">登录</button>
+					autocomplete="current-password" enterkeyhint="go" required style="margin-top:8px">
+				<button id="btnLogin" class="btn primary" type="submit" style="margin-top:12px">登录</button>
 			</form>
-			<div id="loginMsg" class="msg" data-page-node-id="kCeHvZF3oytSjkraqCCF7T"></div>
+			<div id="loginMsg" class="msg"></div>
 		</div>
 	</section>
 
 	<!-- ========== 会话列表 ========== -->
-	<section id="vList" class="view" data-page-node-id="kZHPRxrCtyGy3qNBrMZl40">
-		<header class="hdr" data-page-node-id="ZAIjovulXfEs2Ht5GOtU4E">
-			<span class="hdr-title" data-page-node-id="xgd1hs78qDQoTGMbHf8I67">OCKNLite</span>
-			<button id="btnLogout" class="hdr-btn" data-page-node-id="NrNJx4Q68YzjjWaJIEO8tc">登出</button>
+	<section id="vList" class="view">
+		<header class="hdr">
+			<span class="hdr-title">OCKNLite</span>
+			<button id="btnLogout" class="hdr-btn">登出</button>
 		</header>
-		<div id="convList" class="list" data-page-node-id="iNo0fDgRcCIdEozSBRtkvi"></div>
+		<div id="convList" class="list"></div>
 	</section>
 
 	<!-- ========== 聊天 ========== -->
-	<section id="vChat" class="view" data-page-node-id="5Q5VmGN99156bdl2pOrMqW">
-		<header class="hdr" data-page-node-id="vKZ44XWcAYEJDZCOfCaRfV">
-			<button id="btnBack" class="hdr-btn back" aria-label="返回" data-page-node-id="j0tqb5Ljb3kwnhipPOfS1h">&#8249;</button>
-			<span id="chatTitle" class="hdr-title ellipsis" data-page-node-id="7eFgBHDLDEl8EwQJ6M0lYr"></span>
+	<section id="vChat" class="view">
+		<header class="hdr">
+			<button id="btnBack" class="hdr-btn back" aria-label="返回">&#8249;</button>
+			<span id="chatTitle" class="hdr-title ellipsis"></span>
 		</header>
-		<div id="msgList" class="msgs" data-page-node-id="hYhFGCy7CeOjD2JdEov0zg"></div>
-		<div id="composer" class="composer" data-page-node-id="XGMoCVLW2vlfh6ikUr7YaY">
-			<div id="qbar" class="qbar" data-page-node-id="w8nqppkpV8eCbEHT2qCHp9">
-				<div id="qbarText" class="qbar-text ellipsis" data-page-node-id="hE7LueA8KKFLPjIiCAnqJq"></div>
-				<button id="qbarX" class="qbar-x" aria-label="取消引用" data-page-node-id="Y4YU1ObXXH2ARlo8yJFLVW">&#215;</button>
+		<div id="msgList" class="msgs"></div>
+		<div id="composer" class="composer">
+			<div id="qbar" class="qbar">
+				<div id="qbarText" class="qbar-text ellipsis"></div>
+				<button id="qbarX" class="qbar-x" aria-label="取消引用">&#215;</button>
 			</div>
-			<div class="crow" data-page-node-id="xVRFMdCgeUB7bw83dcDuAz">
-				<input id="inMsg" class="in composer-in" type="text" placeholder="发消息" enterkeyhint="send" data-page-node-id="hQDDaJ7PTmbPwKWYOts8Wi">
-				<button id="btnPlus" class="cbtn" aria-label="发送图片" data-page-node-id="hc7ApQYLU5bkaXo0HquUjO">+</button>
-				<button id="btnSend" class="cbtn send" aria-label="发送" data-page-node-id="p3rtflgtlLo3q0CX2vooub">&#62;</button>
+			<div class="crow">
+				<input id="inMsg" class="in composer-in" type="text" placeholder="发消息" enterkeyhint="send">
+				<button id="btnPlus" class="cbtn" aria-label="发送图片">+</button>
+				<button id="btnSend" class="cbtn send" aria-label="发送">&#62;</button>
 			</div>
 		</div>
 	</section>
 
-	<div id="toast" data-page-node-id="szG5zvcwiwBnG2Id2LQEwy"></div>
+	<div id="toast"></div>
 </div>
-<input id="filePick" type="file" accept="image/*" hidden data-page-node-id="kOhev0EIhiHiF8hNyK82Pz">
+<input id="filePick" type="file" accept="image/*" hidden>
 
 <script src="oldchat-api-sdk-javascript/oldchat-api-sdk.js"></script>
 <script src="oldchat-api-sdk-javascript/oldchat-ws-extension.js"></script>
@@ -610,6 +610,7 @@ async function doLogin() {
 			localStorage.setItem(LS_USER, JSON.stringify(d.user || {}));
 		} catch (e) {}
 		S.me = d.user || {};
+		authFailing = false;        // 登录成功，解除鉴权失效锁定，允许下次过期再触发
 		$('inPwd').value = '';
 		await loadMe();
 		openList(true);
@@ -660,15 +661,17 @@ function isAuthError(e) {
 	try {
 		s = String((e && e.message) || '') + ' ' + String((e && e.code) || '') + ' ' + String((e && e.raw) || '');
 	} catch (x) {}
-	return /401|403|unauthorized|missing_session|invalid_token|token_expired/i.test(s);
+	return /401|403|unauthorized|missing_session|invalid_token|token_expired|OC_AUTH_EXPIRED|登录已失效/i.test(s);
 }
 
 /* =====================================================================
    6. token 主动续期
-      ⚠️ SDK 在「刷新失败」时会直接 window.location.href = 'login.html'
-      （oldchat-api-sdk.js:792），lite 有自己的内联登录页，不该被跳走。
-      这里用【原生 fetch】走代理刷新，不经过 apiFetch，
-      因此即使刷新失败也不会触发 SDK 的登出跳转。
+      早期 SDK 在「刷新失败」时会直接 window.location.href = 'login.html'，
+      但 login.html 属于各消费端自有 UI，不应出现在协议层 SDK 中（已在
+      oldchat-api-sdk.js 修复：改为派发 oc:auth-fail 事件 + 可选回调
+      window.__ocOnAuthFail，并抛出 OC_AUTH_EXPIRED）。
+      这里仍用【原生 fetch】走代理刷新（不经过 apiFetch），避免启动期
+      带着过期 token 打业务接口触发 SDK 的刷新/登出流程。
    ===================================================================== */
 var keepAt = 0;
 // 返回 true=续期成功或无需续期；false=刷新失败（token 已死，调用方应回登录页）
@@ -708,10 +711,17 @@ function stopKeepAlive() {
 // 为什么不重试：能走到这里说明 SDK 内部已经把 v2→v1→refresh→重试 全跑完了
 // （refresh 成功就会直接返回成功响应，不会抛到我们这层）。所以一次 401 即为确诊，
 // 再重试只会延长必然失败、并制造「拼命报错」的刷屏。
+// 触发源可能同时到达（SDK 的回调 + oc:auth-fail 事件），用 authFailing 防重。
+var authFailing = false;
 function onAuthFail() {
+	if (authFailing) return;
+	authFailing = true;
 	toast('登录已失效，请重新登录');
 	logout();
 }
+// [Fix B] SDK 鉴权彻底失败时不再强跳 login.html，改为派发 oc:auth-fail 事件。
+// 这里监听并路由到自带内联登录页（onAuthFail 内部已防重触发）。
+window.addEventListener('oc:auth-fail', function () { onAuthFail(); });
 
 /* =====================================================================
    7. 会话列表
