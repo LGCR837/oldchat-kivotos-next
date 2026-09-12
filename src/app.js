@@ -13751,7 +13751,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             <div class="settings-group">
                 <div class="settings-item">
                     <span class="label">应用名称</span>
-                    <span class="value">OldChat for Kivotos</span>
+                    <span class="value">OldChat For Kivotos Next</span>
                 </div>
                 <div class="settings-item">
                     <span class="label">运行模式</span>
