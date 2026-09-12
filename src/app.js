@@ -13755,7 +13755,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 </div>
                 <div class="settings-item">
                     <span class="label">运行模式</span>
-                    <span class="value">Tauri 桌面端</span>
+                    <span class="value">${IS_TAURI ? 'Tauri 桌面端' : 'Web 网页端 (代理模式)'}</span>
                 </div>
                 <div class="settings-item">
                     <span class="label">系统环境</span>
