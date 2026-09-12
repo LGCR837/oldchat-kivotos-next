@@ -3245,7 +3245,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 <div style="background:var(--header-bg);color:#fff;padding:13px 12px;display:flex;align-items:center;font-size:15px;font-weight:500;flex-shrink:0;position:relative;">
                     <button id="sp-close-btn" style="position:absolute;left:12px;background:none;border:none;color:#fff;font-size:18px;cursor:pointer;padding:4px 8px;border-radius:8px;"><i class="fa-solid fa-chevron-left"></i></button>
                     <span style="width:100%;text-align:center;">用户空间</span>
-                    <div class="window-controls" style="position:absolute;right:12px;display:flex;gap:2px;">
+                    <div class="window-controls" style="position:absolute;right:12px;">
                         <button class="win-ctrl-btn" id="spWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
                         <button class="win-ctrl-btn" id="spWinMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
                         <button class="win-ctrl-btn" id="spWinCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
