@@ -1980,6 +1980,23 @@ if (!localStorage.getItem('oc_access_token')) {
     window.location.href = 'login.html';
 }
 
+// [Fix SDK] 协议层（oldchat-api-sdk.js）不再强跳 login.html（UI 路由属各消费端职责），
+// 改为派发 oc:auth-fail 事件 + 可选回调 window.__ocOnAuthFail + 抛 OC_AUTH_EXPIRED。
+// 桌面端 / 网页版在此监听，恢复「会话过期 → 清 token → 回登录页」的原始行为，
+// 与下方手动退出逻辑一致（不清 oc_auto_login，保留登录页自动重试）。
+var _sdkAuthFailFired = false;
+function onSdkAuthFail() {
+    if (_sdkAuthFailFired) return;
+    _sdkAuthFailFired = true;
+    try { localStorage.removeItem('oc_access_token'); } catch (e) {}
+    try { localStorage.removeItem('oc_refresh_token'); } catch (e) {}
+    try { localStorage.removeItem('oc_user'); } catch (e) {}
+    if (!/login\.html$/.test(window.location.pathname)) {
+        window.location.href = 'login.html';
+    }
+}
+window.addEventListener('oc:auth-fail', onSdkAuthFail);
+
 // ==================== 启动闪屏控制 ====================
 // 关闭启动闪屏（index.html 中的 #appSplash），淡出后从 DOM 移除，避免初始化期间白屏
 function hideAppSplash() {

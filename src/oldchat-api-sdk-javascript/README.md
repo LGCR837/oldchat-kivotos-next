@@ -149,8 +149,10 @@ SDK **不提供** `login` / `handshake` 方法 (这些由宿主登录流程负�
 | `oc_user` | 可选。登录成功后存入的当前用户 JSON 字符串 |
 
 **职责划分**：宿主需自行实现登录 (通常是 `POST /v1/auth/login` 拿到 token 后写入上述键) 。
-SDK 接管的是「带 token 发请求」与「401 自动刷新」。刷新失败则 SDK 会清除 token 并跳转 `login.html`
- (宿主若没有 `login.html`，应自行覆盖该行为或忽略跳转) 。
+SDK 接管的是「带 token 发请求」与「401 自动刷新」。刷新失败（refresh 也 401）则 SDK **不会再跳转页面**——
+作为协议层它只负责：① 可选回调 `window.__ocOnAuthFail`；② 派发全局事件 `oc:auth-fail`
+ (detail 含 `{url, ts}`)；③ 抛明确错误 `OC_AUTH_EXPIRED`。**回登录页等 UI 路由由宿主自行监听处理**
+ (跳转 `login.html` 属各消费端自有 UI，不应出现在 SDK 内) 。
 
 ```js
 // 宿主登录示例 (伪代码) 
@@ -378,6 +380,9 @@ try {
   `clear()` HTTP 会话 → 重新握手 → 用新会话重试一次 (仅动 `__httpSession`，不影响 `__wsSession`) 。
 - **v2 熔断**：某 v2 端点持续 `401` (服务端未迁 v2 / 签名问题) ，SDK 会将该端点加入 `v2FailedPaths` 集合，
   本次及后续回退 v1，**仅影响该端点**，避免「主界面 401 → 跳登录 → 又 401」死循环。
+- **彻底鉴权失败**：token 失效且 `/v1/auth/refresh` 也失败时，SDK 清 token 并派发 `oc:auth-fail` 事件
+  (同时调用可选回调 `window.__ocOnAuthFail`，并抛 `OC_AUTH_EXPIRED`) 。宿主应监听该事件回到登录页，
+  而非依赖 SDK 跳转——`login.html` 路由是各消费端自有 UI。
 - **GET 去重**：相同 GET (含 token 维度) 在并发期复用同一底层响应 (克隆给各调用方) ，减少初始化冗余请求。
 - **签名豁免**：`/v2/{files,resources}/{upload,download}` 大文件端点不加密、不签名，仅 Bearer JWT (文档 §4.5) 。
 
