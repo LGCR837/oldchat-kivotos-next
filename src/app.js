@@ -251,14 +251,18 @@ if (!IS_TAURI) {
     // 相对路径补全为绝对地址（代理需要绝对 URL）。
     // BACKEND_CANDIDATES 是 SDK 顶层的 let 绑定，经典 script 下跨文件可见（同 MEDIA_CANDIDATES）。
     function toAbsoluteApi(url) {
-        try { new URL(url); return url; } catch (e) {}
-        let base = 'http://oc.mcl0.dpdns.org';
+        const s = String(url || '');
+        if (/^https?:\/\//i.test(s)) return s;
+        // 协议相对（//host/path）：按页面协议补全
+        if (s.indexOf('//') === 0) return location.protocol + s;
+        let base = '//oc.mcl0.dpdns.org';
         try {
             if (typeof BACKEND_CANDIDATES !== 'undefined' && BACKEND_CANDIDATES && BACKEND_CANDIDATES[0]) {
                 base = BACKEND_CANDIDATES[0];
             }
         } catch (e) {}
-        return base + (String(url).indexOf('/') === 0 ? '' : '/') + url;
+        if (base.indexOf('//') === 0) base = location.protocol + base;
+        return base + (s.indexOf('/') === 0 ? '' : '/') + s;
     }
 
     window.ocTransport = async function (url, init) {
@@ -564,7 +568,7 @@ function debounce(fn, wait) {
     function shouldCache(url) {
         if (!url) return false;
         if (/^(data:|blob:|about:|chrome-extension:|tauri:|ipc\.localhost)/i.test(url)) return false;
-        // 频道媒体（resolve 后为 http://oc.mcl0.dpdns.org/channel-media/...）是「全局签名下载」：
+        // 频道媒体（resolve 后为 https://oc.mcl0.dpdns.org/channel-media/...）是「全局签名下载」：
         // 鉴权在 URL 的 exp+sig 里，任何 Authorization 头都会被拒签（401）。但 fetchOne 的频道分支已改为
         // 「纯无鉴权 fetch」，既能拿到 blob 走内存/IndexedDB 缓存（减少重复请求），又不会污染签名 URL，
         // 故此处交由 MediaCache 接管。失败时回落原生 <img> 直接加载（无鉴权头）作为兜底。
@@ -12866,7 +12870,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     <button id="baseCandidateAdd" class="btn" style="padding:6px 12px;white-space:nowrap;">添加</button>
                 </div>
                 <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
-                    <button class="candidate-quick" data-target="base" data-url="http://oc.mcl0.dpdns.org">+ oc.mcl0</button>
+                    <button class="candidate-quick" data-target="base" data-url="//oc.mcl0.dpdns.org">+ oc.mcl0</button>
                     <button class="candidate-quick" data-target="base" data-url="http://60.205.94.101:8080">+ 60.205</button>
                     <button class="candidate-quick" data-target="base" data-url="https://oc.mcl0.dpdns.org">+ oc https</button>
                 </div>
@@ -12878,7 +12882,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 </div>
                 <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
                     <button class="candidate-quick" data-target="media" data-url="http://60.205.94.101:8080">+ 60.205</button>
-                    <button class="candidate-quick" data-target="media" data-url="http://oc.mcl0.dpdns.org">+ oc.mcl0</button>
+                    <button class="candidate-quick" data-target="media" data-url="//oc.mcl0.dpdns.org">+ oc.mcl0</button>
                     <button class="candidate-quick" data-target="media" data-url="https://oc.mcl0.dpdns.org">+ oc https</button>
                 </div>
                 <div style="display:flex;gap:8px;margin-top:14px;align-items:center;">

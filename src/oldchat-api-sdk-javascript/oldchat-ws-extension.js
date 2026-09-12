@@ -130,7 +130,8 @@ var OCWebSocket = (function (global) {
             if (global.WS_HOST) host = global.WS_HOST;
             else if (global.BACKEND_CANDIDATES && global.BACKEND_CANDIDATES[0]) host = global.BACKEND_CANDIDATES[0];
         } catch (e) {}
-        const origin = String(host).replace(/^https?:\/\//, '').replace(/\/+$/, '');
+        // 兼容 https:// / http:// 以及协议相对 //host 三种写法，统一取裸 host
+        const origin = String(host).replace(/^(?:https?:)?\/\//i, '').replace(/\/+$/, '');
         const protocol = (global.location && global.location.protocol === 'https:') ? 'wss:' : 'ws:';
         let token = '';
         try { token = localStorage.getItem('oc_access_token') || ''; } catch (e) {}
@@ -164,7 +165,7 @@ var OCWebSocket = (function (global) {
             { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
         const spki = await global.crypto.subtle.exportKey('spki', keys.publicKey);
         const clientPub = _bytesToBase64(new Uint8Array(spki));
-        const base = (global.BACKEND_CANDIDATES && global.BACKEND_CANDIDATES[0]) || 'http://oc.mcl0.dpdns.org';
+        const base = (global.BACKEND_CANDIDATES && global.BACKEND_CANDIDATES[0]) || 'https://oc.mcl0.dpdns.org';
         const res = await (global.ocTransport || global.fetch)(base + '/v1/auth/handshake', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

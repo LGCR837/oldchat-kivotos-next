@@ -252,7 +252,9 @@
         try {
             IS_TAURI = !!(window.__TAURI__ !== undefined || window.__TAURI_INTERNALS__ !== undefined);
         } catch (e) { IS_TAURI = false; }
-        var BACKEND_ORIGIN = 'http://oc.mcl0.dpdns.org';
+        // 协议相对：http 页面走 http、https 页面走 https，避免 https 下被 mixed content 拦截。
+        // 60.205.94.101:8080 无 TLS，只能 http，不在本文件使用。
+        var BACKEND_ORIGIN = '//oc.mcl0.dpdns.org';
         try {
             var saved = localStorage.getItem('oc_custom_base_url');
             if (saved) {
@@ -454,7 +456,10 @@
         }
         function apiUrl(path) {
             var base = getApiBase();
-            return isWebMode() ? ('proxy.php?u=' + encodeURIComponent(base + path)) : (base + path);
+            if (!isWebMode()) return base + path;
+            // 代理需要绝对 URL：协议相对（//host）按页面协议补全，避免 https 页面代理到 http
+            var abs = /^https?:\/\//i.test(base) ? base : (location.protocol + base);
+            return 'proxy.php?u=' + encodeURIComponent(abs + path);
         }
 
         // ===== 自动填充 =====

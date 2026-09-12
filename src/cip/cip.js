@@ -7,7 +7,8 @@
 
   // 主后端源：运行时跟随 app.js 的 BACKEND_ORIGIN（设置页可改），拿不到时回落默认值。
   // 注意 app.js 顶层是 `let BACKEND_ORIGIN`，属于全局词法环境，同为经典脚本可直接引用。
-  var FALLBACK_ORIGIN = 'http://oc.mcl0.dpdns.org';
+  // 协议相对：http 页面走 http、https 页面走 https，避免 https 下被 mixed content 拦截。
+  var FALLBACK_ORIGIN = '//oc.mcl0.dpdns.org';
   function origin() {
     try { if (typeof BACKEND_ORIGIN === 'string' && BACKEND_ORIGIN) return BACKEND_ORIGIN; } catch (e) {}
     return FALLBACK_ORIGIN;
