@@ -789,8 +789,17 @@ async function _fetchWithCandidates(url, options, strictV2) {
             localStorage.removeItem('oc_access_token');
             localStorage.removeItem('oc_refresh_token');
             localStorage.removeItem('oc_user');
-            window.location.href = 'login.html';
-            return;
+            // [fix] 鉴权彻底失败：不再由共享 SDK 强跳 login.html。
+            // login.html 属于各消费端自有 UI，不应出现在协议层 SDK 中。
+            // 改为通知消费端自行处理：① 调用可选回调 window.__ocOnAuthFail；
+            // ② 派发全局事件 oc:auth-fail；③ 抛出明确错误交由调用方 catch。
+            try {
+                if (typeof window.__ocOnAuthFail === 'function') window.__ocOnAuthFail();
+            } catch (e) { /* 消费端回调异常不应影响 SDK 自身 */ }
+            try {
+                window.dispatchEvent(new CustomEvent('oc:auth-fail', { detail: { url: url, ts: Date.now() } }));
+            } catch (e) {}
+            throw new Error('OC_AUTH_EXPIRED: token 失效且刷新失败，请重新登录');
         }
         // v2 加密响应：解密后包装为新 Response，调用方 res.json() 拿到明文
         if (options._v2Encrypted) {
