@@ -236,11 +236,24 @@ if (!IS_TAURI) {
         return 'proxy.php';
     })();
 
-    // 只代理接口，媒体与下载端点全部排除
-    function isProxiableApi(url) {
+    // 绝对化的代理入口（媒体路径需要绝对 URL，MediaCache 的 shouldCache 只认 http(s):// 开头）
+    const PROXY_ABS = (function () {
+        try { return new URL(PROXY_ENDPOINT, location.href).href; } catch (e) { return PROXY_ENDPOINT; }
+    })();
+
+    function proxyUrlFor(absTarget) {
+        return PROXY_ABS + '?u=' + encodeURIComponent(absTarget);
+    }
+
+    // 代理判定：
+    // · 60.205.94.101:8080 无 TLS —— https 页面下直连必被混合内容拦，故该主机**任何路径一律走代理**
+    //   （它只是末位兜底，量小）；
+    // · 其它域名只在「接口路径」上走代理，OSS / oc 等 https 媒体源保持直连，避免流量压到服务器。
+    function shouldProxyUrl(url) {
         let u;
         try { u = new URL(url, location.href); } catch (e) { return false; }
         if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+        if (u.host === '60.205.94.101:8080' || u.host === '60.205.94.101') return true;
         const p = u.pathname || '';
         if (p.indexOf('/v1/uploads/') === 0 || p.indexOf('/v2/uploads/') === 0) return false;
         if (p.indexOf('/channel-media/') === 0) return false;
@@ -265,13 +278,42 @@ if (!IS_TAURI) {
         return base + (s.indexOf('/') === 0 ? '' : '/') + s;
     }
 
+    // 媒体直连（<img>/<audio>/<video> 的 src 不经 ocTransport）也必须把 60.205 换成代理地址，
+    // 否则 https 页面下这些资源仍会被混合内容拦掉。挂到 window 供 app.js 各处复用。
+    window.__ocProxyUrl = function (url) {
+        const s = String(url || '');
+        let u;
+        try { u = new URL(s, location.href); } catch (e) { return s; }
+        if (u.host !== '60.205.94.101:8080' && u.host !== '60.205.94.101') return s;
+        return proxyUrlFor(u.href);
+    };
+
+    // SDK 的媒体 URL 解析是全局函数声明，包一层即可覆盖 app.js 里所有调用点
+    ['resolveMediaUrl', 'cachedResolveMediaUrl'].forEach(function (fn) {
+        if (typeof window[fn] !== 'function') return;
+        const orig = window[fn];
+        window[fn] = function (url, opts) {
+            const r = orig.call(this, url, opts);
+            return (typeof r === 'string') ? window.__ocProxyUrl(r) : r;
+        };
+    });
+
     window.ocTransport = async function (url, init) {
-        if (isProxiableApi(url)) {
-            return fetch(PROXY_ENDPOINT + '?u=' + encodeURIComponent(toAbsoluteApi(url)), init);
+        if (shouldProxyUrl(url)) {
+            return fetch(proxyUrlFor(toAbsoluteApi(url)), init);
         }
         return fetch(url, init);
     };
-    console.log('[Web] 已注入 ocTransport：接口经 ' + PROXY_ENDPOINT + ' 转发，媒体与 WS 直连');
+    console.log('[Web] 已注入 ocTransport：接口经 ' + PROXY_ENDPOINT +
+        ' 转发；60.205 全部走代理；OSS / oc 媒体与 WS 直连');
+}
+
+// 网页版把指向 60.205 的媒体地址换成代理地址；桌面端原样返回（__ocProxyUrl 仅网页版存在）
+function toProxyIfNeeded(url) {
+    try {
+        if (typeof window.__ocProxyUrl === 'function') return window.__ocProxyUrl(url);
+    } catch (e) {}
+    return url;
 }
 
 // ===== 后端 API / 媒体直链专用：封装 plugin-http invoke =====
@@ -305,7 +347,7 @@ document.addEventListener('error', function(e) {
         const base = MEDIA_CANDIDATES[i];
         if (base && src.indexOf(base) === 0) {
             img.dataset.mediaTries = String(i + 1);
-            img.src = MEDIA_CANDIDATES[i + 1] + src.slice(base.length);
+            img.src = toProxyIfNeeded(MEDIA_CANDIDATES[i + 1] + src.slice(base.length));
             e.stopPropagation();
             return;
         }
@@ -578,7 +620,12 @@ function debounce(fn, wait) {
     }
 
     // 根据已解析的绝对媒体 URL，生成候选源列表（命中 MEDIA_CANDIDATES 中某一个后，按顺序拼出后续候选）
+    // 候选列表统一过一遍代理改写：网页版下把指向 60.205 的候选换成代理地址（桌面端不变）
     function mediaCandidateUrls(url) {
+        return mediaCandidateUrlsRaw(url).map(toProxyIfNeeded);
+    }
+
+    function mediaCandidateUrlsRaw(url) {
         // 频道媒体 /channel-media/ 是 oc 主机的全局签名端点，仅此一个源，不做 host 候选展开（否则会误打到 files/60.205 报 404）
         if (url.indexOf('/channel-media/') !== -1) return [url];
         // media 文件走 SDK 统一候选链（OSS → 60.205 → oc，含 OSS 路径重写），所有客户端一致；
