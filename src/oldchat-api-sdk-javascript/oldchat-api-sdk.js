@@ -37,13 +37,27 @@ const DEFAULT_BACKEND_CANDIDATES = [
     'https://oc.mcl0.dpdns.org',
     'http://60.205.94.101:8080'
 ];
-// 非 /v1/uploads/ 的普通媒体相对路径所用镜像列表，按优先级排列（首项同时作为 MEDIA_ORIGIN/MEDIA_BASE）。
-// 注：files.mcl0.dpdns.org 已移除 —— 它不属于官端候选链，且实测对头像/媒体均直接 404（CF 原站，非 CDN）。
-// oc 只保留 https 一条：http 版在 https 页面下必被 mixed content 拦，留着只是白跑一轮。
+// ===== 媒体源优先级 =====
+// OSS（阿里云，全量存储，绝大多数媒体只有它）→ 60.205（旧主服务器）→ oc（仅剩少量老资源，
+// 老群头像 / 元老级用户头像可能只在这里；实测存留不足 80 个文件，故只作最后兜底）。
+// 注意：OSS 的路径结构是 /media/x，而非其它镜像的 /v1/uploads/media/x，
+// 由 mediaCandidates() / resolveMediaUrl() 专门 remap，**不能参与「同形 host 前缀互换」**。
+const OSS_ORIGIN = 'https://ocf.oss-cn-shanghai.aliyuncs.com';
 const DEFAULT_MEDIA_CANDIDATES = [
+    OSS_ORIGIN,
     'http://60.205.94.101:8080',
     'https://oc.mcl0.dpdns.org'
 ];
+// 注：files.mcl0.dpdns.org 已移除 —— 不属于官端候选链，实测对头像/媒体均直接 404（CF 原站，非 CDN）。
+
+// MEDIA_ORIGIN / MEDIA_BASE 是「相对路径的通用拼接基址」，必须取第一个**非 OSS**镜像：
+// OSS 路径结构不同，拿它拼 /v1/uploads/... 会 404。取不到时回退 60.205。
+function _firstMirrorOrigin(list) {
+    for (const u of (list || [])) {
+        if (String(u).indexOf('ocf.oss-cn-shanghai.aliyuncs.com') === -1) return u;
+    }
+    return (list && list[0]) || 'http://60.205.94.101:8080';
+}
 
 // 归一化候选项：统一存「裸 origin」，去掉结尾斜杠与用户误加的 /v1 后缀。
 // 请求时一律用 base + '/v1/xxx' 拼接，这里若残留 /v1 会拼成 /v1/v1/xxx 而 404。
@@ -78,7 +92,7 @@ function _getSavedMediaCandidates() {
 let BACKEND_CANDIDATES = _getSavedBackendCandidates();
 let MEDIA_CANDIDATES   = _getSavedMediaCandidates();
 let BACKEND_ORIGIN = BACKEND_CANDIDATES[0] || 'https://oc.mcl0.dpdns.org';
-let MEDIA_ORIGIN   = MEDIA_CANDIDATES[0] || 'http://60.205.94.101:8080';
+let MEDIA_ORIGIN   = _firstMirrorOrigin(MEDIA_CANDIDATES);
 const BACKEND_HOST = (function() {
     try { return new URL(BACKEND_ORIGIN).host; } catch (e) { return 'oc.mcl0.dpdns.org'; }
 })();
@@ -95,7 +109,7 @@ function refreshEndpoints() {
     BACKEND_CANDIDATES = _getSavedBackendCandidates();
     MEDIA_CANDIDATES   = _getSavedMediaCandidates();
     BACKEND_ORIGIN = BACKEND_CANDIDATES[0] || 'https://oc.mcl0.dpdns.org';
-    MEDIA_ORIGIN   = MEDIA_CANDIDATES[0] || 'http://60.205.94.101:8080';
+    MEDIA_ORIGIN   = _firstMirrorOrigin(MEDIA_CANDIDATES);
     const host = (function() { try { return new URL(BACKEND_ORIGIN).host; } catch (e) { return BACKEND_HOST; } })();
     WS_HOST    = host;
     API_BASE   = BACKEND_ORIGIN + '/v1';
@@ -109,7 +123,7 @@ function refreshEndpoints() {
 //     镜像站 → <origin>/v1/uploads/<PATH>
 //   实测：OSS 上 `media/` 与 `avatars/` 均存在；若丢掉子目录（OSS 根 + 纯文件名）返回 404，
 //   故 PATH 必须保留子目录，不能只取 basename。
-const OSS_ORIGIN = 'https://ocf.oss-cn-shanghai.aliyuncs.com';
+// （OSS_ORIGIN 已在文件顶部定义，供媒体源优先级与通用拼接基址共同使用）
 const UPLOAD_PREFIX = '/v1/uploads/';
 // 媒体文件候选源（按优先级）：OSS（全量存储，含仅存于 OSS 的文件）→ 60.205 → oc。
 // 实测：部分文件仅存在于 OSS，服务器对其它镜像返回 403（非鉴权问题，是文件不在该节点）。

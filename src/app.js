@@ -308,6 +308,12 @@ if (!IS_TAURI) {
         ' 转发；60.205 全部走代理；OSS / oc 媒体与 WS 直连');
 }
 
+// OSS 的路径结构（/media/x）与其它镜像（/v1/uploads/media/x）不同，
+// 因此「同形 host 前缀互换」必须跳过 OSS，否则会拼出 404 地址（OSS 的 remap 由 mediaCandidates 负责）。
+function isOssOrigin(u) {
+    return /ocf\.oss-cn-shanghai\.aliyuncs\.com/i.test(String(u || ''));
+}
+
 // 网页版把指向 60.205 的媒体地址换成代理地址；桌面端原样返回（__ocProxyUrl 仅网页版存在）
 function toProxyIfNeeded(url) {
     try {
@@ -343,11 +349,14 @@ document.addEventListener('error', function(e) {
     if (img.dataset.mcOrigSrc) return;
     const src = img.getAttribute('src') || '';
     const tries = parseInt(img.dataset.mediaTries || '0', 10);
-    for (let i = tries; i < MEDIA_CANDIDATES.length - 1; i++) {
-        const base = MEDIA_CANDIDATES[i];
+    // 只做同形镜像间的降级（OSS 路径结构不同，会被 isOssOrigin 过滤掉；
+    // 涉及 OSS 的候选链由 MediaCache / mediaCandidates 处理）
+    const mirrors = MEDIA_CANDIDATES.filter(u => !isOssOrigin(u));
+    for (let i = tries; i < mirrors.length - 1; i++) {
+        const base = mirrors[i];
         if (base && src.indexOf(base) === 0) {
             img.dataset.mediaTries = String(i + 1);
-            img.src = toProxyIfNeeded(MEDIA_CANDIDATES[i + 1] + src.slice(base.length));
+            img.src = toProxyIfNeeded(mirrors[i + 1] + src.slice(base.length));
             e.stopPropagation();
             return;
         }
@@ -636,9 +645,11 @@ function debounce(fn, wait) {
         }
         const list = [];
         for (const base of MEDIA_CANDIDATES) {
+            if (isOssOrigin(base)) continue;   // OSS 路径结构不同，不参与同形互换
             if (url.indexOf(base) === 0) {
                 const path = url.slice(base.length);
                 for (let i = MEDIA_CANDIDATES.indexOf(base); i < MEDIA_CANDIDATES.length; i++) {
+                    if (isOssOrigin(MEDIA_CANDIDATES[i])) continue;
                     list.push(MEDIA_CANDIDATES[i] + path);
                 }
                 break;
