@@ -247,8 +247,10 @@ if (!IS_TAURI) {
 
     // 代理判定：
     // · 60.205.94.101:8080 无 TLS —— https 页面下直连必被混合内容拦，故该主机**任何路径一律走代理**
-    //   （它只是末位兜底，量小）；
-    // · 其它域名只在「接口路径」上走代理，OSS / oc 等 https 媒体源保持直连，避免流量压到服务器。
+    //   （历史兜底源，2026-09-27 已下线；逻辑保留仅为万一复用）；
+    // · 其它域名只在「接口路径」上走代理，oc 等 https 媒体源保持直连，避免流量压到服务器。
+    //   ⚠️ occdn 是 http（实测不支持 TLS）：桌面端（Tauri）无混合内容限制，可直连；
+    //      网页版若部署在 https 下，其 http 图片会被浏览器拦截，靠候选链降级到 oc 兜底。
     function shouldProxyUrl(url) {
         let u;
         try { u = new URL(url, location.href); } catch (e) { return false; }
@@ -305,11 +307,12 @@ if (!IS_TAURI) {
         return fetch(url, init);
     };
     console.log('[Web] 已注入 ocTransport：接口经 ' + PROXY_ENDPOINT +
-        ' 转发；60.205 全部走代理；OSS / oc 媒体与 WS 直连');
+        ' 转发；60.205 全部走代理；occdn / oc 媒体与 WS 直连');
 }
 
-// OSS 的路径结构（/media/x）与其它镜像（/v1/uploads/media/x）不同，
-// 因此「同形 host 前缀互换」必须跳过 OSS，否则会拼出 404 地址（OSS 的 remap 由 mediaCandidates 负责）。
+// OSS 已于 2026-09-27 停服下线，不再是媒体源。此处保留判定**仅为防御**：
+// 历史缓存 / localStorage 里可能残留 OSS 地址，其路径结构（/media/x）与其它镜像
+// （/v1/uploads/media/x）不同，「同形 host 前缀互换」必须跳过它，否则会拼出 404。
 function isOssOrigin(u) {
     return /ocf\.oss-cn-shanghai\.aliyuncs\.com/i.test(String(u || ''));
 }
@@ -637,8 +640,8 @@ function debounce(fn, wait) {
     function mediaCandidateUrlsRaw(url) {
         // 频道媒体 /channel-media/ 是 oc 主机的全局签名端点，仅此一个源，不做 host 候选展开（否则会误打到 files/60.205 报 404）
         if (url.indexOf('/channel-media/') !== -1) return [url];
-        // media 文件走 SDK 统一候选链（OSS → 60.205 → oc，含 OSS 路径重写），所有客户端一致；
-        // 仅当确为 media（多条候选）时采用，非 media 仍走下方原 host 前缀互换以兼容。
+        // media 文件走 SDK 统一候选链（2026-09-27 起：occdn → oc；OSS 停服、60.205 下线均已移除），
+        // 所有客户端一致；仅当确为 media（多条候选）时采用，非 media 仍走下方原 host 前缀互换以兼容。
         if (typeof mediaCandidates === 'function') {
             const c = mediaCandidates(url);
             if (c && c.length > 1) return c;
@@ -8369,8 +8372,11 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             if (origUrl) imgEl.dataset.original = origUrl; // 右键「查看原图」使用
             if (msg.media_url) imgEl.dataset.mediaPath = msg.media_url; // 放大页右键「收藏到本地」使用
             imgEl.onclick = () => openImageViewer(imgEl);
-            // 仅原图（无独立缩略图）的图片在 OSS 候选上优先请求缩放版（?x-oss-process=...），
-            // 降低带宽；自带缩略图(thumb_url)的直接用缩略图、不再缩放；右键「查看原图」走 dataset.original（不带参数）。
+            // 自带缩略图(thumb_url)的直接用缩略图；无独立缩略图的原图走 thumb=true。
+            // 注：历史上该标志会在 OSS 候选上拼 ?x-oss-process=... 缩放参数以降带宽；
+            // OSS 已于 2026-09-27 停服下线，现役源（occdn/oc）无服务端缩放能力，
+            // 该标志不再改变 URL，仅保留语义以备将来重新引入。
+            // 右键「查看原图」走 dataset.original（不带参数）。
             imgEl.src = cachedResolveMediaUrl(thumbUrl, { thumb: !msg.thumb_url });
 
             const msgDiv = document.createElement('div');
@@ -12947,7 +12953,6 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                 </div>
                 <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
                     <button class="candidate-quick" data-target="base" data-url="//oc.mcl0.dpdns.org">+ oc.mcl0</button>
-                    <button class="candidate-quick" data-target="base" data-url="http://60.205.94.101:8080">+ 60.205</button>
                     <button class="candidate-quick" data-target="base" data-url="https://oc.mcl0.dpdns.org">+ oc https</button>
                 </div>
                 <div style="font-size:12px;color:var(--secondary-text);margin:14px 0 6px;">媒体地址（图片/音频，按列表顺序降级；<span style="color:var(--text);">★ 为首选地址，最先尝试</span>）</div>
@@ -12957,7 +12962,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     <button id="mediaCandidateAdd" class="btn" style="padding:6px 12px;white-space:nowrap;">添加</button>
                 </div>
                 <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
-                    <button class="candidate-quick" data-target="media" data-url="http://60.205.94.101:8080">+ 60.205</button>
+                    <button class="candidate-quick" data-target="media" data-url="http://occdn.reverie.dpdns.org">+ occdn</button>
                     <button class="candidate-quick" data-target="media" data-url="//oc.mcl0.dpdns.org">+ oc.mcl0</button>
                     <button class="candidate-quick" data-target="media" data-url="https://oc.mcl0.dpdns.org">+ oc https</button>
                 </div>

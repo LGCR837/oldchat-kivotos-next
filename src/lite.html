@@ -278,7 +278,10 @@ body{
 var PROXY      = 'proxy.php';   // 与 lite.html 同级；接口一律经同源代理，绕开 CORS / 混合内容
 var MSG_CAP    = 30;            // 当前会话最多保留的消息条数（不驻留其它会话）
 var AVA_PX     = 96;            // 头像请求尺寸（表上只显示 26~36px，按 3x 取 96）
-var FALLBACK60 = 'http://60.205.94.101:8080';   // 旧主服务器：OSS 缺失的老头像可能只在这里
+// 现役媒体源（2026-09-27 起）：OSS 停服（实测全路径 403）、60.205 下线（连接超时），均已移除。
+// occdn = 自建 CDN（CN2 加速，回源 oc），置首；oc = 源站兜底。二者回源同机，4xx 无二次成功可能。
+var MEDIA_OCCDN = 'http://occdn.reverie.dpdns.org';
+var MEDIA_OC    = 'https://oc.mcl0.dpdns.org';
 var POLL_LIST  = 25000;
 var POLL_CHAT  = 15000;
 var POLL_SAFE  = 60000;          // WS 在线时的「兜底轮询」：仅作安全网，间隔拉长到 1 分钟
@@ -300,8 +303,9 @@ function normProto(u) {
 	var s = String(u || '');
 	if (location.protocol !== 'https:') return s;
 	if (s.indexOf('http://') !== 0) return s;
-	// 60.205 无 TLS：保持 http，由代理转发（同源，不构成混合内容）
-	if (s.indexOf(FALLBACK60) === 0) return s;
+	// occdn 实测不支持 TLS（https 握手失败、curl code=000）：保持 http，升级反而连不上。
+	// 注：本页若跑在 https 下，其 http 图片会被浏览器混合内容拦截 —— 由候选链降级到 oc 兜底。
+	if (s.indexOf(MEDIA_OCCDN) === 0) return s;
 	return 'https://' + s.slice(7);
 }
 function baseOrigin() {
@@ -513,26 +517,15 @@ function uploadPathOf(u) {
 	var m = s.match(/^https?:\/\/[^/]+\/(.+)$/);
 	return m ? m[1].split('?')[0] : '';
 }
-// OSS 地址 + 强制缩放参数。
-// 必须自己加：SDK 只对 avatars/ 路径加参数，而群头像存在 /v1/uploads/media/ 下，
-// 于是群头像会按原图下载（实测 153KB~325KB，表上等于卡死）。
-function ossUrl(u, px) {
-	var base;
-	try { base = resolveMediaUrl(u); } catch (e) { base = u || ''; }
-	if (!base) return '';
-	if (base.indexOf('ocf.oss-cn-shanghai.aliyuncs.com') === -1) return base;
-	var q = 'x-oss-process=image/resize,w_' + px + ',h_' + px + ',m_fill/quality,Q_80';
-	if (base.indexOf('x-oss-process=') !== -1) return base.replace(/x-oss-process=[^&]*/, q);
-	return base + (base.indexOf('?') === -1 ? '?' : '&') + q;
-}
-// 头像候选链：OSS（全量）→ 60.205（经代理，避免 https 下被混合内容拦死）
+// 头像候选链：occdn（自建 CDN，CN2 加速）→ oc（源站）。
+// 2026-09-27：OSS 停服、60.205 下线，二者一并移除；现役源均无服务端缩放能力
+// （x-oss-process 无效），故不再拼接缩放参数，表上靠 CSS 尺寸约束显示。
 function avCandidates(u) {
 	var out = [];
-	var o = ossUrl(u, AVA_PX);
-	if (o) out.push(o);
 	var p = uploadPathOf(u);
-	// 60.205 当前常挂：一旦确认不可达（avFallbackDead）就不再把请求浪费在它身上
-	if (p && !avFallbackDead) out.push(PROXY + '?u=' + encodeURIComponent(FALLBACK60 + '/v1/uploads/' + p));
+	if (!p) return out;
+	out.push(MEDIA_OCCDN + '/v1/uploads/' + p);
+	out.push(MEDIA_OC + '/v1/uploads/' + p);
 	return out;
 }
 // ===== 头像解析会话缓存 =====
@@ -573,11 +566,9 @@ function avHtml(u, name, sizeClass) {
 		: '<span class="mono">' + esc(mono) + '</span>';
 	return '<span class="avwrap ' + sizeClass + '">' + inner + '</span>';
 }
-// 头像加载看门狗：60.205 兜底主机常挂，代理要等 ~120s 才返回 502。
-// 给每个候选限时 AV_WATCH_MS，超时即跳下一候选/首字母。（不再用 loading=lazy：
-// 否则屏外头像根本不发请求，却会被看门狗误判失败变字母，切群观感更糟。）
+// 头像加载看门狗：给每个候选限时 AV_WATCH_MS，超时即跳下一候选/首字母。
+// （不再用 loading=lazy：否则屏外头像根本不发请求，却会被看门狗误判失败变字母，切群观感更糟。）
 var AV_WATCH_MS = 6000;
-var avFallbackDead = false;   // 一旦确认 60.205 不可达，后续头像不再浪费一次请求
 window.__avOk = function (img) {
 	img.__avLoaded = true; clearTimeout(img.__avt);
 	var u = img.getAttribute('data-raw');
@@ -617,9 +608,6 @@ window.__avErr = function (img) {
 	clearTimeout(img.__avt);
 	var list = String(img.getAttribute('data-cands') || '').split('|');
 	var i = (parseInt(img.getAttribute('data-i'), 10) || 0) + 1;
-	// 刚失败的候选若是已挂的兜底主机 → 标记，后续头像不再试探它
-	var failed = list[Math.max(0, i - 1)] || '';
-	if (failed.indexOf(FALLBACK60) !== -1) avFallbackDead = true;
 	if (i < list.length && list[i]) {
 		img.setAttribute('data-i', String(i));
 		img.__avLoaded = false;

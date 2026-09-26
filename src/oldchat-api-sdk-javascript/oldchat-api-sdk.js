@@ -29,34 +29,42 @@
 // =====================================================================
 
 // 后端候选：https 置于最前。
-// 不能写成协议相对地址（//oc…）：本 SDK 被十几个消费端共用，其中含 **Node 环境**
+// 不能写成协议相对地址（//oc…）：本 SDK 被多个消费端共用，其中含 **Node 环境**
 // （无文档基址），`fetch('//host/path')` 会直接解析失败。用 https 同样能避免
 // 「https 页面引用 http 资源」被浏览器拦截，且在任何环境都合法。
-// 60.205.94.101:8080 无 TLS（实测 443 不通），只能保持 http，作为桌面端末位兜底。
+// 2026-09-27：60.205.94.101:8080 已下线（实测连接超时、8s 无响应），彻底移除。
+// 现役后端仅 oc.mcl0.dpdns.org 一台，候选链退化为单元素（降级逻辑对该链自然空转）。
 const DEFAULT_BACKEND_CANDIDATES = [
-    'https://oc.mcl0.dpdns.org',
-    'http://60.205.94.101:8080'
+    'https://oc.mcl0.dpdns.org'
 ];
 // ===== 媒体源优先级 =====
-// OSS（阿里云，全量存储，绝大多数媒体只有它）→ 60.205（旧主服务器）。
-// oc 已从媒体源移除（用户 2026-09-12 决定）：其 /v1/uploads/ 下存留不足 80 个文件，
-// 命中率极低，每张图都要多打一次必然 404 的请求；60.205 兜底已覆盖该职责。
-// 注意：OSS 的路径结构是 /media/x，而非其它镜像的 /v1/uploads/media/x，
-// 由 mediaCandidates() / resolveMediaUrl() 专门 remap，**不能参与「同形 host 前缀互换」**。
-const OSS_ORIGIN = 'https://ocf.oss-cn-shanghai.aliyuncs.com';
+// 2026-09-27 调整（用户决定）：OSS 欠费停服（实测全部路径 403）、60.205 已下线，
+// 二者一并从媒体源移除。现役媒体链：
+//   1. occdn.reverie.dpdns.org —— 用户自建 CDN（CN2 加速），回源到 oc，置于首位
+//   2. oc.mcl0.dpdns.org       —— 现役唯一源站
+// ⚠️ occdn 实测**不支持 TLS**（https 握手失败、curl code=000），只能写 http。
+// ⚠️ 二者回源同一台服务器 —— 首个返回 404/403 时，第二个基本必然也是 404/403
+//    （用户 2026-09-27 明示「如果不是超时的话，那基本无第二次成功可能」）。
+//    故媒体层拿到 4xx 应直接短路，只在「超时 / 5xx / 网络错误」时才降级。
+// 注：files.mcl0.dpdns.org 与 oc 同机（实测同样 200），用户决定不进候选链。
+const OCCDN_ORIGIN = 'http://occdn.reverie.dpdns.org';
+const OC_ORIGIN = 'https://oc.mcl0.dpdns.org';
 const DEFAULT_MEDIA_CANDIDATES = [
-    OSS_ORIGIN,
-    'http://60.205.94.101:8080'
+    OCCDN_ORIGIN,
+    OC_ORIGIN
 ];
-// 注：files.mcl0.dpdns.org 已移除 —— 不属于官端候选链，实测对头像/媒体均直接 404（CF 原站，非 CDN）。
+// OSS 已停服（2026-09-27 实测全路径 403），不再是媒体源，不出现在任何候选链中。
+// _uploadPath() 内部仍保留对 OSS 域名的识别，用于把历史缓存 / localStorage 里
+// 残留的 OSS 绝对地址归一成统一 PATH。
 
-// MEDIA_ORIGIN / MEDIA_BASE 是「相对路径的通用拼接基址」，必须取第一个**非 OSS**镜像：
-// OSS 路径结构不同，拿它拼 /v1/uploads/... 会 404。取不到时回退 60.205。
+// MEDIA_ORIGIN / MEDIA_BASE 是「相对路径的通用拼接基址」。
+// 现役候选均为同形镜像（/v1/uploads/...），直接取首个即可（跳过残留的 OSS 条目）；
+// 取不到时回退 oc。
 function _firstMirrorOrigin(list) {
     for (const u of (list || [])) {
         if (String(u).indexOf('ocf.oss-cn-shanghai.aliyuncs.com') === -1) return u;
     }
-    return (list && list[0]) || 'http://60.205.94.101:8080';
+    return OC_ORIGIN;
 }
 
 // 归一化候选项：统一存「裸 origin」，去掉结尾斜杠与用户误加的 /v1 后缀。
@@ -116,24 +124,14 @@ function refreshEndpoints() {
     MEDIA_BASE = MEDIA_ORIGIN;
 }
 
-// 上传资源的统一路径抽象 —— 不区分「OSS 的路径」与「镜像站的路径」，全局只有一个 PATH：
+// 上传资源的统一路径抽象：
 //   PATH = 去掉 `/v1/uploads/` 前缀后的相对路径，**保留子目录**，如 `media/a.jpg`、`avatars/b.jpg`。
-//   各源一律按同一 PATH 拼接：
-//     OSS    → https://ocf.oss-cn-shanghai.aliyuncs.com/<PATH>
-//     镜像站 → <origin>/v1/uploads/<PATH>
-//   实测：OSS 上 `media/` 与 `avatars/` 均存在；若丢掉子目录（OSS 根 + 纯文件名）返回 404，
-//   故 PATH 必须保留子目录，不能只取 basename。
-// （OSS_ORIGIN 已在文件顶部定义，供媒体源优先级与通用拼接基址共同使用）
+//   现役各源（occdn / oc）路径结构一致，一律按 <origin>/v1/uploads/<PATH> 拼接。
+//   保留子目录是必须的：历史 OSS 源为 <origin>/<PATH>（无 /v1/uploads/ 前缀），
+//   若丢掉子目录会 404；该源虽已下线，PATH 约定仍保持不变以免回归出错。
+// 历史：OSS 已于 2026-09-27 欠费停服（实测全路径 403）、60.205.94.101:8080 已下线，
+//       二者均不再是媒体源；其专用的 x-oss-process 缩放参数随之移除（新源不具备该能力）。
 const UPLOAD_PREFIX = '/v1/uploads/';
-// 媒体文件候选源（按优先级）：OSS（全量存储，含仅存于 OSS 的文件）→ 60.205 → oc。
-// 实测：部分文件仅存在于 OSS，服务器对其它镜像返回 403（非鉴权问题，是文件不在该节点）。
-// 仅原图（无独立缩略图）的媒体在 OSS 候选上优先请求缩放版，降低带宽；「查看原图」等原图场景不传此参数走原图。
-const OSS_PROCESS_PARAM = '?x-oss-process=image/resize,w_500,h_500,m_lfit/quality,Q_70';
-// 头像：界面只用 36px / 80px，高分屏按 3x 计最大 240px，故写死 240，不做动态适配。
-// 必须用 m_fill（等比缩放后居中裁剪为方形）而非 m_lfit：lfit 下短边会被长边约束
-// （实测横图 816x624 走 w_240,h_240,m_lfit 只得 240x184，短边不足 240）；
-// 而圆形头像本就按 cover 居中裁切，m_fill 正好等价且更省（实测 240x240 = 16.8KB，原图 162KB，省 90%）。
-const OSS_AVATAR_PROCESS_PARAM = '?x-oss-process=image/resize,w_240,h_240,m_fill/quality,Q_85';
 
 // 取出统一 PATH：同时兼容 /v1/uploads/{type}/{name}（相对或绝对 URL）与 OSS 绝对 URL 两种输入形式
 function _uploadPath(url) {
@@ -146,28 +144,23 @@ function _uploadPath(url) {
     return (m && m[1]) ? m[1] : null;
 }
 
-// 生成 /v1/uploads/ 资源的完整候选源列表。基于官端 MediaUrlResolver.resolveCandidates()（nx10.md §38.1），
-// 并按本项目实测收敛为两项：
-//   1. OSS 阿里云（全量存储，实测头像与媒体都只有它全量有货）
-//   2. 旧主服务器 60.205.94.101:8080/v1/uploads（兜底）
-// 已移除：
-//   · files.mcl0.dpdns.org —— 不属于官端候选链（仅出现在 /download/sources 下载源列表），实测直接 404。
-//   · oc.mcl0.dpdns.org/v1/uploads —— 存留不足 80 个文件，命中率极低，每张图多打一次必然 404 的请求。
+// 生成 /v1/uploads/ 资源的完整候选源列表（按优先级）：
+//   1. occdn.reverie.dpdns.org —— 自建 CDN（CN2 加速），回源到 oc
+//   2. oc.mcl0.dpdns.org       —— 现役唯一源站
+// 2026-09-27 已移除：OSS（欠费停服、实测全路径 403）、60.205.94.101:8080（已下线、连接超时）。
 // 注：channel-media 走的是另一套签名下载端点，oc 是其协议唯一宿主，不受此处影响。
 function mediaCandidates(url) {
     const p = _uploadPath(url);
-    // 覆盖 /v1/uploads/ 下全部子目录（media/ 与 avatars/）。此前只限 media/，
-    // 实测头像同样只有 OSS 有货（某头像：OSS 200，60.205 502/超时，files 与 oc 均 404），故不再限定。
+    // 覆盖 /v1/uploads/ 下全部子目录（media/ 与 avatars/）。
     if (!p) return [url];
-    // 保留输入 URL 中已有的 OSS 缩放参数（?x-oss-process=...），仅作用于 OSS 候选；
-    // 60.205 镜像不支持该参数，不做拼接（回退到原图）。
-    // 输入未带参数且为头像时补上写死的头像缩放参数，保证直接调用本函数也拿到缩放版。
-    const q = (url.indexOf('?') >= 0)
-        ? url.slice(url.indexOf('?'))
-        : (p.indexOf('avatars/') === 0 ? OSS_AVATAR_PROCESS_PARAM : '');
+    // occdn / oc 均无 OSS 图像处理能力：剥掉可能残留的 ?x-oss-process=... 参数，
+    // 否则参数不同会让 CDN 缓存键分裂、命中率下降（该参数在新源上本就无效）。
+    const qi = url.indexOf('?');
+    const inQuery = qi >= 0 ? url.slice(qi) : '';
+    const q = (inQuery.indexOf('x-oss-process') !== -1) ? '' : inQuery;
     return [
-        OSS_ORIGIN + '/' + p + q,
-        'http://60.205.94.101:8080' + UPLOAD_PREFIX + p,
+        OCCDN_ORIGIN + UPLOAD_PREFIX + p + q,
+        OC_ORIGIN + UPLOAD_PREFIX + p + q,
     ];
 }
 
@@ -186,18 +179,29 @@ function resolveMediaUrl(url, opts) {
         if (/^https?:/i.test(url)) return url;
         return 'https://oc.mcl0.dpdns.org' + (url.startsWith('/') ? '' : '/') + url;
     }
-    // /v1/uploads/ 资源（media 与 avatars）：优先 OSS（全量存储，实测头像/媒体都只有 OSS 全量有货）。
-    // 头像无条件写死缩放（见 OSS_AVATAR_PROCESS_PARAM）；media 由 opts.thumb 决定（仅原图无独立缩略图的展示场景）。
-    // 60.205 / oc 镜像不支持该参数，由候选链回退到原图。
+    // /v1/uploads/ 资源（media 与 avatars）：一律解析到首位 CDN（occdn），
+    // 失败时由候选链（mediaCandidates）降级到 oc。
+    // occdn / oc 均不具备 OSS 图像处理能力，故剥掉残留的 x-oss-process 参数：
+    // 该参数在新源上无效，且会让 CDN 缓存键分裂、命中率下降。
     if (typeof url === 'string' && url.indexOf(UPLOAD_PREFIX) !== -1) {
         const p = _uploadPath(url);
         if (p) {
-            // 已带 x-oss-process 的输入原样保留 —— 保证本函数幂等，避免二次调用把缩放参数剥掉、退回加载原图。
             const qi = url.indexOf('?');
             const inQuery = qi >= 0 ? url.slice(qi) : '';
-            if (inQuery.indexOf('x-oss-process') !== -1) return OSS_ORIGIN + '/' + p + inQuery;
-            if (p.indexOf('avatars/') === 0) return OSS_ORIGIN + '/' + p + OSS_AVATAR_PROCESS_PARAM;
-            return OSS_ORIGIN + '/' + p + ((opts && opts.thumb) ? OSS_PROCESS_PARAM : '');
+            const q = (inQuery.indexOf('x-oss-process') !== -1) ? '' : inQuery;
+            return OCCDN_ORIGIN + UPLOAD_PREFIX + p + q;
+        }
+    }
+    // 历史 OSS 绝对地址（缓存 / localStorage 残留）：OSS 已停服，必须归一到现役首位源，
+    // 否则会被下方「绝对 URL 原样返回」放走，打到已下线的 OSS 拿到 403。
+    // 故此分支必须排在绝对 URL 短路之前。
+    if (typeof url === 'string' && /^https?:\/\/ocf\.oss-cn-shanghai\.aliyuncs\.com\//i.test(url)) {
+        const p = _uploadPath(url);
+        if (p) {
+            const qi = url.indexOf('?');
+            const inQuery = qi >= 0 ? url.slice(qi) : '';
+            const q = (inQuery.indexOf('x-oss-process') !== -1) ? '' : inQuery;
+            return OCCDN_ORIGIN + UPLOAD_PREFIX + p + q;
         }
     }
     if (/^(https?:|data:|blob:)/.test(url)) return url;
@@ -208,8 +212,8 @@ function resolveMediaUrl(url, opts) {
 const mediaUrlCache = new Map();
 function cachedResolveMediaUrl(url, opts) {
     if (!url) return url;
-    // 同一输入 URL 在「展示缩略」(thumb=true) 与「查看原图」(thumb=false) 下会解析出不同 OSS 地址，
-    // 缓存键需纳入 thumb 标志，避免相互污染（否则原图场景会命中缩略结果）。
+    // 缓存键保留 thumb 维度：历史上 thumb 会拼出不同的 OSS 缩放地址（需避免相互污染）。
+    // OSS 下线后 thumb 已不影响解析结果，保留该维度仅为将来若重新引入服务端缩放时无需改结构。
     const ck = (typeof url === 'string' ? url : '') + ' ' + (opts && opts.thumb ? '1' : '0');
     if (mediaUrlCache.has(ck)) return mediaUrlCache.get(ck);
     const result = resolveMediaUrl(url, opts);
