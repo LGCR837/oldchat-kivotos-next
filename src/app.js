@@ -727,17 +727,26 @@ function debounce(fn, wait) {
             throw err;
         }
 
+        let httpStatus = 0;
         try {
             const resp = await tauriHttpFetch(u, { headers: baseHeaders });
-            if (!resp || !resp.ok) throw new Error('fetch status ' + (resp && resp.status));
+            if (!resp || !resp.ok) {
+                const err = new Error('fetch status ' + (resp && resp.status));
+                err.status = (resp && resp.status) || 0;   // 透传状态码，供上层判断是否短路
+                throw err;
+            }
             return await resp.blob();
         } catch (e1) {
+            httpStatus = (e1 && e1.status) || 0;
             try {
                 const blob = await fetchMediaRust(u, baseHeaders);
                 if (blob) return blob;
                 throw new Error('fetch_media 返回空');
             } catch (e2) {
                 console.error('[MediaCache] fetchOne 两路均失败:', u, '| plugin-http:', (e1 && e1.message) || e1, '| rust:', (e2 && e2.message) || e2);
+                // 第二路（rust）拿不到 HTTP 状态码，故把第一路的状态码挂到最终错误上，
+                // 让 fetchAndStore 能区分「404/403（应短路）」与「超时/网络错误（应降级）」。
+                if (httpStatus) e2.status = httpStatus;
                 throw e2;
             }
         }
@@ -758,7 +767,18 @@ function debounce(fn, wait) {
                     idbPut(key, blob, blob.type).catch(() => {});
                     return blob;
                 }
-            } catch (e) { lastErr = e; }
+            } catch (e) {
+                lastErr = e;
+                // 4xx 短路（2026-09-27）：现役媒体源 occdn / oc 回源同一台服务器，
+                // 首个源返回 404/403 时后续源基本必然同样失败，再打一次纯属浪费请求
+                // （用户原话「如果不是超时的话，那基本无第二次成功可能」）。
+                // 仅「超时 / 5xx / 网络错误」才继续尝试下一个候选。
+                const st = e && e.status;
+                if (st === 404 || st === 403) {
+                    console.warn('[MediaCache] 4xx 短路，放弃后续同源候选:', c, '| HTTP', st);
+                    break;
+                }
+            }
         }
         throw lastErr || new Error('all media candidates failed: ' + url);
     }
