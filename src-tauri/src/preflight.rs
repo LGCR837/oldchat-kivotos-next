@@ -465,6 +465,61 @@ fn issue_no_display() -> Issue {
 }
 
 #[cfg(target_os = "linux")]
+fn issue_webkit_freeze() -> Issue {
+    Issue::warn(
+        "WebKitGTK 存在窗口冻结缺陷",
+        "检测到系统 WebKitGTK 版本落在 2.48.2–2.49.x 区间。该区间存在已知的上游回归：\
+         频繁点击按钮或切换页面后，窗口会冻结卡死，只能强制结束进程。这并非本程序的问题。\n\n\
+         解决方式（任选其一）：\n\
+         1. 升级到 webkit2gtk-4.1 2.50.0 或更高版本\n\
+         2. 降级到 2.48.1-2\n\n\
+         升级命令参考：\n\
+           Debian/Ubuntu：sudo apt install --only-upgrade libwebkit2gtk-4.1-0\n\
+           Arch：          sudo pacman -Syu webkit2gtk-4.1\n\
+           Fedora：        sudo dnf upgrade webkit2gtk4.1".to_string(),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn detect_webkit2gtk_version() -> Option<(u32, u32, u32)> {
+    // 跨发行版依次尝试：dpkg（Debian/Ubuntu）、pacman（Arch）、rpm（Fedora/RHEL）。
+    // 返回宿主系统 webkit2gtk-4.1 的主版本三元组。
+    let commands: &[(&str, &[&str])] = &[
+        ("dpkg-query", &["-W", "-f=${Version}", "libwebkit2gtk-4.1-0"]),
+        ("pacman", &["-Q", "webkit2gtk-4.1"]),
+        ("rpm", &["-q", "--queryformat", "%{VERSION}", "webkit2gtk4.1"]),
+    ];
+    for (bin, args) in commands {
+        if !which(bin) {
+            continue;
+        }
+        if let Ok(out) = std::process::Command::new(bin).args(*args).output() {
+            if let Ok(s) = String::from_utf8(out.stdout) {
+                if let Some(v) = parse_webkit_version(&s) {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn parse_webkit_version(s: &str) -> Option<(u32, u32, u32)> {
+    // 版本串形如 "2.48.2-1" / "2.50.0-1" / "2.49.1-1.fc43"，提取前三个数字段。
+    let digits: Vec<u32> = s
+        .trim()
+        .split(|c: char| !c.is_ascii_digit())
+        .filter_map(|tok| tok.parse::<u32>().ok())
+        .collect();
+    if digits.len() >= 3 {
+        Some((digits[0], digits[1], digits[2]))
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn issue_webkit_missing() -> Issue {
     Issue::fatal(
         "缺少 WebKitGTK 运行库",
@@ -498,6 +553,16 @@ fn linux_checks(issues: &mut Vec<Issue>) {
     {
         issues.push(issue_webkit_missing());
         return;
+    }
+
+    // --- WebKitGTK 冻结回归检测 ---
+    // webkit2gtk-4.1 在 2.48.2 引入「点击交互后窗口冻结」的回归（已知上游缺陷，影响
+    // Tauri v2 应用）。若系统版本落在 [2.48.2, 2.50) 区间，提示用户升级/降级，否则
+    // 可能出现频繁点击后整窗卡死、只能强杀的现象。
+    if let Some(v) = detect_webkit2gtk_version() {
+        if v >= (2, 48, 2) && v < (2, 50, 0) {
+            issues.push(issue_webkit_freeze());
+        }
     }
 
     // --- 托盘图标依赖 ---

@@ -11419,6 +11419,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
         }
     });
     chatTitleEl.style.cssText = 'cursor:pointer;-webkit-app-region:no-drag;';
+    chatTitleEl.setAttribute('data-tauri-drag-region', 'false');
 
     // 直链图片/音频发送
     let urlInputMode = 'image'; // 'image' | 'voice'

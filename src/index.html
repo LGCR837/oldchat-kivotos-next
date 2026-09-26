@@ -38,8 +38,8 @@
     </div>
     <div class="app-container">
         <aside class="sidebar">
-            <div class="sidebar-header">
-                <span class="user-info" id="sidebarUserName" style="cursor:pointer" onclick="openMyProfile()">未登录</span>
+            <div class="sidebar-header" data-tauri-drag-region>
+                <span class="user-info" id="sidebarUserName" style="cursor:pointer" onclick="openMyProfile()" data-tauri-drag-region="false">未登录</span>
                 <button id="logoutBtn" class="icon-btn" title="退出登录"><i class="fa-solid fa-right-from-bracket"></i></button>
                 <button id="themeToggleBtn" class="icon-btn" title="切换主题"><i class="fa-solid fa-circle-half-stroke"></i></button>
                 <button id="pinSidebarBtn" class="icon-btn" title="取消固定"><i class="fa-solid fa-thumbtack"></i></button>
@@ -172,12 +172,12 @@
         </aside>
         <main class="chat-area">
             <div class="main-panel active" data-panel="chat">
-                <div class="chat-header" id="chatHeader">
+                <div class="chat-header" id="chatHeader" data-tauri-drag-region>
                     <button class="mobile-menu-btn" id="mobileMenuBtn"><i class="fa-solid fa-chevron-left"></i></button>
-                    <span class="chat-title">OldChat for Kivotos</span>
+                    <span class="chat-title" data-tauri-drag-region="false">OldChat for Kivotos</span>
                     <button class="icon-btn" id="chatSearchBtn" title="搜索聊天记录" style="margin-left:auto;display:none;"><i class="fa-solid fa-magnifying-glass"></i></button>
-                    <div class="header-right">
-                        <div class="window-controls" id="windowControls">
+                    <div class="header-right" data-tauri-drag-region="false">
+                        <div class="window-controls" data-tauri-drag-region="false" id="windowControls">
                             <button class="win-ctrl-btn" id="winMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
                             <button class="win-ctrl-btn" id="winMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
                             <button class="win-ctrl-btn" id="winCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
@@ -221,10 +221,10 @@
                 </div>
             </div>
             <div class="main-panel" data-panel="contacts">
-                <div class="chat-header">
+                <div class="chat-header" data-tauri-drag-region>
                     <span class="chat-title">联系人</span>
-                    <div class="header-right">
-                        <div class="window-controls" id="contactsWinControls">
+                    <div class="header-right" data-tauri-drag-region="false">
+                        <div class="window-controls" data-tauri-drag-region="false" id="contactsWinControls">
                             <button class="win-ctrl-btn" id="contactsWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
                             <button class="win-ctrl-btn" id="contactsWinMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
                             <button class="win-ctrl-btn" id="contactsWinCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
@@ -252,10 +252,10 @@
                 </div>
             </div>
             <div class="main-panel" data-panel="settings">
-                <div class="chat-header">
+                <div class="chat-header" data-tauri-drag-region>
                     <span class="chat-title">设置</span>
-                    <div class="header-right">
-                        <div class="window-controls" id="settingsWinControls">
+                    <div class="header-right" data-tauri-drag-region="false">
+                        <div class="window-controls" data-tauri-drag-region="false" id="settingsWinControls">
                             <button class="win-ctrl-btn" id="settingsWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
                             <button class="win-ctrl-btn" id="settingsWinMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
                             <button class="win-ctrl-btn" id="settingsWinCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
@@ -267,10 +267,10 @@
                 </div>
             </div>
             <div class="main-panel" data-panel="discover">
-                <div class="chat-header">
+                <div class="chat-header" data-tauri-drag-region>
                     <span class="chat-title">发现</span>
-                    <div class="header-right">
-                        <div class="window-controls" id="discoverWinControls">
+                    <div class="header-right" data-tauri-drag-region="false">
+                        <div class="window-controls" data-tauri-drag-region="false" id="discoverWinControls">
                             <button class="win-ctrl-btn" id="discoverWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
                             <button class="win-ctrl-btn" id="discoverWinMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
                             <button class="win-ctrl-btn" id="discoverWinCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
@@ -285,10 +285,10 @@
                 </div>
             </div>
             <div class="main-panel" data-panel="court">
-                <div class="chat-header">
+                <div class="chat-header" data-tauri-drag-region>
                     <span class="chat-title">公开法庭</span>
-                    <div class="header-right">
-                        <div class="window-controls" id="courtWinControls">
+                    <div class="header-right" data-tauri-drag-region="false">
+                        <div class="window-controls" data-tauri-drag-region="false" id="courtWinControls">
                             <button class="win-ctrl-btn" id="courtWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
                             <button class="win-ctrl-btn" id="courtWinMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
                             <button class="win-ctrl-btn" id="courtWinCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
@@ -303,15 +303,15 @@
                 </div>
             </div>
             <div class="main-panel" data-panel="plaza">
-                <div class="chat-header">
+                <div class="chat-header" data-tauri-drag-region>
                     <span class="chat-title">资源广场</span>
-                    <div class="header-right">
+                    <div class="header-right" data-tauri-drag-region="false">
                         <div class="plaza-toolbar">
                             <input type="text" id="plazaSearchInput" class="plaza-search-input" placeholder="搜索本分区资源...">
                             <button id="plazaUploadBtn" class="plaza-toolbar-btn" title="上传到当前分区"><i class="fa-solid fa-upload"></i> 上传</button>
                             <input type="file" id="plazaFileInput" style="display:none;">
                         </div>
-                        <div class="window-controls" id="plazaWinControls">
+                        <div class="window-controls" data-tauri-drag-region="false" id="plazaWinControls">
                             <button class="win-ctrl-btn" id="plazaWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
                             <button class="win-ctrl-btn" id="plazaWinMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
                             <button class="win-ctrl-btn" id="plazaWinCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
@@ -326,10 +326,10 @@
                 </div>
             </div>
             <div class="main-panel" data-panel="cip">
-                <div class="chat-header">
+                <div class="chat-header" data-tauri-drag-region>
                     <span class="chat-title">小程序</span>
-                    <div class="header-right">
-                        <div class="window-controls" id="cipWinControls">
+                    <div class="header-right" data-tauri-drag-region="false">
+                        <div class="window-controls" data-tauri-drag-region="false" id="cipWinControls">
                             <button class="win-ctrl-btn" id="cipWinMinBtn" title="最小化"><i class="fa-solid fa-minus"></i></button>
                             <button class="win-ctrl-btn" id="cipWinMaxBtn" title="最大化/还原"><i class="fa-regular fa-square"></i></button>
                             <button class="win-ctrl-btn" id="cipWinCloseBtn" title="关闭"><i class="fa-solid fa-xmark"></i></button>
