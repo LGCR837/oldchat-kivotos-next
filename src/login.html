@@ -245,7 +245,11 @@
             </div>
         </div>
     </div>
-    <script src="https://static.geetest.com/v4/gt4.js"></script>
+    <!-- 必须异步加载：同步脚本标签会阻塞后续内联 JS 的执行，
+         一旦该外部脚本拉不到/超时（Linux/macOS 实测整页挂死：按钮全失效、
+         拖窗口变选文本、渲染线程卡住），本页所有事件绑定都不会执行。
+         验证码仅用于 QQ 邮箱注册流程，普通登录不依赖它。 -->
+    <script src="https://static.geetest.com/v4/gt4.js" async onerror="window.__gt4Failed=true"></script>
     <script>
         // ===== Tauri 环境检测（仅用于判断 Tauri API 是否可用） =====
         var IS_TAURI = false;
@@ -398,10 +402,16 @@
         var geetestVerified = false;
         var geetestResult = null; // { lot_number, captcha_output, pass_token, gen_time }
 
+        var geetestRetry = 0;
         function initGeetestCaptcha() {
             if (geetestInitialized) return;
             if (typeof initGeetest4 !== 'function') {
-                console.warn('[GeeTest] gt4.js 未加载完成，重试中...');
+                // 限定重试次数：gt4.js 拉不到时不再无限重试（此前会 500ms 无限轮询）
+                if (window.__gt4Failed || geetestRetry++ >= 20) {
+                    console.warn('[GeeTest] gt4.js 加载失败，跳过人机验证（仅影响 QQ 邮箱注册流程）');
+                    geetestInitialized = true;
+                    return;
+                }
                 setTimeout(initGeetestCaptcha, 500);
                 return;
             }
