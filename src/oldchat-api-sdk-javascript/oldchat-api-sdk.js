@@ -43,7 +43,7 @@ const DEFAULT_BACKEND_CANDIDATES = [
 //   · 60.205.94.101:8080        —— 已下线，实测连接超时
 //   · occdn.reverie.dpdns.org   —— 已报废，实测 http 301 跳 https 后返回 404
 // 因此媒体候选链退化为**单一源** oc：没有可降级的同级对象，oc 不可用即媒体整体不可用。
-// 注：files.mcl0.dpdns.org 仅承担「文件下载」，不作为 /v1/uploads 媒体源，故不进候选链。
+// 注：files.mcl0.dpdns.org 已停用（实测超时），文件下载亦统一回 oc，故不进任何候选链。
 const OC_ORIGIN = 'https://oc.mcl0.dpdns.org';
 const DEFAULT_MEDIA_CANDIDATES = [
     OC_ORIGIN

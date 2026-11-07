@@ -203,18 +203,16 @@ window.__httpSession = {
 
 ```
 https://oc.mcl0.dpdns.org
-https://oc.mcl0.dpdns.org
-http://60.205.94.101:8080
 ```
 
 媒体域名候选 (按优先级) ：
 
 ```
-http://60.205.94.101:8080
-http://files.mcl0.dpdns.org
-https://oc.mcl0.dpdns.org
 https://oc.mcl0.dpdns.org
 ```
+
+> 2026-11-07 现状：仅 oc 一台服务器可用。OSS（403）、60.205（超时）、
+> occdn（301 跳转后 404）、files（超时）均已报废，不再出现在任何候选链中。
 
 自定义方式：把空格/逗号分隔的 origin 列表写入 `localStorage` 对应键，**然后调用
 `refreshEndpoints()`** (见第 6 节) 使新配置生效：

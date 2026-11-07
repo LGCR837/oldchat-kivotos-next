@@ -21,8 +21,7 @@
 
 /** 允许代理的目标站（host 需与 URL 中的 host 完全一致，含端口则一并匹配） */
 $ALLOWED_HOSTS = array(
-    'oc.mcl0.dpdns.org',
-    'files.mcl0.dpdns.org',   // 仅文件下载使用；不作为媒体源
+    'oc.mcl0.dpdns.org',   // 唯一现役服务器：API / 媒体 / 文件下载统一走它
 );
 
 $CONNECT_TIMEOUT = 10;   // 连接超时（秒）

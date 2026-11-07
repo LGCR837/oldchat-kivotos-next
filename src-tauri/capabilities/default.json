@@ -13,8 +13,6 @@
       "identifier": "http:default",
       "allow": [
         { "url": "http://oc.mcl0.dpdns.org/**" },
-        { "url": "http://files.mcl0.dpdns.org/**" },
-        { "url": "https://files.mcl0.dpdns.org/**" },
         { "url": "https://old.chat/**" },
         { "url": "http://old.chat/**" },
         { "url": "https://**" }

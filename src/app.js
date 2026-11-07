@@ -1442,6 +1442,11 @@ function _removeTask(task) {
 
 // 统一发起 Tauri 下载（带进度弹窗 + 取消 + 后台下载）；opts: { kind:'file'|'image', url, filename, headers, displayName }
 function startTauriDownload(opts) {
+    // 2026-11-07：files.mcl0.dpdns.org 已停用，所有文件/图片保存统一回 oc（同路径，仅换 host）。
+    // 覆盖图片保存(kind:image)与文件下载(kind:file)两条入口，避免历史 URL 打到已失效域名。
+    if (opts && typeof opts.url === 'string') {
+        opts.url = opts.url.replace(/^https?:\/\/files\.mcl0\.dpdns\.org/i, 'https://oc.mcl0.dpdns.org');
+    }
     var invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
     var ChannelCls = window.__TAURI__?.core?.Channel;
     if (!invoke || !ChannelCls) {
@@ -1518,6 +1523,10 @@ function startTauriDownload(opts) {
 // 下载文件（带鉴权，不再用浏览器直接打开）——文件接口已加权鉴
 function downloadFile(url, filename) {
     if (!url) return;
+    // 2026-11-07：files.mcl0.dpdns.org 已停用（实测全部路径超时），文件下载统一回 oc。
+    // 下载 URL 由服务器返回，历史消息 / 旧服务端可能仍指向 files；此处统一改写 host，
+    // 避免打到已失效的域名。files 与 oc 同路径结构，仅换 host，不影响路径与签名。
+    url = String(url).replace(/^https?:\/\/files\.mcl0\.dpdns\.org/i, 'https://oc.mcl0.dpdns.org');
     if (IS_TAURI) {
         var token = localStorage.getItem('oc_access_token');
         var headers = token ? [['Authorization', 'Bearer ' + token]] : [];
