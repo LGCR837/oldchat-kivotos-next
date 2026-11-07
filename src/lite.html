@@ -278,9 +278,8 @@ body{
 var PROXY      = 'proxy.php';   // 与 lite.html 同级；接口一律经同源代理，绕开 CORS / 混合内容
 var MSG_CAP    = 30;            // 当前会话最多保留的消息条数（不驻留其它会话）
 var AVA_PX     = 96;            // 头像请求尺寸（表上只显示 26~36px，按 3x 取 96）
-// 现役媒体源（2026-09-27 起）：OSS 停服（实测全路径 403）、60.205 下线（连接超时），均已移除。
-// occdn = 自建 CDN（CN2 加速，回源 oc），置首；oc = 源站兜底。二者回源同机，4xx 无二次成功可能。
-var MEDIA_OCCDN = 'http://occdn.reverie.dpdns.org';
+// 现役媒体源（2026-11-07 起）：只剩 oc 一台。OSS 停服(403)、60.205 下线(超时)、
+// occdn 报废(301→https 后 404) 全部移除。media 走 oc；files 仅承担文件下载。
 var MEDIA_OC    = 'https://oc.mcl0.dpdns.org';
 var POLL_LIST  = 25000;
 var POLL_CHAT  = 15000;
@@ -303,9 +302,7 @@ function normProto(u) {
 	var s = String(u || '');
 	if (location.protocol !== 'https:') return s;
 	if (s.indexOf('http://') !== 0) return s;
-	// occdn 实测不支持 TLS（https 握手失败、curl code=000）：保持 http，升级反而连不上。
-	// 注：本页若跑在 https 下，其 http 图片会被浏览器混合内容拦截 —— 由候选链降级到 oc 兜底。
-	if (s.indexOf(MEDIA_OCCDN) === 0) return s;
+	// 现役媒体源 oc 本身是 https，无需特判；下方继续把其它 http 源升级为 https。
 	return 'https://' + s.slice(7);
 }
 function baseOrigin() {
@@ -517,14 +514,12 @@ function uploadPathOf(u) {
 	var m = s.match(/^https?:\/\/[^/]+\/(.+)$/);
 	return m ? m[1].split('?')[0] : '';
 }
-// 头像候选链：occdn（自建 CDN，CN2 加速）→ oc（源站）。
-// 2026-09-27：OSS 停服、60.205 下线，二者一并移除；现役源均无服务端缩放能力
-// （x-oss-process 无效），故不再拼接缩放参数，表上靠 CSS 尺寸约束显示。
+// 头像候选链：仅 oc（2026-11-07 起唯一现役源；OSS / 60.205 / occdn 均已报废）。
+// oc 无服务端缩放能力（x-oss-process 无效），故不拼接缩放参数，表上靠 CSS 尺寸约束显示。
 function avCandidates(u) {
 	var out = [];
 	var p = uploadPathOf(u);
 	if (!p) return out;
-	out.push(MEDIA_OCCDN + '/v1/uploads/' + p);
 	out.push(MEDIA_OC + '/v1/uploads/' + p);
 	return out;
 }

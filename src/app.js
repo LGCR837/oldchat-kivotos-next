@@ -249,8 +249,6 @@ if (!IS_TAURI) {
     // · 60.205.94.101:8080 无 TLS —— https 页面下直连必被混合内容拦，故该主机**任何路径一律走代理**
     //   （历史兜底源，2026-09-27 已下线；逻辑保留仅为万一复用）；
     // · 其它域名只在「接口路径」上走代理，oc 等 https 媒体源保持直连，避免流量压到服务器。
-    //   ⚠️ occdn 是 http（实测不支持 TLS）：桌面端（Tauri）无混合内容限制，可直连；
-    //      网页版若部署在 https 下，其 http 图片会被浏览器拦截，靠候选链降级到 oc 兜底。
     function shouldProxyUrl(url) {
         let u;
         try { u = new URL(url, location.href); } catch (e) { return false; }
@@ -307,7 +305,7 @@ if (!IS_TAURI) {
         return fetch(url, init);
     };
     console.log('[Web] 已注入 ocTransport：接口经 ' + PROXY_ENDPOINT +
-        ' 转发；60.205 全部走代理；occdn / oc 媒体与 WS 直连');
+        ' 转发；60.205 全部走代理；oc 媒体与 WS 直连');
 }
 
 // OSS 已于 2026-09-27 停服下线，不再是媒体源。此处保留判定**仅为防御**：
@@ -640,11 +638,13 @@ function debounce(fn, wait) {
     function mediaCandidateUrlsRaw(url) {
         // 频道媒体 /channel-media/ 是 oc 主机的全局签名端点，仅此一个源，不做 host 候选展开（否则会误打到 files/60.205 报 404）
         if (url.indexOf('/channel-media/') !== -1) return [url];
-        // media 文件走 SDK 统一候选链（2026-09-27 起：occdn → oc；OSS 停服、60.205 下线均已移除），
+        // media 文件走 SDK 统一候选链（2026-11-07 起：仅 oc；OSS/60.205/occdn 均已报废），
         // 所有客户端一致；仅当确为 media（多条候选）时采用，非 media 仍走下方原 host 前缀互换以兼容。
         if (typeof mediaCandidates === 'function') {
             const c = mediaCandidates(url);
-            if (c && c.length > 1) return c;
+            // 2026-11-07：媒体源只剩 oc，候选列表退化为单元素，仍需直接采用；
+            // 否则会 fall through 到下方 host 前缀互换逻辑（相对路径匹配不到时会返回原 URL）。
+            if (c && c.length) return c;
         }
         const list = [];
         for (const base of MEDIA_CANDIDATES) {
@@ -769,7 +769,7 @@ function debounce(fn, wait) {
                 }
             } catch (e) {
                 lastErr = e;
-                // 4xx 短路（2026-09-27）：现役媒体源 occdn / oc 回源同一台服务器，
+                // 4xx 短路（2026-09-27，现仅剩单源 oc）：媒体源回源同一台服务器，
                 // 首个源返回 404/403 时后续源基本必然同样失败，再打一次纯属浪费请求
                 // （用户原话「如果不是超时的话，那基本无第二次成功可能」）。
                 // 仅「超时 / 5xx / 网络错误」才继续尝试下一个候选。
@@ -8394,7 +8394,7 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
             imgEl.onclick = () => openImageViewer(imgEl);
             // 自带缩略图(thumb_url)的直接用缩略图；无独立缩略图的原图走 thumb=true。
             // 注：历史上该标志会在 OSS 候选上拼 ?x-oss-process=... 缩放参数以降带宽；
-            // OSS 已于 2026-09-27 停服下线，现役源（occdn/oc）无服务端缩放能力，
+            // OSS 已于 2026-09-27 停服下线，现役源（仅 oc）无服务端缩放能力，
             // 该标志不再改变 URL，仅保留语义以备将来重新引入。
             // 右键「查看原图」走 dataset.original（不带参数）。
             imgEl.src = cachedResolveMediaUrl(thumbUrl, { thumb: !msg.thumb_url });
@@ -12982,7 +12982,6 @@ button[style*="background:var(--header-bg)"] { color: var(--text) !important; }
                     <button id="mediaCandidateAdd" class="btn" style="padding:6px 12px;white-space:nowrap;">添加</button>
                 </div>
                 <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
-                    <button class="candidate-quick" data-target="media" data-url="http://occdn.reverie.dpdns.org">+ occdn</button>
                     <button class="candidate-quick" data-target="media" data-url="//oc.mcl0.dpdns.org">+ oc.mcl0</button>
                     <button class="candidate-quick" data-target="media" data-url="https://oc.mcl0.dpdns.org">+ oc https</button>
                 </div>

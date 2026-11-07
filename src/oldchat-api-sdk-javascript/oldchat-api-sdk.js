@@ -38,19 +38,14 @@ const DEFAULT_BACKEND_CANDIDATES = [
     'https://oc.mcl0.dpdns.org'
 ];
 // ===== 媒体源优先级 =====
-// 2026-09-27 调整（用户决定）：OSS 欠费停服（实测全部路径 403）、60.205 已下线，
-// 二者一并从媒体源移除。现役媒体链：
-//   1. occdn.reverie.dpdns.org —— 用户自建 CDN（CN2 加速），回源到 oc，置于首位
-//   2. oc.mcl0.dpdns.org       —— 现役唯一源站
-// ⚠️ occdn 实测**不支持 TLS**（https 握手失败、curl code=000），只能写 http。
-// ⚠️ 二者回源同一台服务器 —— 首个返回 404/403 时，第二个基本必然也是 404/403
-//    （用户 2026-09-27 明示「如果不是超时的话，那基本无第二次成功可能」）。
-//    故媒体层拿到 4xx 应直接短路，只在「超时 / 5xx / 网络错误」时才降级。
-// 注：files.mcl0.dpdns.org 与 oc 同机（实测同样 200），用户决定不进候选链。
-const OCCDN_ORIGIN = 'http://occdn.reverie.dpdns.org';
+// 2026-11-07 现状（用户确认）：**只剩 oc.mcl0.dpdns.org 一台服务器**，其余全部报废。
+//   · OSS（ocf.oss-cn-shanghai）—— 欠费停服，实测全路径 403
+//   · 60.205.94.101:8080        —— 已下线，实测连接超时
+//   · occdn.reverie.dpdns.org   —— 已报废，实测 http 301 跳 https 后返回 404
+// 因此媒体候选链退化为**单一源** oc：没有可降级的同级对象，oc 不可用即媒体整体不可用。
+// 注：files.mcl0.dpdns.org 仅承担「文件下载」，不作为 /v1/uploads 媒体源，故不进候选链。
 const OC_ORIGIN = 'https://oc.mcl0.dpdns.org';
 const DEFAULT_MEDIA_CANDIDATES = [
-    OCCDN_ORIGIN,
     OC_ORIGIN
 ];
 // OSS 已停服（2026-09-27 实测全路径 403），不再是媒体源，不出现在任何候选链中。
@@ -126,7 +121,7 @@ function refreshEndpoints() {
 
 // 上传资源的统一路径抽象：
 //   PATH = 去掉 `/v1/uploads/` 前缀后的相对路径，**保留子目录**，如 `media/a.jpg`、`avatars/b.jpg`。
-//   现役各源（occdn / oc）路径结构一致，一律按 <origin>/v1/uploads/<PATH> 拼接。
+//   现役只有 oc，路径为 <origin>/v1/uploads/<PATH>。
 //   保留子目录是必须的：历史 OSS 源为 <origin>/<PATH>（无 /v1/uploads/ 前缀），
 //   若丢掉子目录会 404；该源虽已下线，PATH 约定仍保持不变以免回归出错。
 // 历史：OSS 已于 2026-09-27 欠费停服（实测全路径 403）、60.205.94.101:8080 已下线，
@@ -144,24 +139,22 @@ function _uploadPath(url) {
     return (m && m[1]) ? m[1] : null;
 }
 
-// 生成 /v1/uploads/ 资源的完整候选源列表（按优先级）：
-//   1. occdn.reverie.dpdns.org —— 自建 CDN（CN2 加速），回源到 oc
-//   2. oc.mcl0.dpdns.org       —— 现役唯一源站
-// 2026-09-27 已移除：OSS（欠费停服、实测全路径 403）、60.205.94.101:8080（已下线、连接超时）。
+// 生成 /v1/uploads/ 资源的候选源列表：
+//   oc.mcl0.dpdns.org —— 2026-11-07 起**唯一**现役源
+// 已移除：OSS（欠费停服、全路径 403）、60.205.94.101:8080（连接超时）、
+//         occdn.reverie.dpdns.org（http 301 跳 https 后返回 404）。
+// 注：唯一源意味着没有降级对象；仍返回数组以保持上层接口形状统一。
 // 注：channel-media 走的是另一套签名下载端点，oc 是其协议唯一宿主，不受此处影响。
 function mediaCandidates(url) {
     const p = _uploadPath(url);
     // 覆盖 /v1/uploads/ 下全部子目录（media/ 与 avatars/）。
     if (!p) return [url];
-    // occdn / oc 均无 OSS 图像处理能力：剥掉可能残留的 ?x-oss-process=... 参数，
-    // 否则参数不同会让 CDN 缓存键分裂、命中率下降（该参数在新源上本就无效）。
+    // oc 不具备 OSS 图像处理能力：剥掉可能残留的 ?x-oss-process=... 参数，
+    // 否则参数不同会让缓存键分裂、命中率下降（该参数在现役源上本就无效）。
     const qi = url.indexOf('?');
     const inQuery = qi >= 0 ? url.slice(qi) : '';
     const q = (inQuery.indexOf('x-oss-process') !== -1) ? '' : inQuery;
-    return [
-        OCCDN_ORIGIN + UPLOAD_PREFIX + p + q,
-        OC_ORIGIN + UPLOAD_PREFIX + p + q,
-    ];
+    return [OC_ORIGIN + UPLOAD_PREFIX + p + q];
 }
 
 function resolveMediaUrl(url, opts) {
@@ -179,20 +172,19 @@ function resolveMediaUrl(url, opts) {
         if (/^https?:/i.test(url)) return url;
         return 'https://oc.mcl0.dpdns.org' + (url.startsWith('/') ? '' : '/') + url;
     }
-    // /v1/uploads/ 资源（media 与 avatars）：一律解析到首位 CDN（occdn），
-    // 失败时由候选链（mediaCandidates）降级到 oc。
-    // occdn / oc 均不具备 OSS 图像处理能力，故剥掉残留的 x-oss-process 参数：
-    // 该参数在新源上无效，且会让 CDN 缓存键分裂、命中率下降。
+    // /v1/uploads/ 资源（media 与 avatars）：一律解析到唯一现役源 oc。
+    // oc 不具备 OSS 图像处理能力，故剥掉残留的 x-oss-process 参数：
+    // 该参数在现役源上无效，且会让缓存键分裂、命中率下降。
     if (typeof url === 'string' && url.indexOf(UPLOAD_PREFIX) !== -1) {
         const p = _uploadPath(url);
         if (p) {
             const qi = url.indexOf('?');
             const inQuery = qi >= 0 ? url.slice(qi) : '';
             const q = (inQuery.indexOf('x-oss-process') !== -1) ? '' : inQuery;
-            return OCCDN_ORIGIN + UPLOAD_PREFIX + p + q;
+            return OC_ORIGIN + UPLOAD_PREFIX + p + q;
         }
     }
-    // 历史 OSS 绝对地址（缓存 / localStorage 残留）：OSS 已停服，必须归一到现役首位源，
+    // 历史 OSS 绝对地址（缓存 / localStorage 残留）：OSS 已停服，必须归一到唯一现役源 oc，
     // 否则会被下方「绝对 URL 原样返回」放走，打到已下线的 OSS 拿到 403。
     // 故此分支必须排在绝对 URL 短路之前。
     if (typeof url === 'string' && /^https?:\/\/ocf\.oss-cn-shanghai\.aliyuncs\.com\//i.test(url)) {
@@ -201,7 +193,7 @@ function resolveMediaUrl(url, opts) {
             const qi = url.indexOf('?');
             const inQuery = qi >= 0 ? url.slice(qi) : '';
             const q = (inQuery.indexOf('x-oss-process') !== -1) ? '' : inQuery;
-            return OCCDN_ORIGIN + UPLOAD_PREFIX + p + q;
+            return OC_ORIGIN + UPLOAD_PREFIX + p + q;
         }
     }
     if (/^(https?:|data:|blob:)/.test(url)) return url;
